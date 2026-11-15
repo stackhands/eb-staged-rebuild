@@ -74,7 +74,7 @@ eb-staged-rebuild: renameat2 RENAME_EXCHANGE on ext4: yes
 eb-staged-rebuild: easybuild: eb-standin
 eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)
 eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
-eb-staged-rebuild: command: /agent/repos/eb-staged-rebuild/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --robot --rebuild
+eb-staged-rebuild: command: /path/to/eb-staged-rebuild/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --robot --rebuild
 ```
 
 Dry-run writes no journal and does not call EasyBuild. The staged command is the install-path form, with `--rebuild` added because the arguments did not already contain `--rebuild`, `--force`, or `-f`.
