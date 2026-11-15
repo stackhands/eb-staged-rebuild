@@ -827,6 +827,7 @@ test {
     _ = @import("swap.zig");
     _ = @import("livecheck.zig");
     _ = @import("discover.zig");
+    _ = @import("genscan.zig");
     _ = @import("builders.zig");
     _ = admin;
     _ = engine;

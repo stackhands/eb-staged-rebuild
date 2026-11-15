@@ -272,6 +272,28 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | BwrapInfoTests.test_present_keys_win | differential "run, bwrap" |
 | BwrapInfoTests.test_overlay_is_refused | differential "run, bwrap, overlay" |
 
+### tests/test_generation_paths.py
+
+The fake `eb` writes what a build records about its install prefix (`FAKE_EB_RECORD`) and the ELF files come from
+`tests/elf_fixture.py`, which both implementations read through the same fake.
+
+| test | replacement |
+|---|---|
+| ScanTests.test_text_needs_the_whole_directory_name | `zig/genscan.zig` test "a match must end at the end of the data or at a non-name byte"; differential "run, installpath, a clean tree publishes" (`near`) |
+| ScanTests.test_text_match_across_a_read_boundary | differential "run, installpath, text records the generation directory" (the same read loop) |
+| ScanTests.test_elf_kinds_for_every_layout | differential "run, installpath, ELF records the generation directory (rpath)" and its runpath, interp, 32 bit and big endian forms |
+| ScanTests.test_elf_is_read_by_its_headers_not_its_bytes | differential "run, installpath, a clean tree publishes" (`clean`) |
+| ScanTests.test_damaged_elf_headers_give_no_hit | differential "run, installpath, a clean tree publishes" (`clean`) |
+| ScanTests.test_symlinks_are_not_followed_and_the_stamp_is_skipped | differential "run, installpath, a clean tree publishes" (the tree holds the stamp of an earlier run) |
+| ScanTests.test_an_unreadable_file_refuses | differential "run, installpath, an unreadable file refuses" (not run as root) |
+| RefusalTests.test_a_text_file_with_the_generation_path_is_refused | differential "run, installpath, text records the generation directory" |
+| RefusalTests.test_elf_records_are_refused_with_their_kind | differential "run, installpath, ELF records the generation directory (rpath)" and its runpath, interp, 32 bit and big endian forms |
+| RefusalTests.test_the_report_is_capped_with_a_total | differential "run, installpath, the report is capped" |
+| RefusalTests.test_a_clean_tree_publishes | differential "run, installpath, a clean tree publishes" |
+| RefusalTests.test_bwrap_records_the_live_path_and_publishes | differential "run, bwrap, the build records the live path" |
+| RefusalTests.test_the_userns_command_mounts_the_generation_over_the_stable_path | differential "run, userns", "run --dry-run, userns" (the `--bind` arguments) |
+| RefusalTests.test_userns_records_the_stable_path | differential "run, userns, the build records the stable path", "userns prefix file" |
+
 ### tests/test_prepare_recovery.py
 
 | test | replacement |

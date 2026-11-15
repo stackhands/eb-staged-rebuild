@@ -10,6 +10,10 @@ import os
 import shutil
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests.elf_fixture import build_elf  # noqa: E402
+
 
 def _option(args, name):
     prefix = name + "="
@@ -63,6 +67,66 @@ def _unseal(top):
     os.chmod(top, 0o755)
 
 
+def _clear(directory):
+    """Empty a directory. A mount point cannot be removed, so it stays."""
+    for name in os.listdir(directory):
+        path = os.path.join(directory, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.unlink(path)
+
+
+def _write_bytes(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+
+def _write_records(generation, prefix, software):
+    """Write what a build records about its install prefix.
+
+    FAKE_EB_RECORD is a comma-separated list of: ``text`` (a pkg-config file
+    that names the prefix), ``rpath``, ``runpath`` and ``interp`` (an ELF file
+    that records the prefix there), ``clean`` (an ELF file with only
+    ``$ORIGIN`` run paths), ``near`` (a text file that names the directory
+    beside the generation, whose name starts with the generation's), and
+    ``text*N`` (N text files), ``unreadable`` (a file with no read permission). ``rpath``, ``runpath`` and ``interp`` take a
+    ``:32be``, ``:32le``, ``:64be`` or ``:64le`` suffix; the default is 64 bit
+    little endian.
+    """
+    for item in filter(None, (os.environ.get("FAKE_EB_RECORD") or "").split(",")):
+        name, _, variant = item.partition(":")
+        bits = 32 if variant.startswith("32") else 64
+        big = variant.endswith("be")
+        if name == "text":
+            _write(os.path.join(generation, "lib", "pkgconfig", "demo.pc"), f"prefix={prefix}\nlibdir=${{prefix}}/lib\n")
+        elif name.startswith("text*"):
+            for index in range(int(name[5:])):
+                _write(os.path.join(generation, "share", f"doc{index:03d}.txt"), f"root {prefix}\n")
+        elif name == "near":
+            near = os.path.dirname(software) + "0"
+            _write(os.path.join(generation, "share", "near.txt"), f"root {near}/software\n")
+        elif name == "rpath":
+            _write_bytes(os.path.join(generation, "lib", "librp.so"), build_elf(rpath=f"$ORIGIN/../lib:{prefix}/lib", bits=bits, big=big))
+        elif name == "runpath":
+            _write_bytes(os.path.join(generation, "lib", "librun.so"), build_elf(runpath=f"{prefix}/lib", bits=bits, big=big))
+        elif name == "interp":
+            _write_bytes(os.path.join(generation, "bin", "demo-interp"), build_elf(interp=f"{prefix}/lib/ld.so", bits=bits, big=big))
+        elif name == "unreadable":
+            _write(os.path.join(generation, "share", "secret"), "x\n")
+            os.chmod(os.path.join(generation, "share", "secret"), 0)
+        elif name == "clean":
+            _write_bytes(
+                os.path.join(generation, "lib", "libclean.so"),
+                build_elf(rpath="$ORIGIN/../lib:$ORIGIN/../lib64", runpath="$ORIGIN", interp="/lib64/ld-linux-x86-64.so.2", bits=bits, big=big),
+            )
+    # FAKE_EB_PREFIX_FILE: write the prefix the build used to this file in the
+    # installation, so a test reads which path the build recorded.
+    if os.environ.get("FAKE_EB_PREFIX_FILE"):
+        _write(os.path.join(generation, "PREFIX"), prefix + "\n")
+
+
 def _write_tree(software, modules, root_in_module, rel=None):
     rel = rel or _rel()
     generation = os.path.join(software, rel)
@@ -70,9 +134,12 @@ def _write_tree(software, modules, root_in_module, rel=None):
     # or not.
     if os.path.isdir(generation) and not os.path.islink(generation):
         _unseal(generation)
-        shutil.rmtree(generation)
+        _clear(generation)
+        if not os.path.ismount(generation):
+            os.rmdir(generation)
     _write(os.path.join(generation, "PAYLOAD"), _payload())
     _write(os.path.join(generation, "easybuild", "demo-1.eb"), "name = 'demo'\n")
+    _write_records(generation, root_in_module, software)
     module = os.path.join(modules, "all", rel + ".lua")
     _write(module, _lua(root_in_module))
     # FAKE_EB_ACL: hex bytes of a POSIX access ACL set on the written module.

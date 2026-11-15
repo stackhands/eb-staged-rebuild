@@ -329,6 +329,24 @@ compare_admin "build-events, deliver then run" build-events --config @ROOT@/bev/
 compare_admin "build-events, bad metadata" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/bad.json -- true
 compare_admin "build-events, both deliver and command" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/ok.json --deliver -- true
 compare_admin "run, eb fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb /bin/false --run-id r3 --skip-live-check --module demo/1 -- demo-1.eb
+# A staged tree that records the generation directory is refused, in text
+# and in the run path, runpath and interpreter of ELF files of both word
+# sizes and byte orders; the report is capped; a clean tree and a name that
+# only starts like the generation's publish. The userns backend records the
+# stable path, and the bwrap backend records the live path.
+compare_admin "run, installpath, text records the generation directory" env FAKE_EB_RECORD=text @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g1 --skip-live-check --module demo/1 -- demo-1.eb
+gi=2
+for rec in rpath runpath interp rpath:32be runpath:32le interp:64be rpath:64be; do
+    compare_admin "run, installpath, ELF records the generation directory (${rec})" env FAKE_EB_RECORD="${rec}" @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id "g${gi}" --skip-live-check --module demo/1 -- demo-1.eb
+    gi=$((gi + 1))
+done
+compare_admin "run, installpath, the report is capped" env "FAKE_EB_RECORD=text*25,rpath" @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g20 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, installpath, a clean tree publishes" env FAKE_EB_RECORD=clean,near @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g21 --skip-live-check --module demo/1 -- demo-1.eb
+if [ "$(id -u)" != 0 ]; then
+    compare_admin "run, installpath, an unreadable file refuses" env FAKE_EB_RECORD=unreadable @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g23 --skip-live-check --module demo/1 -- demo-1.eb
+fi
+compare_admin "run, userns, the build records the stable path" env FAKE_EB_PREFIX_FILE=1 FAKE_EB_RECORD=text,rpath,runpath,interp @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id g22 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "userns prefix file" env cat @ROOT@/software/demo/1/PREFIX
 # The bwrap backend, with the fake bwrap first on PATH and eb answering
 # --version: present stage keys (5.4.2), the 5.3 layout without them, an
 # unknown release without them, an overlay mount, and a failed probe.
@@ -338,6 +356,7 @@ compare_admin "run, bwrap, 5.3 layout without stage keys" ${bw} FAKE_EB_VERSION=
 compare_admin "run, bwrap, unknown release without stage keys" ${bw} FAKE_EB_VERSION=5.5.0 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b3 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, 5.4.1 without stage keys" ${bw} FAKE_EB_VERSION=5.4.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b7 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, overlay" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_OVERLAY=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b4 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, the build records the live path" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_RECORD=text,rpath,runpath,interp @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b9 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap probe fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b5 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, auto prefers bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --run-id b6 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, auto when bwrap fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --dry-run --module demo/1 -- demo-1.eb
