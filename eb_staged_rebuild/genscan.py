@@ -33,6 +33,9 @@ MAX_PROGRAM_TABLE = 1 << 16
 MAX_OFFSET = 1 << 63
 MAX_INTERP = 4096
 STAMP = ".eb-staged-rebuild-complete"
+# The stamp and the temporary file an interrupted write of it leaves. Both
+# hold the generation path and belong to this tool, not to the build.
+OWN_FILES = (STAMP, f".{STAMP}.new")
 
 _PT_LOAD, _PT_DYNAMIC, _PT_INTERP = 1, 2, 3
 _DT_NULL, _DT_STRTAB, _DT_RPATH, _DT_RUNPATH = 0, 5, 15, 29
@@ -197,7 +200,7 @@ def scan_tree(root, base, generation_root):
             if entry.is_dir(follow_symlinks=False):
                 stack.append((entry.path, False))
             elif entry.is_file(follow_symlinks=False):
-                if top and entry.name == STAMP:
+                if top and entry.name in OWN_FILES:
                     continue
                 try:
                     kinds = _file_kinds(entry.path, needle)

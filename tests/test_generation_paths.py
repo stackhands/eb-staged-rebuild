@@ -107,9 +107,10 @@ class ScanTests(unittest.TestCase):
         outside.close()
         os.symlink(outside.name, os.path.join(self.root, "link"))
         os.symlink(self.root, os.path.join(self.root, "loop"))
-        self._file(genscan.STAMP, NEEDLE)
-        self._file("sub/" + genscan.STAMP, NEEDLE)
-        self.assertEqual(self._scan(), [("sub/" + genscan.STAMP, "text")])
+        for name in genscan.OWN_FILES:
+            self._file(name, NEEDLE)
+            self._file("sub/" + name, NEEDLE)
+        self.assertEqual(self._scan(), [("sub/" + name, "text") for name in sorted(genscan.OWN_FILES)])
 
     def test_an_unreadable_file_refuses(self):
         path = self._file("secret", b"x")

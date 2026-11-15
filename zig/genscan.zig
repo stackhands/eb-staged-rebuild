@@ -27,6 +27,8 @@ pub const Kind = enum(u8) { rpath, runpath, interp, text };
 pub const Hit = struct { rel: []const u8, kind: Kind };
 
 pub const stamp = ".eb-staged-rebuild-complete";
+/// The stamp's temporary file, left by an interrupted write of it.
+const stamp_temp = "." ++ stamp ++ ".new";
 const chunk = 1 << 20;
 const max_string = 1 << 16;
 const max_dynamic = 1 << 20;
@@ -269,7 +271,7 @@ pub fn scan(a: Allocator, roots: []const []const u8, base: []const u8, generatio
                 if (st.isDir()) {
                     try stack.append(a, .{ .path = child, .top = false });
                 } else if (st.isReg()) {
-                    if (item.top and std.mem.eql(u8, e.name, stamp)) continue;
+                    if (item.top and (std.mem.eql(u8, e.name, stamp) or std.mem.eql(u8, e.name, stamp_temp))) continue;
                     const kinds = sc.fileKinds(child) catch {
                         why.* = try a.print("cannot scan {s}: not readable", .{modulefile.relpath(a, child, base)});
                         return error.Refused;

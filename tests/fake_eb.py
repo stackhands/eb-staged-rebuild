@@ -68,7 +68,7 @@ def _unseal(top):
 
 
 def _clear(directory):
-    """Empty a directory. A mount point cannot be removed, so it stays."""
+    """Empty a directory."""
     for name in os.listdir(directory):
         path = os.path.join(directory, name)
         if os.path.isdir(path) and not os.path.islink(path):
@@ -135,8 +135,11 @@ def _write_tree(software, modules, root_in_module, rel=None):
     if os.path.isdir(generation) and not os.path.islink(generation):
         _unseal(generation)
         _clear(generation)
-        if not os.path.ismount(generation):
+        try:
             os.rmdir(generation)
+        except OSError:
+            # A bind mount point cannot be removed; it is empty now.
+            pass
     _write(os.path.join(generation, "PAYLOAD"), _payload())
     _write(os.path.join(generation, "easybuild", "demo-1.eb"), "name = 'demo'\n")
     _write_records(generation, root_in_module, software)

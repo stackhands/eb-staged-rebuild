@@ -284,7 +284,7 @@ The fake `eb` writes what a build records about its install prefix (`FAKE_EB_REC
 | ScanTests.test_elf_kinds_for_every_layout | differential "run, installpath, ELF records the generation directory (rpath)" and its runpath, interp, 32 bit and big endian forms |
 | ScanTests.test_elf_is_read_by_its_headers_not_its_bytes | differential "run, installpath, a clean tree publishes" (`clean`) |
 | ScanTests.test_damaged_elf_headers_give_no_hit | differential "run, installpath, a clean tree publishes" (`clean`) |
-| ScanTests.test_symlinks_are_not_followed_and_the_stamp_is_skipped | differential "run, installpath, a clean tree publishes" (the tree holds the stamp of an earlier run) |
+| ScanTests.test_symlinks_are_not_followed_and_the_stamp_is_skipped | `tests/crash_matrix.py`: a run killed at each `stamp:*` step, then resumed, with the stamp's temporary file in the staged tree |
 | ScanTests.test_an_unreadable_file_refuses | differential "run, installpath, an unreadable file refuses" (not run as root) |
 | RefusalTests.test_a_text_file_with_the_generation_path_is_refused | differential "run, installpath, text records the generation directory" |
 | RefusalTests.test_elf_records_are_refused_with_their_kind | differential "run, installpath, ELF records the generation directory (rpath)" and its runpath, interp, 32 bit and big endian forms |
