@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+* Fix: an `installpath` or `userns` build records the generation directory in
+  RPATH, pkg-config files, shebangs and other installed files. Publication
+  rewrites that prefix to the stable install path before it exchanges the
+  directory. A binary whose recorded path is shorter than the stable prefix
+  is refused instead of published with the generation path still in it.
+
 ## 1.0.0
 
 * A static Zig build of every command, one binary per architecture

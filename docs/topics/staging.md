@@ -27,6 +27,8 @@ After a successful exchange the stable path names the new tree and the hidden si
 
 `installpath` and `userns` write `<generation>/software` and `<generation>/modules`. The bubblewrap backend passes `--bwrap-installpath=<generation>` and reads `bwrap_info.json` for the stage paths. Those paths must stay inside the generation directory. A bubblewrap command that used overlayfs is refused: the stage would be an upper layer, and it is left unpublished.
 
+EasyBuild records the directory it was given. For `installpath` and `userns` that directory is the generation, so RPATH, pkg-config files, shebangs and the other files in the install name it. Before the exchange, publication rewrites that generation prefix to the stable `software/<name>/<version>` prefix. Bubblewrap already records the stable path, because that is the path inside its bind mount. The completion stamp is not rewritten: it still records the generation the build wrote.
+
 The generation is complete when the staged install directory contains build evidence: a regular file named `PAYLOAD` (the fault-injection builders and `docs/examples/eb-standin` write one) or a readable `easybuild/*.eb` (EasyBuild copies the easyconfig in at the end of a build). The tool then writes `.eb-staged-rebuild-complete` into that directory, through a short writable window if the top directory is sealed. The stamp records the run id. It is how later recovery tells the new tree from the old one. The stamp alone is not build evidence: a preparation program that empties the tree leaves the stamp, and publication stops.
 
 On the recorded `demo-prepare` run the staged path and the context field `generation` were both:

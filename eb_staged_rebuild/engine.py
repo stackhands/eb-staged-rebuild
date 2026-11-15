@@ -26,6 +26,7 @@ from eb_staged_rebuild.builders import (
     run_command,
     userns_command,
 )
+from eb_staged_rebuild.prefix import rewrite_install_prefix
 from eb_staged_rebuild.discover import (
     map_link_target,
     order_module_files,
@@ -501,6 +502,10 @@ def _prepare_swap_source(mod, run_id, faults):
     retired = mod["retired"]
     staged_kind = lstat_kind(staged)
     retired_kind = lstat_kind(retired)
+    # The staged tree still holds the generation path. Rewrite it before the
+    # directory moves, so the bytes that land at the stable path name that path.
+    if staged_kind == "dir":
+        rewrite_install_prefix(staged, mod["live_software"])
     if staged_kind == "dir" and retired_kind == "missing":
         faults.reach(f"stage.move:{mod['rel']}")
         try:

@@ -19,6 +19,7 @@ const discover = @import("discover.zig");
 const modulefile = @import("modulefile.zig");
 const builders = @import("builders.zig");
 const publish_mod = @import("publish.zig");
+const prefix_mod = @import("prefix.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -688,6 +689,15 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     const retired = s(pyfmt.get(m, "retired"));
     const sk = kind(staged);
     const rk = kind(retired);
+    // The staged tree still holds the generation path. Rewrite it before the
+    // directory moves, so the bytes that land at the stable path name that path.
+    if (std.mem.eql(u8, sk, "dir")) {
+        var why: []const u8 = "";
+        prefix_mod.rewriteInstall(r.a, staged, s(pyfmt.get(m, "live_software")), &why) catch |err| switch (err) {
+            error.Refused => return r.refuse("{s}", .{why}),
+            else => return err,
+        };
+    }
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);

@@ -45,6 +45,51 @@ def _write(path, data):
     os.replace(tmp, path)
 
 
+def _elf_rpath(rpath):
+    """A tiny ELF64 whose DT_RPATH is ``rpath``, readable by ``readelf -d``."""
+    import struct
+
+    dynstr = b"\x00" + rpath.encode("utf-8") + b"\x00"
+    dyn_off = 176
+    str_off = 240
+    file_size = str_off + len(dynstr)
+    ident = b"\x7fELF" + bytes([2, 1, 1, 0, 0]) + b"\x00" * 7
+    ehdr = ident + struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 64, 0, 0, 64, 56, 2, 0, 0, 0)
+
+    def phdr(p_type, p_flags, p_offset, p_vaddr, p_filesz, p_memsz, p_align):
+        return struct.pack("<IIQQQQQQ", p_type, p_flags, p_offset, p_vaddr, p_vaddr, p_filesz, p_memsz, p_align)
+
+    load_vaddr = 0x400000
+    load = phdr(1, 6, 0, load_vaddr, file_size, file_size, 0x1000)
+    dynamic = phdr(2, 6, dyn_off, load_vaddr + dyn_off, 64, 64, 8)
+    dyns = b"".join(
+        struct.pack("<QQ", tag, val)
+        for tag, val in (
+            (5, load_vaddr + str_off),
+            (10, len(dynstr)),
+            (15, 1),
+            (0, 0),
+        )
+    )
+    return ehdr + load + dynamic + dyns + dynstr
+
+
+def _record_prefix(generation, root):
+    """What an EasyBuild install records: a pkg-config file, a shebang, an RPATH."""
+    if os.environ.get("FAKE_EB_RECORD_PREFIX") != "1":
+        return
+    _write(os.path.join(generation, "lib", "pkgconfig", "demo.pc"), f"prefix={root}\n")
+    _write(os.path.join(generation, "bin", "demo"), f"#!{root}/bin/python\n")
+    library = os.path.join(generation, "lib", "libdemo.so")
+    os.makedirs(os.path.dirname(library), exist_ok=True)
+    tmp = library + ".tmp"
+    with open(tmp, "wb") as handle:
+        handle.write(_elf_rpath(f"{root}/lib"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, library)
+
+
 def _lua(root):
     return (
         f'local root = "{root}"\n'
@@ -73,6 +118,7 @@ def _write_tree(software, modules, root_in_module, rel=None):
         shutil.rmtree(generation)
     _write(os.path.join(generation, "PAYLOAD"), _payload())
     _write(os.path.join(generation, "easybuild", "demo-1.eb"), "name = 'demo'\n")
+    _record_prefix(generation, root_in_module)
     module = os.path.join(modules, "all", rel + ".lua")
     _write(module, _lua(root_in_module))
     # FAKE_EB_ACL: hex bytes of a POSIX access ACL set on the written module.
