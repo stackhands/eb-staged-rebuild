@@ -1,8 +1,9 @@
 """Find the generation directory path in a staged tree.
 
 A build that records the generation directory leaves paths that name nothing
-once publication renames the tree. Three kinds of record are looked for in
-every regular file of a staged installation:
+once publication renames the tree. Four kinds of record are looked for in
+every regular file of a staged installation, except the completion stamp, its
+temporary file and the ``easybuild`` directory in the top directory:
 
 * ``rpath``: an ELF ``DT_RPATH`` entry that names the directory.
 * ``runpath``: an ELF ``DT_RUNPATH`` entry that names it.
@@ -36,6 +37,10 @@ STAMP = ".eb-staged-rebuild-complete"
 # The stamp and the temporary file an interrupted write of it leaves. Both
 # hold the generation path and belong to this tool, not to the build.
 OWN_FILES = (STAMP, f".{STAMP}.new")
+# EasyBuild's own build record directly under the install directory: the build
+# log, its reprod/ copies and test reports. It records where the build ran, not
+# a path the installation uses, so it is not scanned.
+BUILD_RECORD = "easybuild"
 
 _PT_LOAD, _PT_DYNAMIC, _PT_INTERP = 1, 2, 3
 _DT_NULL, _DT_STRTAB, _DT_RPATH, _DT_RUNPATH = 0, 5, 15, 29
@@ -198,6 +203,8 @@ def scan_tree(root, base, generation_root):
             if entry.is_symlink():
                 continue
             if entry.is_dir(follow_symlinks=False):
+                if top and entry.name == BUILD_RECORD:
+                    continue
                 stack.append((entry.path, False))
             elif entry.is_file(follow_symlinks=False):
                 if top and entry.name in OWN_FILES:

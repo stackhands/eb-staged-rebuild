@@ -91,7 +91,7 @@ def _write_records(generation, prefix, software):
     that records the prefix there), ``clean`` (an ELF file with only
     ``$ORIGIN`` run paths), ``near`` (a text file that names the directory
     beside the generation, whose name starts with the generation's), and
-    ``text*N`` (N text files), ``unreadable`` (a file with no read permission). ``rpath``, ``runpath`` and ``interp`` take a
+    ``text*N`` (N text files), ``ebrecord`` (EasyBuild's build log and reprod copy, which name the prefix), ``unreadable`` (a file with no read permission). ``rpath``, ``runpath`` and ``interp`` take a
     ``:32be``, ``:32le``, ``:64be`` or ``:64le`` suffix; the default is 64 bit
     little endian.
     """
@@ -116,6 +116,9 @@ def _write_records(generation, prefix, software):
         elif name == "unreadable":
             _write(os.path.join(generation, "share", "secret"), "x\n")
             os.chmod(os.path.join(generation, "share", "secret"), 0)
+        elif name == "ebrecord":
+            _write(os.path.join(generation, "easybuild", "easybuild-demo-1-20260101.123456.log"), f"installdir: {prefix}\n")
+            _write(os.path.join(generation, "easybuild", "reprod", "build.sh"), f"cd {prefix}\n")
         elif name == "clean":
             _write_bytes(
                 os.path.join(generation, "lib", "libclean.so"),

@@ -341,6 +341,7 @@ for rec in rpath runpath interp rpath:32be runpath:32le interp:64be rpath:64be; 
     gi=$((gi + 1))
 done
 compare_admin "run, installpath, the report is capped" env "FAKE_EB_RECORD=text*25,rpath" @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g20 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, installpath, the EasyBuild build record is not scanned" env FAKE_EB_RECORD=ebrecord @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g24 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, installpath, a clean tree publishes" env FAKE_EB_RECORD=clean,near @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g21 --skip-live-check --module demo/1 -- demo-1.eb
 if [ "$(id -u)" != 0 ]; then
     compare_admin "run, installpath, an unreadable file refuses" env FAKE_EB_RECORD=unreadable @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g23 --skip-live-check --module demo/1 -- demo-1.eb

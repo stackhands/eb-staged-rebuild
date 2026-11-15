@@ -15,7 +15,10 @@
   exit 2. The run lists up to 20 files with the kind of hit, and the number of
   files. The `installpath` backend cannot avoid such paths, so a libtool
   package with shared libraries is now refused there; use `bwrap` or `userns`.
-  The Python tool and the Zig binary print the same lines.
+  EasyBuild's own record in `<installdir>/easybuild` (build log, `reprod`
+  copies, test reports) is not scanned: it names where the build ran, not a
+  path the installation uses. The Python tool and the Zig binary print the
+  same lines.
 
 ## 1.0.0
 

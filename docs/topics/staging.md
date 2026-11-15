@@ -31,7 +31,7 @@ After a successful exchange the stable path names the new tree and the hidden si
 
 Publication renames the generation tree, so a path that names the generation directory names nothing afterwards. A build records the install prefix in its output: libtool relinks shared libraries with `-L<prefix>/lib`, and EasyBuild's run-path wrappers turn each `-L` into a run path; `.pc`, CMake package config and libtool `.la` files, `*-config` scripts and shebangs carry the prefix as text. Under `userns` and bubblewrap the prefix is the stable path and nothing names the generation. Under `installpath` the prefix is the generation.
 
-Before it plans a publication, the tool checks every regular file of each staged installation for the generation directory path. It does not follow symbolic links, and it skips the completion stamp it writes itself.
+Before it plans a publication, the tool checks every regular file of each staged installation for the generation directory path. It does not follow symbolic links. It skips the completion stamp it writes itself and the `easybuild` directory directly under each install directory: EasyBuild's build log, its `reprod` copies and test reports name the directory the build ran in on every line, as a record of the build and not as a path the installation uses. An `easybuild` directory deeper in the tree is scanned.
 
 | kind | where it looks |
 |---|---|

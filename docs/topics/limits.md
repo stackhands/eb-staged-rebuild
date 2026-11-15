@@ -8,7 +8,7 @@ These are the limits the code and the design note record. The recommendations ar
 * A process killed with `SIGKILL` during the ordinary-rename fallback cannot roll back in process. The next `resume` repairs the journaled names. The missing-name window is part of that fallback.
 * A transaction that covers more than one module directory is a sequence of exchanges and replaces. It is one atomic directory operation per module directory.
 * The unsandboxed install-path fallback cannot constrain an EasyBuild hook that writes outside the generation.
-* The install-path backend records the generation path in whatever the build writes with its install prefix. Publication refuses such a tree; a libtool package with shared libraries needs `bwrap` or `userns`.
+* The install-path backend records the generation path in whatever the build writes with its install prefix. Publication refuses such a tree, except for the `easybuild` build record under the install directory, which is not scanned; a libtool package with shared libraries needs `bwrap` or `userns`.
 * `gc` and the grace period cannot see open files on every cluster node.
 * A module-file replacement keeps ownership, mode, and the listed ACL bytes when those bytes read back unchanged. The known names are the POSIX access list, the generic NFSv4 list, and the native General Parallel File System list. The recorded checks are on ext4.
 

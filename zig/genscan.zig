@@ -29,6 +29,10 @@ pub const Hit = struct { rel: []const u8, kind: Kind };
 pub const stamp = ".eb-staged-rebuild-complete";
 /// The stamp's temporary file, left by an interrupted write of it.
 const stamp_temp = "." ++ stamp ++ ".new";
+/// EasyBuild's own build record directly under the install directory: the
+/// build log, its reprod/ copies and test reports. It records where the build
+/// ran, not a path the installation uses, so it is not scanned.
+const build_record = "easybuild";
 const chunk = 1 << 20;
 const max_string = 1 << 16;
 const max_dynamic = 1 << 20;
@@ -269,6 +273,7 @@ pub fn scan(a: Allocator, roots: []const []const u8, base: []const u8, generatio
                 const st = fsx.statAt(fsx.cwd, child, false) catch continue;
                 if (st.isLink()) continue;
                 if (st.isDir()) {
+                    if (item.top and std.mem.eql(u8, e.name, build_record)) continue;
                     try stack.append(a, .{ .path = child, .top = false });
                 } else if (st.isReg()) {
                     if (item.top and (std.mem.eql(u8, e.name, stamp) or std.mem.eql(u8, e.name, stamp_temp))) continue;

@@ -100,6 +100,13 @@ class ScanTests(unittest.TestCase):
                 self._file("f.so", data)
                 self.assertEqual(self._scan(), [])
 
+    def test_only_the_top_easybuild_directory_is_a_build_record(self):
+        self._file("easybuild/easybuild-x.log", NEEDLE)
+        self._file("easybuild/reprod/r.sh", NEEDLE)
+        self._file("share/easybuild/y.txt", NEEDLE)
+        self._file("lib/easybuild", NEEDLE)
+        self.assertEqual(self._scan(), [("lib/easybuild", "text"), ("share/easybuild/y.txt", "text")])
+
     def test_symlinks_are_not_followed_and_the_stamp_is_skipped(self):
         outside = tempfile.NamedTemporaryFile(delete=False)
         self.addCleanup(os.unlink, outside.name)
@@ -234,6 +241,15 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.message)
         self._assert_published()
         self.assertNotIn("records the generation directory", out)
+
+    def test_the_easybuild_build_record_is_not_scanned(self):
+        os.environ["FAKE_EB_RECORD"] = "ebrecord"
+        result, out = self._run("installpath")
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_published()
+        self.assertNotIn("records the generation directory", out)
+        log = os.path.join(self.install, "easybuild", "easybuild-demo-1-20260101.123456.log")
+        self.assertIn("generations", _read(log))
 
     def test_bwrap_records_the_live_path_and_publishes(self):
         os.environ["FAKE_EB_RECORD"] = "text,rpath,runpath,interp"
