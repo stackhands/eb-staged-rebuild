@@ -25,7 +25,24 @@ After a successful exchange the stable path names the new tree and the hidden si
 
 ## The generation directory
 
-`installpath` and `userns` write `<generation>/software` and `<generation>/modules`. The bubblewrap backend passes `--bwrap-installpath=<generation>` and reads `bwrap_info.json` for the stage paths. Those paths must stay inside the generation directory. A bubblewrap command that used overlayfs is refused: the stage would be an upper layer, and it is left unpublished.
+`installpath` writes `<generation>/software` and `<generation>/modules`, and EasyBuild installs into that software tree. The `userns` backend writes the same two directories but mounts `<generation>/software/<name>/<version>` over the stable `software/<name>/<version>` path inside its namespace, and EasyBuild installs at the stable path. The bubblewrap backend passes `--bwrap-installpath=<generation>`, bind-mounts the generation over the live path the same way, and reads `bwrap_info.json` for the stage paths. Those paths must stay inside the generation directory. A bubblewrap command that used overlayfs is refused: the stage would be an upper layer, and it is left unpublished.
+
+## Paths the build records
+
+Publication renames the generation tree, so a path that names the generation directory names nothing afterwards. A build records the install prefix in its output: libtool relinks shared libraries with `-L<prefix>/lib`, and EasyBuild's run-path wrappers turn each `-L` into a run path; `.pc`, CMake package config and libtool `.la` files, `*-config` scripts and shebangs carry the prefix as text. Under `userns` and bubblewrap the prefix is the stable path and nothing names the generation. Under `installpath` the prefix is the generation.
+
+Before it plans a publication, the tool checks every regular file of each staged installation for the generation directory path. It does not follow symbolic links, and it skips the completion stamp it writes itself.
+
+| kind | where it looks |
+|---|---|
+| `rpath` | a `DT_RPATH` entry of an Executable and Linkable Format file (ELF) |
+| `runpath` | an ELF `DT_RUNPATH` entry |
+| `interp` | an ELF `PT_INTERP` |
+| `text` | the path as a byte string in any other regular file |
+
+An ELF file is read through its program headers for the first three kinds and is not searched as text. A match must end at the end of the string or at a byte that cannot continue a path component, so `generations/run1` does not match `generations/run10`. Any hit refuses the run: the live tree and module file stay as they were, the journal state is `failed`, and the exit code is 2. The run lists each file with its kind, at most 20, then the number it left out, and the message gives the number of files.
+
+The `installpath` backend cannot avoid these paths. A package that records its prefix, a libtool package with shared libraries for example, is refused there. Use `bwrap` or `userns` for such a package.
 
 The generation is complete when the staged install directory contains build evidence: a regular file named `PAYLOAD` (the fault-injection builders and `docs/examples/eb-standin` write one) or a readable `easybuild/*.eb` (EasyBuild copies the easyconfig in at the end of a build). The tool then writes `.eb-staged-rebuild-complete` into that directory, through a short writable window if the top directory is sealed. The stamp records the run id. It is how later recovery tells the new tree from the old one. The stamp alone is not build evidence: a preparation program that empties the tree leaves the stamp, and publication stops.
 

@@ -3,8 +3,8 @@
 `--backend auto` selects a backend in this order:
 
 1. EasyBuild's bubblewrap backend, after `bwrap --dev-bind / / true` succeeds.
-2. `unshare` with a user and mount namespace. The helper bind-mounts the live software tree and the live module tree read-only, then checks that a probe write fails with `EROFS`. The build's install path is the generation directory.
-3. The install-path fallback. EasyBuild still receives a separate software tree and a separate module tree. There is no kernel sandbox. The command prints that the run is using this fallback.
+2. `unshare` with a user and mount namespace. The helper bind-mounts the live software tree and the live module tree read-only, then bind-mounts `<generation>/software/<name>/<version>` over each stable `software/<name>/<version>` directory of the run (`--bind SOURCE TARGET`). The build's software install path is the live software tree, so EasyBuild records the stable path, and the writes land in the generation. Module files go to `<generation>/modules`. EasyBuild's lock files go to `<generation>/locks` unless `EASYBUILD_LOCKS_DIR` is set, because the live software tree is read-only.
+3. The install-path fallback. EasyBuild still receives a separate software tree and a separate module tree. There is no kernel sandbox. The command prints that the run is using this fallback. EasyBuild installs into the generation, so the build records the generation path, and publication refuses a tree that holds it (see {doc}`staging`).
 
 On the walk-through host, bubblewrap was not installed and the user-namespace sandbox was usable, so `auto` would have selected `userns`. The recorded commands passed `--backend installpath` because `docs/examples/eb-standin` implements that backend.
 
@@ -22,7 +22,7 @@ The fallback exists for hosts where bubblewrap is absent and unprivileged user n
 
 `ensure_rebuild` appends `--rebuild` unless `--rebuild`, `--force`, or `-f` is already present. The dry-run transcript shows that appended flag.
 
-The child environment sets `EASYBUILD_INSTALLPATH_SOFTWARE` and `EASYBUILD_INSTALLPATH_MODULES` to the generation (or, for bubblewrap, to the live trees, which the sandbox bind-mounts over) and puts the live module tree on `MODULEPATH`. `EASYBUILD_INSTALLPATH`, `EASYBUILD_PREFIX`, and `EASYBUILD_REMOVE_GHOST_INSTALL_DIRS` are removed.
+The child environment sets `EASYBUILD_INSTALLPATH_SOFTWARE` and `EASYBUILD_INSTALLPATH_MODULES` to the generation (or, for bubblewrap, to the live trees, which the sandbox bind-mounts over; for the user-namespace sandbox, the live software tree and the generation's modules) and puts the live module tree on `MODULEPATH`. `EASYBUILD_INSTALLPATH`, `EASYBUILD_PREFIX`, and `EASYBUILD_REMOVE_GHOST_INSTALL_DIRS` are removed.
 
 ## Bubblewrap stage keys
 

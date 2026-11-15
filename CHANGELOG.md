@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+* Fix: the `userns` backend mounts the generation's `software/<name>/<version>`
+  over the stable path inside its namespace and points EasyBuild's
+  `--installpath-software` at the live tree, as the bubblewrap backend does.
+  Run paths, `.pc` files, libtool archives and scripts the build writes name
+  the stable path, not the generation directory. EasyBuild's lock files go to
+  `<generation>/locks` unless `EASYBUILD_LOCKS_DIR` is set. The sandbox helper
+  takes `--bind SOURCE TARGET`.
+* Publication refuses a staged tree that records the generation directory: an
+  ELF `DT_RPATH`, `DT_RUNPATH` or `PT_INTERP`, or the path as bytes in any
+  other regular file. The live tree stays untouched and the run fails with
+  exit 2. The run lists up to 20 files with the kind of hit, and the number of
+  files. The `installpath` backend cannot avoid such paths, so a libtool
+  package with shared libraries is now refused there; use `bwrap` or `userns`.
+  The Python tool and the Zig binary print the same lines.
+
 ## 1.0.0
 
 * A static Zig build of every command, one binary per architecture
