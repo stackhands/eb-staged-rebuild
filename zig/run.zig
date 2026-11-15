@@ -19,6 +19,7 @@ const discover = @import("discover.zig");
 const modulefile = @import("modulefile.zig");
 const builders = @import("builders.zig");
 const publish_mod = @import("publish.zig");
+const genscan = @import("genscan.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -491,6 +492,31 @@ fn chmod(p: []const u8, mode: u32) void {
     _ = linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode));
 }
 
+const max_reported_hits = 20;
+
+/// _refuse_generation_paths: refuse to publish a tree that records the
+/// generation directory.
+fn refuseGenerationPaths(r: *R, drafted: anytype) E!void {
+    const a = r.a;
+    const generation = r.str("generation_root");
+    var roots: std.ArrayList([]const u8) = .empty;
+    for (drafted) |d| try roots.append(a, d.staged);
+    var why: []const u8 = "";
+    const hits = genscan.scan(a, roots.items, generation, generation, &why) catch |err| return if (err == error.Refused) r.refuse("{s}", .{why}) else error.OutOfMemory;
+    if (hits.len == 0) return;
+    for (hits[0..@min(hits.len, max_reported_hits)]) |h| log("staged file records the generation directory: {s} ({s})", .{ h.rel, @tagName(h.kind) });
+    if (hits.len > max_reported_hits) log("... and {d} more", .{hits.len - max_reported_hits});
+    var files: usize = 0;
+    for (hits, 0..) |h, i| {
+        if (i == 0 or !std.mem.eql(u8, h.rel, hits[i - 1].rel)) files += 1;
+    }
+    const hint = if (std.mem.eql(u8, r.spec.backend, "installpath"))
+        "; the installpath backend records it and cannot avoid it, use the bwrap or userns backend"
+    else
+        "";
+    return r.refuse("{d} staged file(s) name the generation directory {s}; nothing was published{s}", .{ files, generation, hint });
+}
+
 fn plan(r: *R) E!void {
     const a = r.a;
     const gen = r.str("generation_root");
@@ -523,6 +549,8 @@ fn plan(r: *R) E!void {
         if (!std.mem.eql(u8, lk, "missing") and !std.mem.eql(u8, lk, "file")) return r.refuse("{s} is not a regular file", .{live_module});
         try drafted.append(a, .{ .rel = rel, .staged = inst.staged, .live = inst.live, .retired = retired, .text = inst.text, .live_module = live_module, .path = path });
     }
+    try refuseGenerationPaths(r, drafted.items);
+
     const rdir = runDir(a, r.spec.state_root, run_id);
     var plan_items: std.ArrayList(Py) = .empty;
     for (drafted.items) |d| {

@@ -54,6 +54,7 @@ from eb_staged_rebuild.paths import (
     is_within,
     lstat_kind,
 )
+from eb_staged_rebuild.genscan import scan_tree, sort_hits
 from eb_staged_rebuild.probe import probe_all, stage_paths_from_bwrap_info
 from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
 
@@ -282,6 +283,32 @@ def _stage_roots(spec, journal, generation_root):
     return software, modules, how
 
 
+MAX_REPORTED_HITS = 20
+
+
+def _refuse_generation_paths(spec, journal, staged_trees):
+    """Refuse to publish a tree that records the generation directory."""
+    generation = journal["generation_root"]
+    hits = []
+    for staged in staged_trees:
+        hits.extend(scan_tree(staged, generation, generation))
+    if not hits:
+        return
+    hits = sort_hits(hits)
+    for rel, kind in hits[:MAX_REPORTED_HITS]:
+        _log(f"staged file records the generation directory: {rel} ({kind})")
+    if len(hits) > MAX_REPORTED_HITS:
+        _log(f"... and {len(hits) - MAX_REPORTED_HITS} more")
+    files = len({rel for rel, _kind in hits})
+    message = f"{files} staged file(s) name the generation directory {generation}; nothing was published"
+    if spec.backend == "installpath":
+        message += (
+            "; the installpath backend records it and cannot avoid it, "
+            "use the bwrap or userns backend"
+        )
+    raise Refused(message)
+
+
 def _plan(spec, journal, faults):
     stage_software, stage_modules, how = _stage_roots(spec, journal, journal["generation_root"])
     journal["stage_software"] = abspath(stage_software)
@@ -333,6 +360,8 @@ def _plan(spec, journal, faults):
         if lstat_kind(live_module) not in ("missing", "file"):
             raise Refused(f"{live_module} is not a regular file")
         drafted.append((rel, staged, live_software, retired, new_text, live_module, path))
+
+    _refuse_generation_paths(spec, journal, [item[1] for item in drafted])
 
     run_dir = run_dir_for(spec.state_root, journal["run_id"])
     plan = []
