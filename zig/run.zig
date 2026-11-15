@@ -211,12 +211,15 @@ fn runDir(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
 /// live module tree first on MODULEPATH. Running eb without these would let
 /// it install into its default path, so an allocation failure is an error,
 /// never a fallback to the parent environment.
-fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.proc.Envp {
+fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8, locks_dir: ?[]const u8) E!common.proc.Envp {
     const a = r.a;
     var b = try common.env.Builder.fromEnv(a, common.env.Env.fromEnvp(env.envp));
     for ([_][]const u8{ "EASYBUILD_INSTALLPATH", "EASYBUILD_PREFIX", "EASYBUILD_REMOVE_GHOST_INSTALL_DIRS", "EASYBUILD_INSTALLPATH_SOFTWARE", "EASYBUILD_INSTALLPATH_MODULES" }) |k| b.unset(k);
     try b.set("EASYBUILD_INSTALLPATH_SOFTWARE", software);
     try b.set("EASYBUILD_INSTALLPATH_MODULES", modules);
+    // A default locks directory sits under the software install path, which
+    // the user-namespace sandbox mounts read-only.
+    if (locks_dir) |dir| if (b.get("EASYBUILD_LOCKS_DIR") == null) try b.set("EASYBUILD_LOCKS_DIR", dir);
     const mp = b.get("MODULEPATH") orelse "";
     var parts: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, mp, ':');
@@ -285,7 +288,7 @@ fn learnRels(r: *R) E![]const []const u8 {
     try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--dry-run" });
     try cmd.appendSlice(a, engine.filterEbArgs(a, r.spec.eb_args));
     log("module preflight: {s}", .{joinCmd(a, cmd.items)});
-    const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules, null);
     var found: []const []const u8 = &.{};
     var code: u32 = 0;
     var tail: []const u8 = "";
@@ -357,23 +360,36 @@ fn build(r: *R) E!u8 {
     if (std.mem.eql(u8, r.spec.backend, "bwrap")) {
         try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--experimental", "--bwrap", try a.print("--bwrap-installpath={s}", .{gen}), "--bwrap-options=--die-with-parent" });
         try cmd.appendSlice(a, filtered);
-        envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+        envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules, null);
+    } else if (std.mem.eql(u8, r.spec.backend, "userns")) {
+        atomic.makedirs(modules) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, modules)});
+        const rels = r.get("module_rels") orelse Py{ .list = &.{} };
+        if (rels == .list) for (rels.list) |rel| {
+            const dir = try std.fs.path.join(a, &.{ software, s(rel) });
+            atomic.makedirs(dir) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, dir)});
+        };
+        var inner: std.ArrayList([]const u8) = .empty;
+        try inner.appendSlice(a, &.{ r.spec.eb_executable, try a.print("--installpath-software={s}", .{r.spec.software}), try a.print("--installpath-modules={s}", .{modules}) });
+        try inner.appendSlice(a, filtered);
+        envp = try childEnv(r, r.env, r.spec.software, modules, r.spec.modules, try std.fs.path.join(a, &.{ gen, "locks" }));
+        const probes = r.get("probes") orelse Py{ .dict = &.{} };
+        const unshare = blk: {
+            if (pyfmt.get(probes, "userns_sandbox")) |u| if (pyfmt.get(u, "path")) |p| if (p == .str and p.str.len > 0) break :blk p.str;
+            break :blk resolveExe(a, r.env, "unshare") orelse "unshare";
+        };
+        try cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", r.spec.software, "--read-only", r.spec.modules });
+        const live_software = admin.abspath(a, r.spec.software);
+        if (rels == .list) for (rels.list) |rel| {
+            try cmd.appendSlice(a, &.{ "--bind", try std.fs.path.join(a, &.{ software, s(rel) }), try std.fs.path.join(a, &.{ live_software, s(rel) }) });
+        };
+        try cmd.append(a, "--");
+        try cmd.appendSlice(a, inner.items);
     } else {
         atomic.makedirs(software) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, software)});
         atomic.makedirs(modules) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, modules)});
-        var inner: std.ArrayList([]const u8) = .empty;
-        try inner.appendSlice(a, &.{ r.spec.eb_executable, try a.print("--installpath-software={s}", .{software}), try a.print("--installpath-modules={s}", .{modules}) });
-        try inner.appendSlice(a, filtered);
-        envp = try childEnv(r, r.env, software, modules, r.spec.modules);
-        if (std.mem.eql(u8, r.spec.backend, "userns")) {
-            const probes = r.get("probes") orelse Py{ .dict = &.{} };
-            const unshare = blk: {
-                if (pyfmt.get(probes, "userns_sandbox")) |u| if (pyfmt.get(u, "path")) |p| if (p == .str and p.str.len > 0) break :blk p.str;
-                break :blk resolveExe(a, r.env, "unshare") orelse "unshare";
-            };
-            try cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", r.spec.software, "--read-only", r.spec.modules, "--" });
-            try cmd.appendSlice(a, inner.items);
-        } else try cmd.appendSlice(a, inner.items);
+        try cmd.appendSlice(a, &.{ r.spec.eb_executable, try a.print("--installpath-software={s}", .{software}), try a.print("--installpath-modules={s}", .{modules}) });
+        try cmd.appendSlice(a, filtered);
+        envp = try childEnv(r, r.env, software, modules, r.spec.modules, null);
     }
     r.set("eb_command", pyList(a, cmd.items));
     log("running {s}", .{joinCmd(a, cmd.items)});
@@ -1419,7 +1435,7 @@ test "childEnv fails rather than fall back to the parent environment" {
     while (true) : (fail_index += 1) {
         var failing = std.testing.FailingAllocator.init(arena_state.allocator(), .{ .fail_index = fail_index });
         var r: R = .{ .a = failing.allocator(), .env = env, .ctx = &ctx, .spec = .{ .software = "/s", .modules = "/m2", .state_root = "/st", .eb_args = &.{} } };
-        const envp = childEnv(&r, env, "/gen/software", "/gen/modules", "/live/modules") catch |err| {
+        const envp = childEnv(&r, env, "/gen/software", "/gen/modules", "/live/modules", null) catch |err| {
             try std.testing.expectEqual(error.OutOfMemory, err);
             continue;
         };

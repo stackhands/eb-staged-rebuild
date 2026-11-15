@@ -116,6 +116,7 @@ class _Ctx:
         self.faults = faults
         self.backend = spec.backend
         self.probes = spec.probes
+        self.rels = list(spec.module_rels)
 
 
 def _check_roots(spec):
@@ -786,6 +787,7 @@ def _build(spec, journal, faults):
     journal["state"] = "building"
     save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.building")
     ctx = _Ctx(spec, journal["generation_root"], faults)
+    ctx.rels = list(journal["module_rels"])
     os.makedirs(journal["generation_root"], exist_ok=True)
     _clear_stage_modules(journal["generation_root"])
     faults.reach("build.start")
@@ -799,8 +801,9 @@ def _build(spec, journal, faults):
         rc = run_command(cmd, env, faults, "build.invoke")
     elif spec.backend == "userns":
         software, modules = installpath_dirs(journal["generation_root"])
-        os.makedirs(software, exist_ok=True)
         os.makedirs(modules, exist_ok=True)
+        for rel in ctx.rels:
+            os.makedirs(os.path.join(software, rel), exist_ok=True)
         cmd, env, _software, _modules = userns_command(ctx)
         journal["eb_command"] = cmd
         _log("running " + format_command(cmd))

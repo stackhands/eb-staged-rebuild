@@ -607,6 +607,7 @@ fn mountRaw(source: ?[*:0]const u8, target: [*:0]const u8, flags: u32) linux.E {
 pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
     const prefix = "eb-staged-rebuild user namespace: ";
     var read_only: std.ArrayList([]const u8) = .empty;
+    var binds: std.ArrayList([2][]const u8) = .empty;
     var probe_only = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -615,6 +616,9 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         } else if (std.mem.eql(u8, args[i], "--read-only") and i + 1 < args.len) {
             i += 1;
             read_only.append(a, args[i]) catch oom();
+        } else if (std.mem.eql(u8, args[i], "--bind") and i + 2 < args.len) {
+            binds.append(a, .{ args[i + 1], args[i + 2] }) catch oom();
+            i += 2;
         } else if (std.mem.startsWith(u8, args[i], "--read-only=")) {
             read_only.append(a, args[i]["--read-only=".len..]) catch oom();
         } else break;
@@ -657,6 +661,10 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         cli.err(prefix ++ "{s}\n", .{msg});
         return sandbox_setup_exit;
     };
+    for (binds.items) |pair| if (bindOver(a, pair[0], pair[1])) |msg| {
+        cli.err(prefix ++ "{s}\n", .{msg});
+        return sandbox_setup_exit;
+    };
     if (command.len == 0) {
         cli.err(prefix ++ "no sandbox command was supplied\n", .{});
         return sandbox_setup_exit;
@@ -672,6 +680,28 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
     const rc = linux.execve(zexe.ptr, zargv.ptr, env.envp);
     cli.err(prefix ++ "exec {s}: {s}\n", .{ command[0], strerror(linux.errno(rc)) });
     return sandbox_setup_exit;
+}
+
+/// _bind: mount the directory `source` over the directory `target`. Null on
+/// success, else the reason.
+fn bindOver(a: Allocator, source_in: []const u8, target_in: []const u8) ?[]const u8 {
+    var rb: [sys.path_max]u8 = undefined;
+    const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch "/";
+    const paths = [2][]const u8{
+        if (source_in.len > 0 and source_in[0] == '/') source_in else (std.fs.path.join(a, &.{ cwd, source_in }) catch source_in),
+        if (target_in.len > 0 and target_in[0] == '/') target_in else (std.fs.path.join(a, &.{ cwd, target_in }) catch target_in),
+    };
+    for (paths) |path| {
+        const st = fsx.statAt(fsx.cwd, path, false) catch return a.print("bind mount path is not a real directory: {s}", .{path}) catch "bad path";
+        if (!st.isDir()) return a.print("bind mount path is not a real directory: {s}", .{path}) catch "bad path";
+    }
+    var sb: [sys.path_max:0]u8 = undefined;
+    var tb: [sys.path_max:0]u8 = undefined;
+    const sz = sys.z(&sb, paths[0]) catch return "path too long";
+    const tz = sys.z(&tb, paths[1]) catch return "path too long";
+    const e = mountRaw(sz.ptr, tz.ptr, MS_BIND | MS_REC);
+    if (e != .SUCCESS) return a.print("mount {s}: {s}", .{ paths[1], strerror(e) }) catch "mount failed";
+    return null;
 }
 
 /// _protect: bind the directory onto itself, then remount it read-only.

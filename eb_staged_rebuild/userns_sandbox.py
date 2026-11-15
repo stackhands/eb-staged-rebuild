@@ -1,4 +1,4 @@
-"""Enter a user/mount-namespace sandbox and make the live trees read-only."""
+"""Enter a user/mount-namespace sandbox, make the live trees read-only and mount generation trees over stable paths."""
 
 import argparse
 import ctypes
@@ -48,6 +48,16 @@ def _protect(path):
     _mount(path, path, MS_BIND | MS_REMOUNT | MS_RDONLY)
 
 
+def _bind(source, target):
+    """Mount the directory ``source`` over the directory ``target``."""
+    source = os.path.abspath(source)
+    target = os.path.abspath(target)
+    for path in (source, target):
+        if not os.path.isdir(path) or os.path.islink(path):
+            raise RuntimeError(f"bind mount path is not a real directory: {path}")
+    _mount(source, target, MS_BIND | MS_REC)
+
+
 def _probe():
     # The mount disappears with this private namespace. Trying to remove its
     # mountpoint before namespace exit would correctly fail with EBUSY.
@@ -66,6 +76,7 @@ def _probe():
 def _parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--read-only", action="append", default=[])
+    parser.add_argument("--bind", action="append", nargs=2, default=[], metavar=("SOURCE", "TARGET"))
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
@@ -79,6 +90,8 @@ def main(argv=None):
             return _probe()
         for path in args.read_only:
             _protect(path)
+        for source, target in args.bind:
+            _bind(source, target)
         command = list(args.command)
         if command and command[0] == "--":
             command = command[1:]

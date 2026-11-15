@@ -116,12 +116,18 @@ fn buildCommand(a: Allocator, env: probe.Env, spec: Spec, probes: Py, generation
     inner.appendSlice(a, &.{ spec.eb_executable, a.print("--installpath-software={s}", .{software}) catch "", a.print("--installpath-modules={s}", .{modules}) catch "" }) catch oom();
     inner.appendSlice(a, filtered) catch oom();
     if (!std.mem.eql(u8, spec.backend, "userns")) return join(a, inner.items);
+    inner.items[1] = a.print("--installpath-software={s}", .{spec.software}) catch "";
     const report = pyfmt.get(probes, "userns_sandbox");
     const unshare = blk: {
         if (report) |r| if (pyfmt.get(r, "path")) |p| if (p == .str and p.str.len > 0) break :blk p.str;
         break :blk which(a, env, "unshare") orelse "unshare";
     };
-    cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", spec.software, "--read-only", spec.modules, "--" }) catch oom();
+    cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", spec.software, "--read-only", spec.modules }) catch oom();
+    const live_software = admin.abspath(a, spec.software);
+    for (spec.module_rels) |rel| {
+        cmd.appendSlice(a, &.{ "--bind", std.fs.path.join(a, &.{ software, rel }) catch "", std.fs.path.join(a, &.{ live_software, rel }) catch "" }) catch oom();
+    }
+    cmd.append(a, "--") catch oom();
     cmd.appendSlice(a, inner.items) catch oom();
     return join(a, cmd.items);
 }

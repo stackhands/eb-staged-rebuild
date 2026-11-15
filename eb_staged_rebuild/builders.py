@@ -112,8 +112,22 @@ def bwrap_command(ctx):
 
 
 def userns_command(ctx):
-    """Run an install-path build with both live trees mounted read-only."""
-    inner, env, software, modules = installpath_command(ctx)
+    """Run a build with the live trees read-only and each generation tree mounted over its stable path.
+
+    Inside the namespace ``software/<rel>`` is the generation's tree, and
+    EasyBuild installs under the live software path, so the build records the
+    stable path. The live ``software`` and ``modules`` directories stay
+    read-only; module files go to the generation's ``modules`` directory.
+    """
+    inner, env, _software, modules = installpath_command(ctx)
+    live_software = os.fspath(ctx.software)
+    generation_software, _generation_modules = installpath_dirs(ctx.generation_root)
+    inner[1] = f"--installpath-software={live_software}"
+    env = child_env(os.environ, live_software, modules, ctx.modules)
+    # EasyBuild keeps lock files under the software install path by default,
+    # which is read-only here.
+    if "EASYBUILD_LOCKS_DIR" not in env:
+        env["EASYBUILD_LOCKS_DIR"] = os.path.join(ctx.generation_root, "locks")
     report = (getattr(ctx, "probes", None) or {}).get("userns_sandbox") or {}
     unshare = report.get("path") or shutil.which("unshare") or "unshare"
     command = [
@@ -126,10 +140,15 @@ def userns_command(ctx):
         ctx.software,
         "--read-only",
         ctx.modules,
-        "--",
-        *inner,
     ]
-    return command, env, software, modules
+    for rel in getattr(ctx, "rels", None) or ():
+        command += [
+            "--bind",
+            os.path.join(generation_software, rel),
+            os.path.join(os.path.abspath(live_software), rel),
+        ]
+    command += ["--", *inner]
+    return command, env, live_software, modules
 
 
 def dry_run_command(ctx):
