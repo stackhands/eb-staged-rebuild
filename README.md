@@ -62,6 +62,10 @@ make -C docs html
 
 Open `docs/_build/html/index.html`. The source pages start at [docs/index.md](docs/index.md).
 
+## Changelog
+
+A change adds a news fragment, `changelog.d/+<name>.<type>.md`, with type `feature`, `bugfix`, `doc`, `removal` or `misc`. `towncrier build --draft --version X.Y.Z` prints the release notes the fragments make. A release writes them into [CHANGELOG.md](CHANGELOG.md), as [RELEASING.md](RELEASING.md) describes.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Author: Rohit Goswami &lt;rgoswami@ieee.org&gt;.

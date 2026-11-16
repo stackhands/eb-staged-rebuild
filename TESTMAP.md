@@ -394,7 +394,7 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 | CliDocTests.test_docs_name_every_cli_option | differential "top level --help", "run -h", "resume -h", "rollback -h", "status -h", "gc -h", "retire -h", "probe -h", "resolve -h": the binary's help equals the Python parser's, which this test checks against the docs |
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the published transcripts and `docs/examples/walkthrough.sh`; no binary behaviour |
 | CliDocTests.test_a_dot_in_the_checkout_is_not_a_pattern | `docs/examples/walkthrough.sh` replaces the checkout literally; no binary behaviour |
-| CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
+| CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
 
 ### tests/test_probe_cli.py
 

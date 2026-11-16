@@ -1,0 +1,1 @@
+Changes are recorded as news fragments in `changelog.d/`, and towncrier assembles them into `CHANGELOG.md` at release, with zig-common's fragment types. CI drafts the release notes and fails on a fragment whose name has no type.

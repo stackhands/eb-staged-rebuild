@@ -16,7 +16,8 @@ release with the binaries, `SHA256SUMS` and build provenance attestations.
 
 1. `__version__` in `eb_staged_rebuild/__init__.py`, `version` in
    `pyproject.toml` and `.version` in `build.zig.zon` name the new version.
-2. `CHANGELOG.md` has a section for it.
+2. `CHANGELOG.md` has a section for it: `towncrier build --version X.Y.Z`
+   writes the fragments in `changelog.d/` into it and removes them.
 3. `TESTMAP.md` has no row marked "not yet", and `COMPAT.md` lists every
    deliberate difference between the Zig build and the Python tool.
 4. CI on `main` is green on both architectures, including the real-EasyBuild

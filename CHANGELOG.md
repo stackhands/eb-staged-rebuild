@@ -1,58 +1,6 @@
 # Changelog
 
-## Unreleased
-
-* Fix: an `installpath` or `userns` build records the generation directory in
-  RPATH, pkg-config files, shebangs and other installed files. Publication
-  rewrites that prefix to the stable install path before it exchanges the
-  directory. A binary whose recorded path is shorter than the stable prefix
-  is refused instead of published with the generation path still in it.
-* Fix: that rewrite edited each file in place. A crash tore the bytes, a
-  symbolic link was followed, a sparse file was filled, hard links were not
-  a single replacement, and `chmod` (which replaces an NFSv4 ACL) was used
-  to open a file that was not owner-writable. The rewrite now publishes a
-  same-directory replacement that keeps the owner, mode, ACL and user
-  attributes, keeps the tree's hard links on one inode, leaves a hole a
-  hole, and replaces a symbolic link by rename.
-* Documentation: the recorded transcripts name the stand-in as
-  `<checkout>/docs/examples/eb-standin`, and the commands a reader copies
-  use `$PWD/docs/examples/eb-standin`. They no longer contain the checkout
-  path of the machine that recorded them.
-* Fix: re-recording the walk-through replaced that checkout with `sed`.
-  A `.` in the path is any character in a sed pattern, so a neighbouring
-  path was rewritten as well. The replacement is now the literal path.
-* Docs: the design note's atomic-write temporary file is `.{basename}.new`.
-  A name already there is refused unless it is a regular file with one hard
-  link, owned by the writer or the metadata owner.
-* Fix: the state-root gate `.lock` was truncated and rewritten with the
-  holder's pid without checking that it was a regular file with one hard
-  link. A hard link planted on that name lost the other name's bytes, a
-  FIFO was opened, and a symbolic link used as the state root was followed.
-  The gate is refused unless it is a private regular file, a symlink
-  component of the state root is refused, and both lock files are owner-only
-  so another user who can traverse the directory cannot open them and take
-  the flock.
-* Fix: `run` with `--robot` on EESSI refused before building, naming an
-  EESSI dependency such as `M4/1.4.20` as "a missing, not an existing
-  rebuild directory". The module preflight now runs `eb --dry-run` with the
-  build's arguments and `--rebuild`, and leaves out the installed
-  dependencies EasyBuild marks `[x]`; the easyconfigs to rebuild are `[R]`.
-  Both the Python tool and the binary.
-* Fix: off a terminal, EasyBuild 5.4's rich output wraps each dry-run line
-  at 80 columns, so `run` without `--module` found no module line and
-  refused. A wrapped module line is now read whole.
-* Fix: the binary's build takes `-Dcommit`, as eb-local's and
-  eb-keep-logs' do, and its `--version` prints
-  `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`; the
-  first two words are the Python tool's line. The version comes from
-  `build.zig.zon` alone, and release binaries name the tag's commit.
-* The static build uses zig-common 0.8.1.
-* Docs: `docs/reference/cli.md` named version 0.4.1.
-* Docs: the README shows `probe`, `run`, `status` and `rollback` on an
-  EESSI 2026.06 user installation.
-* Docs: `COMPAT.md` said the Python tool stays the one to use; it now says
-  either build can be used, as the README does.
-* Docs: the stackhands table and the documentation menu list eb-pipeline.
+<!-- towncrier release notes start -->
 
 ## 1.0.0
 

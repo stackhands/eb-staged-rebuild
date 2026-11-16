@@ -1,0 +1,1 @@
+`run` with `--robot` on EESSI refused before building, naming an EESSI dependency such as `M4/1.4.20` as "a missing, not an existing rebuild directory". The module preflight now runs `eb --dry-run` with the build's arguments and `--rebuild`, and leaves out the installed dependencies EasyBuild marks `[x]`; the easyconfigs to rebuild are `[R]`. Both the Python tool and the binary.
