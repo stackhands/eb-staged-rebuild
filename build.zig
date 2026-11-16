@@ -1,8 +1,10 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{ .abi = .musl, .cpu_model = .baseline } });
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
+    const commit = b.option([]const u8, "commit", "Commit the binary is built from") orelse "unknown";
     // Debug info carries absolute build paths; a release binary leaves it
     // out so two builds of one commit are byte-identical.
     const strip = b.option(bool, "strip", "Leave out debug info (default: on for release builds)") orelse (optimize != .debug);
@@ -16,13 +18,20 @@ pub fn build(b: *std.Build) void {
         std.process.exit(1);
     }
 
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", zon.version);
+    options.addOption([]const u8, "commit", commit);
+
     const common = b.dependency("zig_common", .{ .target = target, .optimize = optimize, .@"test-ops" = test_ops });
     const mod = b.createModule(.{
         .root_source_file = b.path("zig/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = strip,
-        .imports = &.{.{ .name = "zig_common", .module = common.module("zig_common") }},
+        .imports = &.{
+            .{ .name = "zig_common", .module = common.module("zig_common") },
+            .{ .name = "build_options", .module = options.createModule() },
+        },
     });
     const exe = b.addExecutable(.{ .name = if (test_ops) "eb-staged-rebuild-test-ops" else "eb-staged-rebuild", .root_module = mod, .linkage = .static });
     b.installArtifact(exe);

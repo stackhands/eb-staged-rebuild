@@ -14,6 +14,13 @@
   same-directory replacement that keeps the owner, mode, ACL and user
   attributes, keeps the tree's hard links on one inode, leaves a hole a
   hole, and replaces a symbolic link by rename.
+* Fix: the binary's build takes `-Dcommit`, as eb-local's and
+  eb-keep-logs' do, and its `--version` prints
+  `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`; the
+  first two words are the Python tool's line. The version comes from
+  `build.zig.zon` alone, and release binaries name the tag's commit.
+* The static build uses zig-common 0.8.1.
+* Docs: `docs/reference/cli.md` named version 0.4.1.
 
 ## 1.0.0
 
