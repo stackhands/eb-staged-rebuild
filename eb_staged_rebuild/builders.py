@@ -133,11 +133,16 @@ def userns_command(ctx):
 
 
 def dry_run_command(ctx):
-    """List module names without installing. Uses the live prefix."""
+    """List the modules the build replaces, without installing.
+
+    The build's arguments with --rebuild, against the live prefix, so
+    EasyBuild marks the easyconfigs to rebuild [R] and installed
+    dependencies [x].
+    """
     cmd = [
         ctx.eb_executable,
         "--dry-run",
-        *filter_eb_args(ctx.eb_args),
+        *ensure_rebuild(filter_eb_args(ctx.eb_args)),
     ]
     env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules)
     return cmd, env

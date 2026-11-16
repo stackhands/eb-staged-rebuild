@@ -55,7 +55,7 @@ eb-staged-rebuild: pass the easyconfig after --, for example: eb-staged-rebuild 
 
 ## Run the rebuild
 
-A real run takes the state-root lock, calls `eb --dry-run` to learn module names (unless a test builder is injected), checks each `Name/version` directory, then builds. The preflight runs before the lock, so EasyBuild can run twice. `--module` names directories to check; names discovered from the dry-run are added to that list.
+A real run takes the state-root lock, calls `eb --dry-run` with the build's arguments and `--rebuild` to learn module names (unless a test builder is injected), checks each `Name/version` directory, then builds. The preflight runs before the lock, so EasyBuild can run twice. `--module` names directories to check; names discovered from the dry-run are added to that list. Those are the easyconfigs EasyBuild marks `[R]` or `[F]`, and any it marks `[ ]` as not installed, which the check refuses. An installed dependency that `--robot` lists as `[x]`, such as one EESSI provides, is left alone. A module line that EasyBuild's output wrapped at the terminal width is read whole.
 
 ```bash
 eb-staged-rebuild run \
