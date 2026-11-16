@@ -251,6 +251,23 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
 
+### tests/test_prefix.py
+
+The generation prefix is published by a same-directory replacement. The Zig
+tests cover the same bytes, mode, hard links and symbolic links.
+
+| test | replacement |
+|---|---|
+| PrefixPublishTests.test_a_failed_publish_leaves_the_original_bytes | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_rewrite_does_not_chmod_a_sealed_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_sparse_file_stays_sparse | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_hard_links_stay_one_inode | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_symlink_is_replaced_without_unlinking_first | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_non_utf8_bytes_keep_their_neighbors | `zig/prefix.zig` test "a generation prefix becomes the stable prefix, and a tight binary is refused" |
+| PrefixPublishTests.test_a_binary_without_room_to_shorten_is_refused | `zig/prefix.zig` test "a generation prefix becomes the stable prefix, and a tight binary is refused" |
+| PrefixPublishTests.test_the_completion_stamp_is_not_rewritten | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_symlink_is_not_followed_into_another_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+
 ### tests/test_backends.py
 
 A fake `bwrap` and `unshare` first on PATH answer the probes (`FAKE_BWRAP_FAIL`, `FAKE_UNSHARE_FAIL` make them

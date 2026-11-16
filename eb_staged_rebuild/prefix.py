@@ -12,9 +12,12 @@ rewritten at whatever length the stable path needs. The completion stamp is
 left alone: it is how recovery tells this run's tree from the previous one.
 """
 
+import ctypes
+import errno
 import os
 import stat
 
+from eb_staged_rebuild.atomicio import _restore_metadata, fsync_dir, read_metadata
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.paths import abspath, lstat_kind
 
@@ -110,64 +113,438 @@ def _rewrite_binary(data, old, new, path):
     return bytes(buf)
 
 
-def _store(path, data, mode):
-    writable = mode & stat.S_IWUSR
-    if not writable:
-        os.chmod(path, mode | stat.S_IWUSR)
+# A publication never rewrites its own temporary names, or the stamp that
+# recovery uses to tell this generation from the previous one.
+_TEMP_SUFFIXES = (".ebsr-partial", ".ebsr-ready", ".ebsr-symlink", ".ebsr-link")
+_MAX_BYTES = 1 << 30
+_PUNCH = 4096
+
+
+def _ours(name):
+    return name in _SKIP or any(name.endswith(suffix) for suffix in _TEMP_SUFFIXES)
+
+
+def _with_writable_dir(directory, write):
+    """Run ``write`` while ``directory`` is owner-writable, then restore it.
+
+    The directory is opened ``O_NOFOLLOW`` and changed with ``fchmod``, so a
+    symlink is never chmod'd and the file inside it is never chmod'd either.
+    chmod on the directory can replace an NFSv4 ACL; the ACL bytes are put
+    back after the mode.
+    """
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        with open(path, "r+b") as handle:
-            handle.seek(0)
-            handle.write(data)
-            handle.truncate()
-            handle.flush()
-            os.fsync(handle.fileno())
+        info = os.fstat(fd)
+        mode = stat.S_IMODE(info.st_mode)
+        if mode & stat.S_IWUSR:
+            return write()
+        acls = _directory_acls(fd)
+        os.fchmod(fd, mode | stat.S_IWUSR | stat.S_IXUSR)
+        try:
+            return write()
+        finally:
+            os.fchmod(fd, mode)
+            _restore_directory_acls(fd, acls)
     finally:
-        if not writable:
-            os.chmod(path, mode)
+        os.close(fd)
 
 
-def _rewrite_one(path, old, new):
-    if os.path.basename(path) in _SKIP:
+def _directory_acls(fd):
+    found = []
+    try:
+        names = os.listxattr(fd)
+    except OSError as error:
+        if error.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            return found
+        raise
+    for name in names:
+        if name.startswith("system.") and "acl" in name:
+            found.append((name, os.getxattr(fd, name)))
+    return found
+
+
+def _restore_directory_acls(fd, acls):
+    for name, value in acls:
+        os.setxattr(fd, name, value)
+
+
+def _user_xattrs(fd):
+    found = []
+    try:
+        names = os.listxattr(fd)
+    except OSError as error:
+        if error.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            return found
+        raise
+    for name in names:
+        if name.startswith(("user.", "trusted.")):
+            found.append((name, os.getxattr(fd, name)))
+    return found
+
+
+def _set_user_xattrs(fd, attrs):
+    for name, value in attrs:
+        os.setxattr(fd, name, value)
+
+
+def _punch(fd, offset, length):
+    if length <= 0:
         return
-    kind = lstat_kind(path)
-    if kind == "symlink":
-        target = os.readlink(path)
-        updated, count = replace_prefix(target.encode("utf-8", "surrogateescape"), old, new)
-        if count == 0:
-            return
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.fallocate.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int64]
+    libc.fallocate.restype = ctypes.c_int
+    # FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE. A filesystem that cannot
+    # punch leaves the zeros in place; the bytes are still correct.
+    if libc.fallocate(fd, 3, offset, length) != 0:
+        error = ctypes.get_errno()
+        if error not in (errno.EOPNOTSUPP, errno.ENOTSUP, errno.EINVAL, errno.ENOSYS):
+            raise OSError(error, f"fallocate(PUNCH_HOLE): {os.strerror(error)}")
+
+
+def _punch_zeros(fd, data):
+    index = 0
+    while index < len(data):
+        if data[index] != 0:
+            index += 1
+            continue
+        end = index
+        while end < len(data) and data[end] == 0:
+            end += 1
+        start = (index + _PUNCH - 1) & ~(_PUNCH - 1)
+        aligned = end & ~(_PUNCH - 1)
+        if aligned > start:
+            _punch(fd, start, aligned - start)
+        index = end
+
+
+def _extents(fd, size):
+    """Allocated ranges of ``fd``. A hole is not read, so a sparse file is
+    not materialised while it is searched.
+    """
+    ranges = []
+    position = 0
+    while position < size:
+        try:
+            start = os.lseek(fd, position, os.SEEK_DATA)
+        except OSError as error:
+            if error.errno == errno.ENXIO:
+                break
+            start = position
+            end = size
+            os.lseek(fd, start, os.SEEK_SET)
+            ranges.append((start, os.read(fd, end - start)))
+            break
+        try:
+            end = os.lseek(fd, start, os.SEEK_HOLE)
+        except OSError:
+            end = size
+        os.lseek(fd, start, os.SEEK_SET)
+        blob = bytearray()
+        remaining = end - start
+        while remaining:
+            chunk = os.read(fd, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            blob += chunk
+            remaining -= len(chunk)
+        ranges.append((start, bytes(blob)))
+        position = end
+    return ranges
+
+
+def _contains(ranges, size, old):
+    if not old:
+        return False
+    tail = b""
+    cursor = 0
+    keep = len(old) - 1
+    for start, blob in ranges:
+        gap = start - cursor
+        if gap:
+            window = tail + (b"\x00" * min(gap, keep))
+            if old in window:
+                return True
+            tail = window[-keep:] if keep else b""
+        window = tail + blob
+        if old in window:
+            return True
+        tail = window[-keep:] if keep else b""
+        cursor = start + len(blob)
+    if size > cursor and old in tail + (b"\x00" * min(size - cursor, keep)):
+        return True
+    return False
+
+
+def _image(ranges, size):
+    buf = bytearray(size)
+    for start, blob in ranges:
+        buf[start:start + len(blob)] = blob
+    return bytes(buf)
+
+
+def _transformed(image, old, new, path):
+    if b"\x00" in image:
+        return _rewrite_binary(image, old, new, path)
+    updated, _count = replace_prefix(image, old, new)
+    return updated
+
+
+def _discard(path):
+    try:
         os.unlink(path)
-        os.symlink(updated.decode("utf-8", "surrogateescape"), path)
+    except FileNotFoundError:
+        pass
+
+
+def _commit(names, ready):
+    """Point every name at ``ready``'s inode, then drop ``ready``'s directory entry."""
+    if len(names) == 1:
+        parent = os.path.dirname(names[0]) or "."
+        os.replace(ready, names[0])
+        fsync_dir(parent)
         return
-    if kind != "file":
+    for name in names:
+        parent = os.path.dirname(name) or "."
+        temporary = os.path.join(parent, f".{os.path.basename(name)}.{os.getpid()}.ebsr-link")
+
+        def publish_one(name=name, parent=parent, temporary=temporary):
+            if os.path.lexists(temporary):
+                if lstat_kind(temporary) != "file" or os.lstat(temporary).st_nlink != 1:
+                    raise Refused(f"temporary link is not a private file: {temporary}")
+                os.unlink(temporary)
+            os.link(ready, temporary)
+            os.replace(temporary, name)
+            fsync_dir(parent)
+
+        _with_writable_dir(parent, publish_one)
+    os.unlink(ready)
+    fsync_dir(os.path.dirname(ready) or ".")
+
+
+def _publish(names, image, source):
+    """Replace ``names`` (one inode) with ``image``, keeping access metadata.
+
+    The bytes land in a temporary file first. ``names`` change only when that
+    file is complete, so a crash or a failed rename leaves the previous bytes.
+    A read-only file is not chmod'd: chmod would replace an NFSv4 ACL.
+    """
+    primary = names[0]
+    parent = os.path.dirname(primary) or "."
+    inode = os.lstat(primary).st_ino
+    partial = os.path.join(parent, f".{inode}.ebsr-partial")
+    ready = os.path.join(parent, f".{inode}.ebsr-ready")
+    fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        attrs = _user_xattrs(fd)
+    finally:
+        os.close(fd)
+
+    def publish():
+        for leftover in (partial, ready):
+            if os.path.lexists(leftover) and lstat_kind(leftover) == "file":
+                os.unlink(leftover)
+        metadata = read_metadata(source)
+        mode = stat.S_IMODE(metadata.info.st_mode)
+        fd = os.open(partial, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            view = memoryview(image)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            # User attributes go on while the temporary file is still
+            # writable. Restoring the recorded mode may clear that bit, and
+            # a later chmod would replace an NFSv4 ACL.
+            _punch_zeros(fd, image)
+            _set_user_xattrs(fd, attrs)
+            _restore_metadata(fd, metadata, mode)
+            os.fsync(fd)
+        except BaseException:
+            os.close(fd)
+            _discard(partial)
+            raise
+        os.close(fd)
+        try:
+            current = read_metadata(source)
+        except (OSError, Refused) as error:
+            _discard(partial)
+            raise Refused(f"cannot recheck access metadata for {source}: {error}") from error
+        if (
+            (current.info.st_uid, current.info.st_gid, stat.S_IMODE(current.info.st_mode))
+            != (metadata.info.st_uid, metadata.info.st_gid, mode)
+            or current.acls != metadata.acls
+        ):
+            _discard(partial)
+            raise Refused(f"access metadata of {source} changed before it was replaced")
+        try:
+            os.replace(partial, ready)
+            fsync_dir(parent)
+            _commit(names, ready)
+        except BaseException:
+            _discard(partial)
+            if os.path.lexists(ready):
+                ready_inode = os.lstat(ready).st_ino
+                held = any(
+                    os.path.lexists(name) and not os.path.islink(name) and os.lstat(name).st_ino == ready_inode
+                    for name in names
+                )
+                if not held:
+                    _discard(ready)
+            raise
+
+    _with_writable_dir(parent, publish)
+
+
+def _rewrite_symlink(path, old, new):
+    target = os.fsencode(os.readlink(path))
+    updated, count = replace_prefix(target, old, new)
+    if count == 0:
         return
-    with open(path, "rb") as handle:
-        data = handle.read()
-    if old not in data:
-        return
-    if b"\x00" in data:
-        updated = _rewrite_binary(data, old, new, path)
-    else:
-        updated, _count = replace_prefix(data, old, new)
-    if updated == data:
-        return
-    _store(path, updated, stat.S_IMODE(os.lstat(path).st_mode))
+    parent = os.path.dirname(path) or "."
+    temporary = os.path.join(parent, f".{os.path.basename(path)}.{os.getpid()}.ebsr-symlink")
+
+    def publish():
+        if os.path.lexists(temporary):
+            if not os.path.islink(temporary):
+                raise Refused(f"temporary symlink is not a symlink: {temporary}")
+            os.unlink(temporary)
+        os.symlink(os.fsdecode(updated), temporary)
+        try:
+            os.replace(temporary, path)
+            fsync_dir(parent)
+        except BaseException:
+            if os.path.islink(temporary):
+                os.unlink(temporary)
+            raise
+
+    _with_writable_dir(parent, publish)
+
+
+def _read_file(path, old, new):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise Refused(f"{path} changed from a regular file during the rewrite")
+        if info.st_size > _MAX_BYTES:
+            if _contains(_extents(fd, info.st_size), info.st_size, old):
+                raise Refused(f"{path} is larger than 1 GiB and records the generation path")
+            return None
+        ranges = _extents(fd, info.st_size)
+    finally:
+        os.close(fd)
+    if not _contains(ranges, info.st_size, old):
+        return None
+    image = _image(ranges, info.st_size)
+    updated = _transformed(image, old, new, path)
+    if updated == image:
+        return None
+    return updated
+
+
+def _recover(root):
+    """Finish a replacement a previous run left in ``.<inode>.ebsr-ready``.
+
+    The name records the inode the replacement had not yet removed. Every
+    regular file still on that inode is pointed at the finished temporary
+    file. When none remain, the temporary file was already linked into place
+    and only its directory entry is left.
+    """
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [name for name in dirnames if not os.path.islink(os.path.join(dirpath, name))]
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if name.startswith(".") and name.endswith(".ebsr-ready"):
+                found.append(path)
+            elif name.endswith(".ebsr-partial"):
+                _discard(path)
+    for ready in found:
+        stem = os.path.basename(ready)[1:].split(".", 1)[0]
+        try:
+            inode = int(stem)
+        except ValueError:
+            continue
+        names = []
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = [name for name in dirnames if not os.path.islink(os.path.join(dirpath, name))]
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                if path == ready or _ours(name):
+                    continue
+                try:
+                    info = os.lstat(path)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode) and info.st_ino == inode:
+                    names.append(path)
+        if names:
+            _commit(sorted(names), ready)
+        else:
+            _discard(ready)
 
 
 def rewrite_tree(root, old, new):
-    """Rewrite ``old`` to ``new`` under ``root``. Symbolic links are not followed."""
+    """Rewrite ``old`` to ``new`` under ``root``. Symbolic links are not followed.
+
+    Each regular file is published by renaming a completed temporary file
+    over it, or, when several names share the inode, by linking that file
+    onto every name. The previous inode stays until the new one is durable.
+    """
     if old == new:
         return
+    links = []
+    files = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         kept = []
         for name in dirnames:
             child = os.path.join(dirpath, name)
             if os.path.islink(child):
-                _rewrite_one(child, old, new)
+                links.append(child)
             else:
                 kept.append(name)
         dirnames[:] = kept
         for name in filenames:
-            _rewrite_one(os.path.join(dirpath, name), old, new)
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                links.append(path)
+            elif not _ours(name) and lstat_kind(path) == "file":
+                files.append(path)
+    groups = {}
+    order = []
+    for path in files:
+        info = os.lstat(path)
+        key = (info.st_dev, info.st_ino)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(path)
+    _recover(root)
+    # Recovery may have replaced some names. Regroup what is left.
+    files = [path for path in files if lstat_kind(path) == "file" and not os.path.islink(path)]
+    groups = {}
+    order = []
+    for path in files:
+        info = os.lstat(path)
+        key = (info.st_dev, info.st_ino)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(path)
+    for key in order:
+        names = sorted(groups[key])
+        info = os.lstat(names[0])
+        if info.st_nlink != len(names):
+            raise Refused(
+                f"{names[0]} has {info.st_nlink} hard links and this tree holds "
+                f"{len(names)}; refusing to split them"
+            )
+        updated = _read_file(names[0], old, new)
+        if updated is None:
+            continue
+        _publish(names, updated, names[0])
+    for path in links:
+        if lstat_kind(path) == "symlink":
+            _rewrite_symlink(path, old, new)
 
 
 def rewrite_install_prefix(staged, live):
