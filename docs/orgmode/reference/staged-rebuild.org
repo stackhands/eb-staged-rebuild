@@ -33,14 +33,14 @@ rename to another parent rewrites the directory's =..= entry.
 
 One advisory =flock= covers build, publish, resume, and rollback. The journal
 is under =<state-root>/runs/<run-id>/journal.json=. Cross-node lock coherence
-is not claimed until =open-004= is measured.
+is not claimed until it is measured.
 
 * Retention constants
 
 =DEFAULT_GRACE_HOURS= is
 =NOTES_MAX_WALLTIME_HOURS + RETIREMENT_SAFETY_MARGIN_HOURS=, currently
-=120 + 24=. The source is =ns-051=; the 120-hour limit is not a site
-measurement.
+=120 + 24=. The source is the staged-rebuild notes; the 120-hour limit is not
+a site measurement.
 
 * Exit behaviour
 
@@ -49,7 +49,7 @@ measurement.
 - 2: a safety check refused the operation or journal state needs intervention.
 - another non-zero value: the failed EasyBuild process's status.
 
-* open-004 recommendations
+* Open measurements
 
 1. Probe bwrap as the CI user; otherwise use the verified userns backend.
 2. Keep a documented non-zero user namespace allowance for the build account,

@@ -11,7 +11,7 @@ These are the limits the code and the design note record. The recommendations ar
 * `gc` and the grace period cannot see open files on every cluster node.
 * A module-file replacement keeps ownership, mode, and the listed ACL bytes when those bytes read back unchanged. The known names are the POSIX access list, the generic NFSv4 list, and the native General Parallel File System list. The recorded checks are on ext4.
 
-## `open-004`
+## Open measurements
 
 The dual lock from two build nodes is unmeasured. General Parallel File System is unmeasured. Recorded checks use ext4.
 

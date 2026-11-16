@@ -18,4 +18,4 @@ While a process held `/tmp/ebsr-docs-prefix/.eb-staged-rebuild/.lock`, `gc --loc
 eb-staged-rebuild: another eb-staged-rebuild holds the lock at /tmp/ebsr-docs-prefix/.eb-staged-rebuild/.lock
 ```
 
-Cross-node coherence was not measured in this repository. That measurement is `open-004` in {doc}`limits`.
+Cross-node coherence was not measured in this repository. {doc}`limits` lists it with the other open measurements.
