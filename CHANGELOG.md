@@ -18,6 +18,9 @@
   `<checkout>/docs/examples/eb-standin`, and the commands a reader copies
   use `$PWD/docs/examples/eb-standin`. They no longer contain the checkout
   path of the machine that recorded them.
+* Fix: re-recording the walk-through replaced that checkout with `sed`.
+  A `.` in the path is any character in a sed pattern, so a neighbouring
+  path was rewritten as well. The replacement is now the literal path.
 
 ## 1.0.0
 
