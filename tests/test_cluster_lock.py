@@ -1,5 +1,7 @@
 import errno
 import os
+import stat
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -95,7 +97,9 @@ class ClusterLockTests(unittest.TestCase):
             real_open = os.open
 
             def open_file(path, *args, **kwargs):
-                if path == lock.posix_path:
+                # The sidecar is opened relative to a directory descriptor,
+                # so the path is the final component, not the absolute name.
+                if path == lock.posix_path or path == ".lock.posix":
                     raise OSError(errno.EIO, "injected sidecar error")
                 return real_open(path, *args, **kwargs)
 
@@ -146,6 +150,43 @@ class ClusterLockTests(unittest.TestCase):
             os.link(sidecar, Path(root) / "sidecar-alias")
             with self.assertRaises(Refused):
                 FileLock(root).acquire(0)
+
+    def test_gate_hardlink_is_not_truncated(self):
+        with tempfile.TemporaryDirectory() as root:
+            payload = Path(root) / "payload"
+            payload.write_text("secret")
+            os.link(payload, Path(root) / ".lock")
+            with self.assertRaises(Refused):
+                FileLock(root).acquire(0)
+            self.assertEqual(payload.read_text(), "secret")
+
+    def test_gate_fifo_is_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.mkfifo(Path(root) / ".lock")
+            started = time.monotonic()
+            with self.assertRaises(Refused):
+                FileLock(root).acquire(0)
+            self.assertLess(time.monotonic() - started, 2)
+
+    def test_symlink_state_root_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            real = Path(root) / "real"
+            real.mkdir()
+            link = Path(root) / "link"
+            link.symlink_to(real, target_is_directory=True)
+            with self.assertRaises(Refused):
+                FileLock(str(link)).acquire(0)
+            self.assertFalse((real / ".lock").exists())
+
+    def test_lock_files_are_owner_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            lock = FileLock(root)
+            lock.acquire(0)
+            try:
+                self.assertEqual(stat.S_IMODE((Path(root) / ".lock").stat().st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE((Path(root) / ".lock.posix").stat().st_mode), 0o600)
+            finally:
+                lock.release()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ const fsx = common.fsx;
 const json = common.json;
 const atomic = common.atomic;
 const state = common.state;
+const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -166,9 +167,12 @@ fn journalPath(a: Allocator, state_root: []const u8, run_id: []const u8) []const
 
 fn lock(c: *Ctx, state_root: []const u8, timeout_s: ?f64) state.RootLock {
     const ms: ?u32 = if (timeout_s) |t| @intFromFloat(@min(@max(t, 0) * 1000, 4.0e9)) else null;
-    return state.RootLock.acquire(c.a, state_root, ms) catch |err| switch (err) {
+    var detail: []const u8 = state_root;
+    return rootlock.acquire(c.a, state_root, ms, &detail) catch |err| switch (err) {
         error.Busy => refuse("another eb-staged-rebuild holds the lock at {s}/.lock", .{state_root}),
         error.NotPrivate => refuse("record lock requires a private regular file: {s}/.lock.posix", .{state_root}),
+        error.Gate => refuse("lock file must be a private regular file: {s}/.lock", .{state_root}),
+        error.Unsafe => refuse("state root is unsafe: {s} is a symlink", .{detail}),
         else => refuse("{s}", .{main_mod.osError(c.a, err, state_root)}),
     };
 }

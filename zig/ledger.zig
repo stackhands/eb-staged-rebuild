@@ -25,7 +25,7 @@ const sys = common.sys;
 const fsx = common.fsx;
 const proc = common.proc;
 const atomic = common.atomic;
-const state = common.state;
+const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Sha256 = std.crypto.hash.sha2.Sha256;
@@ -1562,9 +1562,12 @@ fn pin(a: Allocator, private: []const u8, name: []const u8, data: []const u8) Fa
 /// Publish today's signed head as <anchors>/<YYYY-MM-DD>.head.json, once.
 pub fn anchor(a: Allocator, env: Env, eb_stack: []const u8, log: []const u8, key: []const u8, public_key: []const u8, anchors: []const u8, timeout: f64, faults: Faults, now_s: i64, lock_timeout_ms: u32) Fail!V {
     try anchorPaths(a, eb_stack, log, key, public_key, anchors);
-    var lock = state.RootLock.acquire(a, anchors, lock_timeout_ms) catch |err| switch (err) {
+    var detail: []const u8 = anchors;
+    var lock = rootlock.acquire(a, anchors, lock_timeout_ms, &detail) catch |err| switch (err) {
         error.Busy => return refuse("another eb-staged-rebuild holds the lock at {s}/.lock", .{anchors}),
         error.NotPrivate => return refuse("record lock requires a private regular file: {s}/.lock.posix", .{anchors}),
+        error.Gate => return refuse("lock file must be a private regular file: {s}/.lock", .{anchors}),
+        error.Unsafe => return refuse("state root is unsafe: {s} is a symlink", .{detail}),
         error.OutOfMemory => return error.OutOfMemory,
         else => return osFail(a, err, anchors),
     };
