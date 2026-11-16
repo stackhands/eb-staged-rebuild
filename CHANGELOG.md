@@ -16,6 +16,8 @@
   hole, and replaces a symbolic link by rename.
 * Docs: the README shows `probe`, `run`, `status` and `rollback` on an
   EESSI 2026.06 user installation.
+* Docs: `COMPAT.md` said the Python tool stays the one to use; it now says
+  either build can be used, as the README does.
 
 ## 1.0.0
 

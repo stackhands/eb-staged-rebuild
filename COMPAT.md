@@ -4,9 +4,9 @@ The Zig build in `zig/` carries every command of the Python tool: `probe`,
 `status`, `resolve`, `retire`, `gc`, `run`, `resume` and `rollback`, with or
 without `--ledger-config`, and the ledger maintenance entry point as
 `ledger-maintenance`, and the `build_events` module's entry point
-(`python3 -m eb_staged_rebuild.build_events`) as `build-events`. The Python
-tool stays the one to use until the test suite passes against the binary
-through `TOOL_BIN`.
+(`python3 -m eb_staged_rebuild.build_events`) as `build-events`. Either
+build can be used: releases carry the binary, and CI runs the command-line
+and real-EasyBuild tests against it through `TOOL_BIN`.
 
 `tests/differential.sh` runs both on the same invocations and fails on any
 difference in exit code, stdout or stderr; for the commands that change a fixture
