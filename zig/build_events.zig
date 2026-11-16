@@ -21,6 +21,7 @@ const fsx = common.fsx;
 const json = common.json;
 const atomic = common.atomic;
 const state_mod = common.state;
+const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -734,8 +735,12 @@ fn lockOp(a: Allocator, config: Py, op: *Op) Refusal!state_mod.RootLock {
         .float => |x| x,
         else => 0,
     };
-    const l = state_mod.RootLock.acquire(a, op.dir, @intFromFloat(@min(secs * 1000, 4.0e9))) catch |err| switch (err) {
+    var detail: []const u8 = op.dir;
+    const l = rootlock.acquire(a, op.dir, @intFromFloat(@min(secs * 1000, 4.0e9)), &detail) catch |err| switch (err) {
         error.Busy => return refuse(a, "another eb-staged-rebuild holds the lock at {s}/.lock", .{op.dir}),
+        error.NotPrivate => return refuse(a, "record lock requires a private regular file: {s}/.lock.posix", .{op.dir}),
+        error.Gate => return refuse(a, "lock file must be a private regular file: {s}/.lock", .{op.dir}),
+        error.Unsafe => return refuse(a, "state root is unsafe: {s} is a symlink", .{detail}),
         else => return refuse(a, "{s}", .{main_mod.osError(a, err, op.dir)}),
     };
     if (!std.mem.eql(u8, realpathOf(a, op.dir), op.dir)) {
