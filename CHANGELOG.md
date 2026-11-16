@@ -18,6 +18,7 @@
   EESSI 2026.06 user installation.
 * Docs: `COMPAT.md` said the Python tool stays the one to use; it now says
   either build can be used, as the README does.
+* Docs: the stackhands table and the documentation menu list eb-pipeline.
 
 ## 1.0.0
 
