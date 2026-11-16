@@ -132,8 +132,8 @@
   schema 3 generation-pointer journals are refused.
 * This version creates no git tag.
 * Recorded checks use ext4.
-* Cross-node locking remains `open-004`.
-* Behavior on the general parallel file system remains `open-004`.
+* Cross-node locking remains unmeasured.
+* Behavior on the general parallel file system remains unmeasured.
 
 ## 0.2.0
 
@@ -149,5 +149,5 @@
 * Bump the journal schema to 2; version 1 generation-pointer runs are refused
   instead of being interpreted as directory-swap transactions.
 * Name retention and kernel constants and record their sources.
-* Add Org-mode how-to, reference, baseline design audit, and `open-004`
-  recommendations.
+* Add Org-mode how-to, reference, baseline design audit, and recommendations
+  for the open measurements.

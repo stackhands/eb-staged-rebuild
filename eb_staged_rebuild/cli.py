@@ -290,7 +290,7 @@ def _print_probe(report):
     else:
         print(f"EasyBuild: {easybuild.get('reason')}")
     print(f"filesystem: {filesystem.get('fstype')} {filesystem.get('mount') or ''}".rstrip())
-    print("lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)")
+    print("lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured")
 
 
 if __name__ == "__main__":

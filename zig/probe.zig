@@ -586,7 +586,7 @@ pub fn printText(a: Allocator, r: Py) void {
     const fl = a.print("filesystem: {s} {s}", .{ strOf(a, get(fs, "fstype")), mount }) catch "";
     o.appendSlice(a, std.mem.trimEnd(u8, fl, " \t\n\r\x0b\x0c")) catch oom();
     o.append(a, '\n') catch oom();
-    o.appendSlice(a, "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)\n") catch oom();
+    o.appendSlice(a, "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured\n") catch oom();
     cli.put(1, o.items);
 }
 

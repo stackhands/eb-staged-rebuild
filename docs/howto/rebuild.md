@@ -19,10 +19,10 @@ RENAME_EXCHANGE: yes on ext4
 EasyBuild framework: unknown
   bwrap stage-path keys: None (unknown)
 filesystem: ext4 /
-lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)
+lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
 ```
 
-`RENAME_EXCHANGE: yes` applies to the filesystem of `--path`. The lock line is printed on every probe. Cross-node coherence of the POSIX sidecar `<state-root>/.lock.posix` is unmeasured (`open-004`). A 0.2.0 flock-only process does not take the sidecar. Leave both lock files in place while the state root is in use. Details are in {doc}`../topics/locking`.
+`RENAME_EXCHANGE: yes` applies to the filesystem of `--path`. The lock line is printed on every probe. Cross-node coherence of the POSIX sidecar `<state-root>/.lock.posix` is unmeasured ({doc}`../topics/limits`). A 0.2.0 flock-only process does not take the sidecar. Leave both lock files in place while the state root is in use. Details are in {doc}`../topics/locking`.
 
 ## Dry-run the staged command
 

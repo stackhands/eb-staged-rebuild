@@ -43,7 +43,7 @@ RENAME_EXCHANGE: yes on ext4
 EasyBuild framework: unknown
   bwrap stage-path keys: None (unknown)
 filesystem: ext4 /
-lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)
+lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
 ```
 
 The stand-in's `--version` text is `eb-standin`, so the framework version is unknown. A real EasyBuild version that the probe can parse is printed as `EasyBuild framework:`.
@@ -72,7 +72,7 @@ eb-staged-rebuild: bwrap usable: False (bwrap is not installed)
 eb-staged-rebuild: user.max_user_namespaces: 192727
 eb-staged-rebuild: renameat2 RENAME_EXCHANGE on ext4: yes
 eb-staged-rebuild: easybuild: eb-standin
-eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)
+eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
 eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
 eb-staged-rebuild: command: <checkout>/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --robot --rebuild
 ```

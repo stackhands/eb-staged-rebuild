@@ -98,9 +98,9 @@ Every node must use this protocol. A flock-only publisher from version 0.2.0
 still excludes this process on the same kernel. That publisher does not take
 the sidecar. The two versions do not exclude each other across nodes. Drain
 flock-only holders before relying on cross-node exclusion. Cross-node
-coherence remains an `open-004` measurement. Recovery after a failed node
-remains an `open-004` measurement. This repository has not measured General
-Parallel File System. The ext4 tests are not acceptance of that filesystem.
+coherence and recovery after a failed node remain open measurements (below).
+This repository has not measured General Parallel File System. The ext4
+tests are not acceptance of that filesystem.
 
 After the flock and the POSIX record lock are taken, the journal records
 the stage, the stable path, the retired path, the hashes, and the completed
@@ -114,8 +114,8 @@ completed operations, leaving the published tree live.
 
 `gc` only removes the hidden retired sibling recorded in a journal. It never
 removes the stable path. The default grace is the notes' 120-hour walltime plus
-a 24-hour margin (`ns-051`); that walltime was not measured for this site and
-must be overridden after the site limit is known.
+a 24-hour margin; that walltime was not measured for this site and must be
+overridden after the site limit is known.
 
 ## Dry run
 
@@ -126,8 +126,7 @@ write a module file.
 ## Residual limits
 
 * `RENAME_EXCHANGE` changes which inode a stable path names. A process that
-  opens one file before and another after the swap can still mix generations
-  (`ns-054`).
+  opens one file before and another after the swap can still mix generations.
 * A process killed with `SIGKILL` during the ordinary-rename fallback cannot
   execute in-process rollback. The next `resume` repairs the journaled state.
 * This repository has not measured the dual lock from two build nodes. General
@@ -184,7 +183,7 @@ deletes only the hidden sibling a directory-swap journal recorded. Deleting the
 stable path from a retire record would let one wrong journal entry remove a
 directory a job outside this tool still has open.
 
-## `open-004` recommendations
+## Open measurements
 
 1. **Bubblewrap:** run `bwrap --dev-bind / / true` as the CI account. Use the
    bwrap backend only when it succeeds; otherwise use the verified userns
@@ -221,7 +220,7 @@ one is closed in this tree, or kept on purpose.
 7. Closed. Tests inject exchange failures, each ordinary-rename step, and restoration of a failed swap.
 8. Closed. A successful publish changes the live directory inode. Tests require the new bytes at that path.
 9. Closed. A caught failure reverses every completed swap and module-file update in that transaction.
-10. Closed. Each `open-004` measurement has a recommended answer above.
+10. Closed. Each open measurement has a recommended answer above.
 11. Closed. `CHANGELOG.md` and the Org-mode how-to and reference describe the swap.
 
 ### Repository documents at `8e7b6d66`
