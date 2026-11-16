@@ -6,12 +6,30 @@ Run as a script: missing names are printed, and a clean tree prints nothing.
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from eb_staged_rebuild.cli import _parser
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+INTERNAL_ID = re.compile(r"\b(?:open|ns)-\d{3}\b")
+
+
+def internal_ids():
+    """Lines of the docs and sources that cite a design-note id such as ns-051."""
+    paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md", "TESTMAP.md")]
+    for sub, suffixes in (("docs", (".md", ".org")), ("eb_staged_rebuild", (".py",)), ("zig", (".zig",))):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, sub)):
+            dirnames[:] = [name for name in dirnames if name not in {"_build", "__pycache__"}]
+            paths.extend(os.path.join(dirpath, name) for name in filenames if name.endswith(suffixes))
+    found = []
+    for path in sorted(paths):
+        with open(path, encoding="utf-8") as handle:
+            for number, line in enumerate(handle, 1):
+                if INTERNAL_ID.search(line):
+                    found.append(f"{os.path.relpath(path, ROOT)}:{number}: {line.strip()}")
+    return found
 
 
 def documentation_files():
@@ -115,6 +133,22 @@ class CliDocTests(unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
         self.assertEqual(text, "/tmp/aXb <checkout>\n")
+
+    def test_no_design_note_ids_in_docs_or_output(self):
+        """The docs, the sources and probe's lock line say what is unmeasured
+        in words; a reader has no copy of the notes that numbered it.
+        """
+        self.assertEqual(internal_ids(), [])
+        with tempfile.TemporaryDirectory() as directory:
+            proc = subprocess.run(
+                [sys.executable, "-m", "eb_staged_rebuild", "probe", "--path", directory, "--eb", "missing-eb"],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+                check=False,
+            )
+        self.assertIn("lock: local flock lock plus POSIX record lock", proc.stdout)
+        self.assertIsNone(INTERNAL_ID.search(proc.stdout + proc.stderr))
 
 
 if __name__ == "__main__":
