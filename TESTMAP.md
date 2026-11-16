@@ -374,6 +374,7 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | test | replacement |
 |---|---|
 | CliDocTests.test_docs_name_every_cli_option | differential "top level --help", "run -h", "resume -h", "rollback -h", "status -h", "gc -h", "retire -h", "probe -h", "resolve -h": the binary's help equals the Python parser's, which this test checks against the docs |
+| CliDocTests.test_transcripts_do_not_record_a_checkout_path | the published transcripts and `docs/examples/walkthrough.sh`; no binary behaviour |
 
 ### tests/test_probe_cli.py
 

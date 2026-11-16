@@ -14,6 +14,10 @@
   same-directory replacement that keeps the owner, mode, ACL and user
   attributes, keeps the tree's hard links on one inode, leaves a hole a
   hole, and replaces a symbolic link by rename.
+* Documentation: the recorded transcripts name the stand-in as
+  `<checkout>/docs/examples/eb-standin`, and the commands a reader copies
+  use `$PWD/docs/examples/eb-standin`. They no longer contain the checkout
+  path of the machine that recorded them.
 
 ## 1.0.0
 

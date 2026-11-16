@@ -42,7 +42,7 @@ eb-staged-rebuild run \
 eb-staged-rebuild: dry-run: no build, no module file written
 eb-staged-rebuild: backend: installpath
 eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
-eb-staged-rebuild: command: /path/to/eb-staged-rebuild/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --robot --rebuild
+eb-staged-rebuild: command: <checkout>/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --robot --rebuild
 ```
 
 The full dry-run listing is in the {doc}`../intro/tutorial`. Options that would point EasyBuild at the live tree are removed from the staged command: `--prefix`, `--installpath`, `--installpath-software`, `--installpath-modules`, `--subdir-software`, `--subdir-modules`, `--bwrap`, `--disable-bwrap`, `--bwrap-installpath`, `--bwrap-options`, and `--remove-ghost-install-dirs`.
@@ -73,7 +73,7 @@ On the recorded resume of `demo-run` (the first attempt exited 3 because `EB_STA
 
 ```text
 eb-staged-rebuild: resume demo-run from failed: rebuilding the unpublished generation
-eb-staged-rebuild: running /path/to/eb-staged-rebuild/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/demo-run/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/demo-run/modules demo-1.eb --robot --rebuild
+eb-staged-rebuild: running <checkout>/docs/examples/eb-standin --installpath-software=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/demo-run/software --installpath-modules=/tmp/ebsr-docs-prefix/.eb-staged-rebuild/generations/demo-run/modules demo-1.eb --robot --rebuild
 eb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)
 eb-staged-rebuild: published module all/demo/1.lua
 eb-staged-rebuild: run demo-run published 1 module(s)
