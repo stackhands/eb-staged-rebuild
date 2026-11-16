@@ -14,6 +14,8 @@
   same-directory replacement that keeps the owner, mode, ACL and user
   attributes, keeps the tree's hard links on one inode, leaves a hole a
   hole, and replaces a symbolic link by rename.
+* Docs: the README shows `probe`, `run`, `status` and `rollback` on an
+  EESSI 2026.06 user installation.
 
 ## 1.0.0
 
