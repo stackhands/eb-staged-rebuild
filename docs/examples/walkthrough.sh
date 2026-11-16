@@ -3,6 +3,24 @@
 # The EasyBuild stand-in is docs/examples/eb-standin. Output is the transcript.
 set -eu
 
+# Replace $2 with <checkout> in the file $1. The path is literal text:
+# a sed substitution would treat `.`, `*` and `|` in the checkout as syntax.
+rewrite_checkout() {
+    python3 - "$1" "$2" <<'PY'
+import pathlib, sys
+file = pathlib.Path(sys.argv[1])
+root = sys.argv[2].encode()
+file.write_bytes(file.read_bytes().replace(root, b"<checkout>"))
+PY
+}
+
+# The unit test calls the rewriter on its own and stops. The path under test
+# may contain a dot, which is why this is not a sed substitution.
+if [ "${WALKTHROUGH_REWRITE_ONLY:-}" = "1" ]; then
+    rewrite_checkout "$1" "$2"
+    exit 0
+fi
+
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 STANDIN="$ROOT/docs/examples/eb-standin"
 chmod +x "$STANDIN"
@@ -12,8 +30,10 @@ chmod +x "$STANDIN"
 tool() {
     eb-staged-rebuild "$@" >"$WORK/.out" 2>"$WORK/.err"
     _status=$?
-    sed "s|$ROOT|<checkout>|g" "$WORK/.out"
-    sed "s|$ROOT|<checkout>|g" "$WORK/.err" >&2
+    rewrite_checkout "$WORK/.out" "$ROOT"
+    rewrite_checkout "$WORK/.err" "$ROOT"
+    cat "$WORK/.out"
+    cat "$WORK/.err" >&2
     return $_status
 }
 
