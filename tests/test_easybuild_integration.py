@@ -227,10 +227,18 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.message)
             self._assert_switched(live, module, inode, watcher, "payload-v2\n")
             # EasyBuild ran with the generation mounted over the live path, so
-            # nothing it wrote, its build record included, names the generation.
+            # no installed file names the generation. The tool's completion
+            # stamp and EasyBuild's build record (its log and test report name
+            # the generation's module directory) are not installed files, and
+            # the scan leaves them out as well.
+            from eb_staged_rebuild.genscan import BUILD_RECORD, OWN_FILES
+
             generations = os.path.join(prefix, ".eb-staged-rebuild", "generations").encode()
             named = []
-            for directory, _dirs, files in os.walk(live):
+            for directory, dirs, files in os.walk(live):
+                if directory == live:
+                    dirs[:] = [name for name in dirs if name != BUILD_RECORD]
+                    files = [name for name in files if name not in OWN_FILES]
                 for name in files:
                     path = os.path.join(directory, name)
                     if os.path.islink(path):
