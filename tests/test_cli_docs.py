@@ -5,6 +5,8 @@ Run as a script: missing names are printed, and a clean tree prints nothing.
 
 import os
 import re
+import subprocess
+import tempfile
 import unittest
 
 from eb_staged_rebuild.cli import _parser
@@ -92,7 +94,27 @@ class CliDocTests(unittest.TestCase):
         script = os.path.join(ROOT, "docs", "examples", "walkthrough.sh")
         with open(script, encoding="utf-8") as handle:
             recording = handle.read()
-        self.assertIn('sed "s|$ROOT|<checkout>|g"', recording)
+        self.assertIn("file.read_bytes().replace(root, b\"<checkout>\")", recording)
+        self.assertNotIn('sed "s|$ROOT|<checkout>|g"', recording)
+
+    def test_a_dot_in_the_checkout_is_not_a_pattern(self):
+        """The checkout path is replaced literally.
+
+        ``sed`` would treat a ``.`` in the path as any character, so a
+        neighbouring path would be rewritten too.
+        """
+        script = os.path.join(ROOT, "docs", "examples", "walkthrough.sh")
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "out")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("/tmp/aXb /tmp/a.b\n")
+            subprocess.check_call(
+                ["sh", script, path, "/tmp/a.b"],
+                env={**os.environ, "WALKTHROUGH_REWRITE_ONLY": "1"},
+            )
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        self.assertEqual(text, "/tmp/aXb <checkout>\n")
 
 
 if __name__ == "__main__":
