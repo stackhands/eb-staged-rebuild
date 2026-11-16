@@ -217,7 +217,7 @@ fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
         if (pyfmt.truthy(pyfmt.get(exchange, "ok"))) "yes" else "no",
     })) catch oom();
     lines.append(a, fmt(a, "easybuild: {s}", .{strOr(pyfmt.get(easybuild, "version_text"), strOr(pyfmt.get(easybuild, "reason"), "not found"))})) catch oom();
-    lines.append(a, "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured (open-004)") catch oom();
+    lines.append(a, "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured") catch oom();
     lines.append(a, "publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback") catch oom();
     var problems: std.ArrayList([]const u8) = .empty;
     if (std.mem.eql(u8, spec.backend, "bwrap") and !usable(probes, "bwrap"))

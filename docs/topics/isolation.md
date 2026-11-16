@@ -28,4 +28,4 @@ The child environment sets `EASYBUILD_INSTALLPATH_SOFTWARE` and `EASYBUILD_INSTA
 
 `probe` learns whether the selected EasyBuild writes stage paths into `bwrap_info.json` by importing `easybuild.tools.bwrap` with the Python beside `eb`. When `eb` is a wrapper with no Python beside it, a table read from the framework source answers for 5.3.0 and 5.3.1 (no stage keys; the 5.3 layout joins `<bwrap_installpath>/software` and `modules`), and for 5.4.0, 5.4.1, and 5.4.2 (keys present). Any other version reads as unknown. The JSON a build actually writes is what publication trusts. A missing stage path is not guessed, and an unidentified version without the keys is left unpublished.
 
-The design note's `open-004` recommendation is to pin EasyBuild to 5.4.2 or a newer version the integration test has run. See {doc}`limits`.
+The design note recommends pinning EasyBuild to 5.4.2 or a newer version the integration test has run. See {doc}`limits`.

@@ -2,16 +2,16 @@
 
 This audit is for the unmodified repository at =8e7b6d66=. "Repository
 design" means its =DESIGN.md=, =README.md=, and =docs/runbook.md=. "Staged
-rebuild design" means =ns-050= through =ns-054= and appendix B in the supplied
-notes.
+rebuild design" means the staged-rebuild sections of the supplied notes and
+their appendix.
 
 * Divergences from the staged-rebuild design
 
 1. The implementation deliberately did not swap
    =software/Name/version=. It published a module file pointing under
-   =<state-root>/generations=. =ns-051= specifies a staged-directory exchange.
+   =<state-root>/generations=. The notes specify a staged-directory exchange.
 2. =RENAME_EXCHANGE= was only probed. No publish or rollback path called it.
-3. The ordinary-rename fallback in =ns-053= did not exist. The only test for
+3. The notes' ordinary-rename fallback did not exist. The only test for
    it manually demonstrated that a failed second rename leaves the live name
    missing.
 4. Rollback restored module files only. It did not put the previous software
@@ -27,8 +27,8 @@ notes.
 9. Multi-module publish could intentionally stop with some module files on the
    new generation and others on the old one. =resume= or =rollback= repaired
    it later; a caught failure did not restore the whole transaction.
-10. =open-004= was restated but had no recommended answer for any of its five
-    measurements.
+10. The five open measurements were restated, with no recommended answer for
+    any of them.
 11. The user-visible behavior had Markdown documentation only. There was no
     Org-mode how-to/reference and no changelog entry.
 
