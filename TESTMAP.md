@@ -148,6 +148,10 @@ with failing calls injected through `state.lock_ops` and the other process a for
 | test_cluster_lock.ClusterLockTests.test_fork_child_release_does_not_unlock_parent | zig-common `src/state_test.zig` test "a forked child's release does not unlock the parent" |
 | test_cluster_lock.ClusterLockTests.test_release_error_still_closes_both_layers | zig-common `src/state_test.zig` test "a release error still closes both layers" |
 | test_cluster_lock.ClusterLockTests.test_sidecar_hardlink_is_refused | zig-common `src/state_test.zig` test "a hard-linked sidecar is refused" |
+| test_cluster_lock.ClusterLockTests.test_gate_hardlink_is_not_truncated | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
+| test_cluster_lock.ClusterLockTests.test_gate_fifo_is_refused_without_blocking | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
+| test_cluster_lock.ClusterLockTests.test_symlink_state_root_is_refused | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
+| test_cluster_lock.ClusterLockTests.test_lock_files_are_owner_only | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
 
 ## tests/test_probe_cli.py: the lock wait
 

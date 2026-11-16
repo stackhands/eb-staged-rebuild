@@ -18,6 +18,17 @@
   `<checkout>/docs/examples/eb-standin`, and the commands a reader copies
   use `$PWD/docs/examples/eb-standin`. They no longer contain the checkout
   path of the machine that recorded them.
+* Docs: the design note's atomic-write temporary file is `.{basename}.new`.
+  A name already there is refused unless it is a regular file with one hard
+  link, owned by the writer or the metadata owner.
+* Fix: the state-root gate `.lock` was truncated and rewritten with the
+  holder's pid without checking that it was a regular file with one hard
+  link. A hard link planted on that name lost the other name's bytes, a
+  FIFO was opened, and a symbolic link used as the state root was followed.
+  The gate is refused unless it is a private regular file, a symlink
+  component of the state root is refused, and both lock files are owner-only
+  so another user who can traverse the directory cannot open them and take
+  the flock.
 
 ## 1.0.0
 

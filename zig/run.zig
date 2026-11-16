@@ -26,6 +26,7 @@ const fsx = common.fsx;
 const json = common.json;
 const atomic = common.atomic;
 const state = common.state;
+const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -1089,9 +1090,12 @@ fn runLocked(r: *R, fresh_build: bool) E!Result {
 
 fn lockRoot(r: *R) E!state.RootLock {
     const ms: ?u32 = if (r.spec.lock_timeout) |t| @intFromFloat(@min(@max(t, 0) * 1000, 4.0e9)) else null;
-    return state.RootLock.acquire(r.a, r.spec.state_root, ms) catch |err| switch (err) {
+    var detail: []const u8 = r.spec.state_root;
+    return rootlock.acquire(r.a, r.spec.state_root, ms, &detail) catch |err| switch (err) {
         error.Busy => r.refuse("another eb-staged-rebuild holds the lock at {s}/.lock", .{r.spec.state_root}),
         error.NotPrivate => r.refuse("record lock requires a private regular file: {s}/.lock.posix", .{r.spec.state_root}),
+        error.Gate => r.refuse("lock file must be a private regular file: {s}/.lock", .{r.spec.state_root}),
+        error.Unsafe => r.refuse("state root is unsafe: {s} is a symlink", .{detail}),
         else => r.refuse("{s}", .{main_mod.osError(r.a, err, r.spec.state_root)}),
     };
 }
