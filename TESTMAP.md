@@ -258,8 +258,11 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 
 | test | replacement |
 |---|---|
+| FakeEbTests.test_installpath_records_the_stable_prefix | differential "run, installpath, recorded prefix" |
+| FakeEbTests.test_bwrap_records_the_stable_prefix | differential "run, bwrap" |
 | FakeEbTests.test_installpath_swaps_the_staged_generation | differential "run, installpath" |
 | FakeEbTests.test_bwrap_swaps_the_staged_generation | differential "run, bwrap" |
+| FakeEbTests.test_userns_records_the_stable_prefix | differential "run, userns" |
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
 | FakeEbTests.test_easybuild_53_layout_without_stage_keys | differential "run, bwrap, 5.3 layout without stage keys" |
 | FakeEbTests.test_missing_stage_key_on_unknown_version_is_not_published | differential "run, bwrap, unknown release without stage keys" |

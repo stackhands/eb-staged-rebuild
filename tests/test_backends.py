@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -51,6 +52,7 @@ class FakeEbTests(unittest.TestCase):
         os.environ.pop("FAKE_EB_FAIL", None)
         os.environ.pop("FAKE_EB_KEYS", None)
         os.environ.pop("FAKE_EB_OVERLAY", None)
+        os.environ.pop("FAKE_EB_RECORD_PREFIX", None)
 
     def tearDown(self):
         os.environ.clear()
@@ -82,6 +84,32 @@ class FakeEbTests(unittest.TestCase):
         retired = os.path.join(os.path.dirname(self.install), ".1.run1")
         self.assertEqual(_read(os.path.join(retired, "PAYLOAD")), "v0\n")
 
+    def _assert_recorded_prefix(self, install):
+        pc = _read(os.path.join(install, "lib", "pkgconfig", "demo.pc"))
+        script = _read(os.path.join(install, "bin", "demo"))
+        self.assertEqual(pc, f"prefix={install}\n")
+        self.assertEqual(script, f"#!{install}/bin/python\n")
+        self.assertNotIn("generations", pc)
+        self.assertNotIn("generations", script)
+        dynamic = subprocess.check_output(
+            ["readelf", "-d", os.path.join(install, "lib", "libdemo.so")],
+            text=True,
+        )
+        self.assertIn(f"Library rpath: [{install}/lib]", dynamic)
+        self.assertNotIn("generations", dynamic)
+
+    def test_installpath_records_the_stable_prefix(self):
+        os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
+        result = run(self._spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_recorded_prefix(self.install)
+
+    def test_bwrap_records_the_stable_prefix(self):
+        os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
+        result = run(self._spec("bwrap"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_recorded_prefix(self.install)
+
     def test_installpath_swaps_the_staged_generation(self):
         result = run(self._spec("installpath"))
         self.assertEqual(result.returncode, 0, result.message)
@@ -100,6 +128,15 @@ class FakeEbTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.message)
         self._assert_switched()
         self.assertFalse(os.path.islink(self.install))
+
+    def test_userns_records_the_stable_prefix(self):
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(probe.get("reason"))
+        os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
+        result = run(self._spec("userns"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_recorded_prefix(self.install)
 
     def test_userns_build_mounts_live_trees_read_only_then_swaps(self):
         probe = probe_userns_sandbox()

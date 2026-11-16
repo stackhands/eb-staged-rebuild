@@ -268,6 +268,7 @@ compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
 # copy's own paths, so hashes are compared only through the files they name.
 export NORM_HASH=1
 compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, installpath, recorded prefix" env FAKE_EB_RECORD_PREFIX=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id rp1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status after the run" status --state-root @ROOT@/state r2
 compare_admin "resume a complete run" resume --state-root @ROOT@/state r2
 compare_admin "rollback the run" rollback --state-root @ROOT@/state r2
