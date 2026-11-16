@@ -100,7 +100,12 @@ compare "probe -h" probe -h
 compare "probe --path without a value" probe --path
 compare "top level, nothing"
 compare "top level --help" --help
-compare "--version" --version
+# The binary's --version adds its build to the Python tool's line (COMPAT.md).
+if py_version=$(cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild --version 2>&1) && zig_version=$("${TOOL_BIN}" --version 2>&1) && [[ "${zig_version}" == "${py_version} ("*")" ]]; then
+    echo "same --version, then the build"
+else
+    echo "DIFF --version: '${py_version:-}' vs '${zig_version:-}'"; diffs=$((diffs + 1))
+fi
 for c in run resume rollback status gc retire; do compare "${c} -h" "${c}" -h; done
 # The version the binary reports is the one build.zig.zon declares.
 zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")

@@ -41,6 +41,13 @@
 * Fix: off a terminal, EasyBuild 5.4's rich output wraps each dry-run line
   at 80 columns, so `run` without `--module` found no module line and
   refused. A wrapped module line is now read whole.
+* Fix: the binary's build takes `-Dcommit`, as eb-local's and
+  eb-keep-logs' do, and its `--version` prints
+  `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`; the
+  first two words are the Python tool's line. The version comes from
+  `build.zig.zon` alone, and release binaries name the tag's commit.
+* The static build uses zig-common 0.8.1.
+* Docs: `docs/reference/cli.md` named version 0.4.1.
 
 ## 1.0.0
 

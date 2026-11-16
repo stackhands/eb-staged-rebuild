@@ -1,6 +1,6 @@
 # Command line
 
-`eb-staged-rebuild --help` lists the subcommands. `eb-staged-rebuild --version` prints the version from `eb_staged_rebuild.__version__` (0.4.1 in this tree). `--help` is accepted on the main parser and on every subcommand.
+`eb-staged-rebuild --help` lists the subcommands. `eb-staged-rebuild --version` prints the program name and version: `eb_staged_rebuild.__version__` from the Python tool, `.version` in `build.zig.zon` from the binary, which adds its target, build mode, Zig version and the commit given with `-Dcommit` in parentheses. `--help` is accepted on the main parser and on every subcommand.
 
 ```text
 usage: eb-staged-rebuild [-h] [--version]
