@@ -7,6 +7,16 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 STANDIN="$ROOT/docs/examples/eb-standin"
 chmod +x "$STANDIN"
 
+# The tool prints the absolute --eb path it was given. A transcript replaces
+# this checkout with <checkout>, so the recording is not tied to one machine.
+tool() {
+    eb-staged-rebuild "$@" >"$WORK/.out" 2>"$WORK/.err"
+    _status=$?
+    sed "s|$ROOT|<checkout>|g" "$WORK/.out"
+    sed "s|$ROOT|<checkout>|g" "$WORK/.err" >&2
+    return $_status
+}
+
 if [ -n "${WALKTHROUGH_ROOT:-}" ]; then
     WORK="$WALKTHROUGH_ROOT"
     rm -rf "$WORK"
@@ -34,15 +44,15 @@ EOF
 
 cd "$WORK"
 echo "=== version ==="
-eb-staged-rebuild --version
+tool --version
 echo "=== help ==="
-eb-staged-rebuild --help
+tool --help
 echo "=== probe ==="
-eb-staged-rebuild probe --path "$SOFTWARE" --eb "$STANDIN"
+tool probe --path "$SOFTWARE" --eb "$STANDIN"
 echo "=== probe json keys ==="
-eb-staged-rebuild probe --path "$SOFTWARE" --eb "$STANDIN" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))'
+tool probe --path "$SOFTWARE" --eb "$STANDIN" --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))'
 echo "=== dry-run ==="
-eb-staged-rebuild run \
+tool run \
   --software "$SOFTWARE" \
   --modules "$MODULES" \
   --state-root "$STATE" \
@@ -53,7 +63,7 @@ eb-staged-rebuild run \
   -- demo-1.eb --robot
 echo "=== failed build ==="
 set +e
-EB_STANDIN_FAIL=1 eb-staged-rebuild run \
+EB_STANDIN_FAIL=1 tool run \
   --software "$SOFTWARE" \
   --modules "$MODULES" \
   --state-root "$STATE" \
@@ -65,56 +75,56 @@ EB_STANDIN_FAIL=1 eb-staged-rebuild run \
 echo "exit:$?"
 set -e
 echo "=== status after failure ==="
-eb-staged-rebuild status --state-root "$STATE"
+tool status --state-root "$STATE"
 echo "=== live payload after failure ==="
 cat "$SOFTWARE/demo/1/PAYLOAD"
 echo "=== resume ==="
-eb-staged-rebuild resume --state-root "$STATE" demo-run
+tool resume --state-root "$STATE" demo-run
 echo "=== status after resume ==="
-eb-staged-rebuild status --state-root "$STATE" demo-run
+tool status --state-root "$STATE" demo-run
 echo "=== live payload after publish ==="
 cat "$SOFTWARE/demo/1/PAYLOAD"
 echo "=== resolve ==="
-eb-staged-rebuild resolve "$MODULES/all/demo/1.lua"
+tool resolve "$MODULES/all/demo/1.lua"
 echo "=== retire dry-run ==="
-eb-staged-rebuild retire \
+tool retire \
   --state-root "$STATE" \
   --module-file "$MODULES/all/demo/1.lua" \
   --reason "published on a CernVM-FS repository" \
   --dry-run
 echo "=== retire ==="
-eb-staged-rebuild retire \
+tool retire \
   --state-root "$STATE" \
   --module-file "$MODULES/all/demo/1.lua" \
   --reason "published on a CernVM-FS repository"
 echo "=== status after retire ==="
-eb-staged-rebuild status --state-root "$STATE"
+tool status --state-root "$STATE"
 echo "=== rollback retire ==="
-RETIRE_ID=$(eb-staged-rebuild status --state-root "$STATE" | awk '/ retire / {print $1; exit}')
-eb-staged-rebuild rollback --state-root "$STATE" "$RETIRE_ID"
+RETIRE_ID=$(tool status --state-root "$STATE" | awk '/ retire / {print $1; exit}')
+tool rollback --state-root "$STATE" "$RETIRE_ID"
 echo "=== module restored ==="
 test -f "$MODULES/all/demo/1.lua" && echo "module file present"
 echo "=== retired sibling ==="
 find "$SOFTWARE/demo" -maxdepth 1 -mindepth 1 -printf '%f\n' | sort
 echo "=== rollback ==="
-eb-staged-rebuild rollback --state-root "$STATE" demo-run
+tool rollback --state-root "$STATE" demo-run
 echo "=== live payload after rollback ==="
 cat "$SOFTWARE/demo/1/PAYLOAD"
 echo "=== status after rollback ==="
-eb-staged-rebuild status --state-root "$STATE" demo-run
+tool status --state-root "$STATE" demo-run
 echo "=== gc dry-run ==="
-eb-staged-rebuild gc --state-root "$STATE" --grace-hours 144 --dry-run
+tool gc --state-root "$STATE" --grace-hours 144 --dry-run
 echo "=== gc include-failed dry-run ==="
-eb-staged-rebuild gc --state-root "$STATE" --grace-hours 144 --dry-run --include-failed
+tool gc --state-root "$STATE" --grace-hours 144 --dry-run --include-failed
 echo "=== second rollback ==="
-eb-staged-rebuild rollback --state-root "$STATE" demo-run
+tool rollback --state-root "$STATE" demo-run
 echo "=== build-events help ==="
 python3 -m eb_staged_rebuild.build_events --help
 echo "=== ledger-maintenance help ==="
 python3 -m eb_staged_rebuild.ledger_maintenance --help
 echo "=== missing easyconfig ==="
 set +e
-eb-staged-rebuild run \
+tool run \
   --software "$SOFTWARE" \
   --modules "$MODULES" \
   --state-root "$STATE" \

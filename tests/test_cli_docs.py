@@ -74,6 +74,26 @@ class CliDocTests(unittest.TestCase):
     def test_docs_name_every_cli_option(self):
         self.assertEqual(missing_from_docs(), [])
 
+    def test_transcripts_do_not_record_a_checkout_path(self):
+        """Recorded output must not name the machine that recorded it.
+
+        Commands a reader copies use ``$PWD`` or ``$STANDIN``. Transcript
+        text uses ``<checkout>`` for this repository. The walkthrough
+        rewrites its own checkout the same way when it is recorded again.
+        """
+        bad = []
+        absolute = re.compile(r"/[^\s\"'`]*eb-staged-rebuild/docs/examples/eb-standin")
+        for path in documentation_files():
+            with open(path, encoding="utf-8") as handle:
+                for number, line in enumerate(handle, 1):
+                    if "/agent/" in line or absolute.search(line):
+                        bad.append(f"{os.path.relpath(path, ROOT)}:{number}: {line.strip()}")
+        self.assertEqual(bad, [])
+        script = os.path.join(ROOT, "docs", "examples", "walkthrough.sh")
+        with open(script, encoding="utf-8") as handle:
+            recording = handle.read()
+        self.assertIn('sed "s|$ROOT|<checkout>|g"', recording)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
