@@ -292,6 +292,20 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | BwrapInfoTests.test_present_keys_win | differential "run, bwrap" |
 | BwrapInfoTests.test_overlay_is_refused | differential "run, bwrap, overlay" |
 
+### tests/test_dry_run_lines.py
+
+The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `--rebuild`, the
+`FAKE_EB_DEPS` dependencies as `[x]` with `--robot`, and every line wrapped at `FAKE_EB_WRAP` columns.
+
+| test | replacement |
+|---|---|
+| ParseTests.test_a_wrapped_entry_is_read_whole | `zig/run.zig` test "relsFromDryRun reads a wrapped entry whole" |
+| ParseTests.test_installed_dependencies_are_left_out | `zig/run.zig` test "relsFromDryRun leaves out installed dependencies" |
+| ParseTests.test_an_entry_ends_at_the_next_entry_or_log_line | `zig/run.zig` test "relsFromDryRun ends an entry at the next entry or log line" |
+| ParseTests.test_the_fake_wraps_as_easybuild_does | the fake itself, used by differential "run, wrapped dry-run lines" |
+| RunTests.test_a_wrapped_module_line_names_the_module | differential "run, wrapped dry-run lines" |
+| RunTests.test_robot_rebuilds_only_the_listed_easyconfig | differential "run, --robot with installed dependencies" |
+
 ### tests/test_prepare_recovery.py
 
 | test | replacement |

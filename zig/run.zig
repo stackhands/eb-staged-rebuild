@@ -1417,6 +1417,50 @@ test "relsFromDryRun" {
     try std.testing.expectEqualStrings("Core/GCC/13", rels[1]);
 }
 
+// EasyBuild 5.4.2 on EESSI 2026.06, eb --dry-run [--robot] --rebuild
+// pigz-2.8-GCCcore-15.2.0.eb; off a terminal, rich wraps at 80 columns.
+const eessi_ecs = "/cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/intel/sapphirerapids/software/EasyBuild/5.4.2/easybuild/easyconfigs";
+const eessi_tail = "== Temporary log file(s) /tmp/eb-o62b5_19/easybuild-q30ibs1n.log* have been \nremoved.\n== Temporary directory /tmp/eb-o62b5_19 has been removed.\n";
+const eessi_fold = "/cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/intel/sapphirera\npids/software/EasyBuild/5.4.2/easybuild/easyconfigs/";
+
+test "relsFromDryRun reads a wrapped entry whole" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const text = "Dry run: printing build status of easyconfigs\n * [R] \n" ++ eessi_fold ++
+        "p/pigz/pigz-2.8-GCCcore-15.2\n.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    const rels = relsFromDryRun(arena_state.allocator(), text);
+    try std.testing.expectEqual(@as(usize, 1), rels.len);
+    try std.testing.expectEqualStrings("pigz/2.8-GCCcore-15.2.0", rels[0]);
+}
+
+test "relsFromDryRun leaves out installed dependencies" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const header = "Dry run: printing build status of easyconfigs and dependencies\n";
+    const whole = header ++
+        " * [x] " ++ eessi_ecs ++ "/m/M4/M4-1.4.20.eb (module: M4/1.4.20)\n" ++
+        " * [x] " ++ eessi_ecs ++ "/g/GCCcore/GCCcore-15.2.0.eb (module: GCCcore/15.2.0)\n" ++
+        " * [R] " ++ eessi_ecs ++ "/p/pigz/pigz-2.8-GCCcore-15.2.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    const wrapped = header ++
+        " * [x] \n" ++ eessi_fold ++ "m/M4/M4-1.4.20.eb (module: \nM4/1.4.20)\n" ++
+        " * [x] \n" ++ eessi_fold ++ "g/GCCcore/GCCcore-15.2.0.eb \n(module: GCCcore/15.2.0)\n" ++
+        " * [R] \n" ++ eessi_fold ++ "p/pigz/pigz-2.8-GCCcore-15.2\n.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    for ([_][]const u8{ whole, wrapped }) |text| {
+        const rels = relsFromDryRun(a, text);
+        try std.testing.expectEqual(@as(usize, 1), rels.len);
+        try std.testing.expectEqualStrings("pigz/2.8-GCCcore-15.2.0", rels[0]);
+    }
+}
+
+test "relsFromDryRun ends an entry at the next entry or log line" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const rels = relsFromDryRun(arena_state.allocator(), " * [R] /x/a.eb (module: a/1\n * [ ] /x/b.eb (module: \nb/1)\n * [F] /x/c.eb\n== done\n(module: c/1)\n");
+    try std.testing.expectEqual(@as(usize, 1), rels.len);
+    try std.testing.expectEqualStrings("b/1", rels[0]);
+}
+
 test "childEnv fails rather than fall back to the parent environment" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
