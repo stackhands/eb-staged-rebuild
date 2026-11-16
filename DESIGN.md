@@ -233,7 +233,7 @@ one is closed in this tree, or kept on purpose.
 5. Closed. Symlink components of a module path are refused. The refusal still applies when the module file is missing.
 6. Closed. Stage roots taken from `bwrap_info.json` must stay inside the run's generation directory.
 7. Closed. A missing `Name/version` is refused before EasyBuild. The build does not create the live directory.
-8. Closed. The temporary file for an atomic write is created with `mkstemp`, so the name is not a fixed hard-link target.
+8. Closed. The temporary file for an atomic write is `.{basename}.new` in the destination's directory. A name already there is removed only when it is a regular file with one hard link, owned by the writer or the metadata owner. Any other file, including a hard link, is refused.
 9. Closed. The state root is refused when any existing component is a symlink.
 10. Closed. An `OSError` from the command line is printed as `eb-staged-rebuild:` and exits 2, without a traceback.
 11. Closed. The unit suite passes with `ResourceWarning` promoted to an error.

@@ -14,6 +14,9 @@
   same-directory replacement that keeps the owner, mode, ACL and user
   attributes, keeps the tree's hard links on one inode, leaves a hole a
   hole, and replaces a symbolic link by rename.
+* Docs: the design note's atomic-write temporary file is `.{basename}.new`.
+  A name already there is refused unless it is a regular file with one hard
+  link, owned by the writer or the metadata owner.
 * Fix: the state-root gate `.lock` was truncated and rewritten with the
   holder's pid without checking that it was a regular file with one hard
   link. A hard link planted on that name lost the other name's bytes, a
