@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* Fix: the `userns` backend could not run real EasyBuild, which refuses to run as
+  root and ran as the namespace's root. The sandbox helper takes
+  `--as-user UID:GID`, and after its mounts enters a nested user namespace with
+  the invoking user's ids. The `userns` probe does the same.
 * Fix: the `userns` backend mounts the generation's `software/<name>/<version>`
   over the stable path inside its namespace and points EasyBuild's
   `--installpath-software` at the live tree, as the bubblewrap backend does.

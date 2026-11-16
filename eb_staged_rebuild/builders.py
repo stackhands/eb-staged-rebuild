@@ -9,7 +9,7 @@ import threading
 import time
 
 from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.probe import USER_NAMESPACE_FLAGS
+from eb_staged_rebuild.probe import USER_NAMESPACE_FLAGS, as_user_arguments
 
 # Options that would send the build at the live tree, or that delete a previous
 # install when the module file and the new install directory differ.
@@ -136,6 +136,7 @@ def userns_command(ctx):
         sys.executable,
         "-m",
         "eb_staged_rebuild.userns_sandbox",
+        *as_user_arguments(),
         "--read-only",
         ctx.software,
         "--read-only",

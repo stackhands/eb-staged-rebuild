@@ -21,6 +21,11 @@ USER_NAMESPACE_FLAGS = (
     "--kill-child",
 )
 
+def as_user_arguments():
+    """The invoking user's ids for the sandbox, which drops root after its mounts."""
+    return ["--as-user", f"{os.getuid()}:{os.getgid()}"]
+
+
 # Keys read from easybuild/tools/bwrap.py at these tags. A version that is not
 # in this table is reported as unknown; the JSON written by a build is what a
 # later step trusts, and a missing stage path is not guessed.
@@ -127,6 +132,7 @@ def probe_userns_sandbox():
         sys.executable,
         "-m",
         "eb_staged_rebuild.userns_sandbox",
+        *as_user_arguments(),
         "--probe",
     ]
     probe = _run(command, CAPABILITY_PROBE_TIMEOUT_SECONDS, env=os.environ.copy())

@@ -294,6 +294,9 @@ The fake `eb` writes what a build records about its install prefix (`FAKE_EB_REC
 | RefusalTests.test_the_easybuild_build_record_is_not_scanned | differential "run, installpath, the EasyBuild build record is not scanned" |
 | RefusalTests.test_bwrap_records_the_live_path_and_publishes | differential "run, bwrap, the build records the live path" |
 | RefusalTests.test_the_userns_command_mounts_the_generation_over_the_stable_path | differential "run, userns", "run --dry-run, userns" (the `--bind` arguments) |
+| RefusalTests.test_the_userns_command_passes_the_invoking_users_ids | differential "run, userns", "run --dry-run, userns" (the `--as-user` argument) |
+| RefusalTests.test_the_sandbox_drops_to_the_invoking_user_after_its_mounts | differential "run, userns, the build records the stable path" (the build runs after the drop); `zig/probe.zig` test "--as-user needs UID:GID" |
+| RefusalTests.test_the_sandbox_refuses_a_malformed_user | `zig/probe.zig` test "--as-user needs UID:GID" |
 | RefusalTests.test_userns_records_the_stable_path | differential "run, userns, the build records the stable path", "userns prefix file" |
 
 ### tests/test_prepare_recovery.py

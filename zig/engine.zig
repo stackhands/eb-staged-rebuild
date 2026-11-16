@@ -122,7 +122,7 @@ fn buildCommand(a: Allocator, env: probe.Env, spec: Spec, probes: Py, generation
         if (report) |r| if (pyfmt.get(r, "path")) |p| if (p == .str and p.str.len > 0) break :blk p.str;
         break :blk which(a, env, "unshare") orelse "unshare";
     };
-    cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", spec.software, "--read-only", spec.modules }) catch oom();
+    cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--as-user", probe.asUserArgument(a), "--read-only", spec.software, "--read-only", spec.modules }) catch oom();
     const live_software = admin.abspath(a, spec.software);
     for (spec.module_rels) |rel| {
         cmd.appendSlice(a, &.{ "--bind", std.fs.path.join(a, &.{ software, rel }) catch "", std.fs.path.join(a, &.{ live_software, rel }) catch "" }) catch oom();

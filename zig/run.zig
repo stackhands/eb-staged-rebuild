@@ -378,7 +378,7 @@ fn build(r: *R) E!u8 {
             if (pyfmt.get(probes, "userns_sandbox")) |u| if (pyfmt.get(u, "path")) |p| if (p == .str and p.str.len > 0) break :blk p.str;
             break :blk resolveExe(a, r.env, "unshare") orelse "unshare";
         };
-        try cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--read-only", r.spec.software, "--read-only", r.spec.modules });
+        try cmd.appendSlice(a, &.{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), probe.sandbox_command, "--as-user", probe.asUserArgument(a), "--read-only", r.spec.software, "--read-only", r.spec.modules });
         const live_software = admin.abspath(a, r.spec.software);
         if (rels == .list) for (rels.list) |rel| {
             try cmd.appendSlice(a, &.{ "--bind", try std.fs.path.join(a, &.{ software, s(rel) }), try std.fs.path.join(a, &.{ live_software, s(rel) }) });

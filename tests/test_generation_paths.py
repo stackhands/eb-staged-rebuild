@@ -5,6 +5,8 @@ import io
 import json
 import os
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -283,6 +285,44 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(env["EASYBUILD_LOCKS_DIR"], os.path.join(self.root, "generation", "locks"))
         self.assertLess(command.index("--read-only"), command.index("--bind"))
         self.assertLess(command.index("--bind"), command.index("--"))
+
+    def test_the_userns_command_passes_the_invoking_users_ids(self):
+        context = SimpleNamespace(
+            generation_root=os.path.join(self.root, "generation"),
+            eb_executable=FAKE_EB,
+            eb_args=[],
+            software=self.software,
+            modules=self.modules,
+            rels=[],
+            probes={"userns_sandbox": {"path": "/usr/bin/unshare"}},
+        )
+        command, _env, _software, _modules = userns_command(context)
+        index = command.index("--as-user")
+        self.assertEqual(command[index + 1], f"{os.getuid()}:{os.getgid()}")
+        self.assertLess(index, command.index("--read-only"))
+
+    def _sandbox(self, *arguments):
+        command = [
+            "unshare", "--user", "--map-root-user", "--mount", "--fork", "--kill-child",
+            sys.executable, "-m", "eb_staged_rebuild.userns_sandbox", *arguments,
+        ]
+        return subprocess.run(command, capture_output=True, text=True, check=False)
+
+    def test_the_sandbox_drops_to_the_invoking_user_after_its_mounts(self):
+        if not probe_userns_sandbox().get("usable"):
+            self.skipTest("user namespaces are not usable here")
+        ids = f"{os.getuid()}:{os.getgid()}"
+        done = self._sandbox("--as-user", ids, "--read-only", self.software, "--", "sh", "-c", "id -u; id -g; touch " + self.software + "/x")
+        self.assertEqual(done.stdout.split(), [str(os.getuid()), str(os.getgid())])
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("Read-only", done.stderr)
+
+    def test_the_sandbox_refuses_a_malformed_user(self):
+        if not probe_userns_sandbox().get("usable"):
+            self.skipTest("user namespaces are not usable here")
+        done = self._sandbox("--as-user", "x", "--", "true")
+        self.assertEqual(done.returncode, 125)
+        self.assertIn("--as-user needs UID:GID, got 'x'", done.stderr)
 
     def test_userns_records_the_stable_path(self):
         probe = probe_userns_sandbox()

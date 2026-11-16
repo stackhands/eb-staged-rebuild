@@ -196,7 +196,7 @@ fn probeUsernsSandbox(a: Allocator, env: Env) Py {
         put(a, &d, "reason", Py.s("unshare is not installed"));
         return .{ .dict = d.items };
     };
-    const argv = [_][]const u8{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), sandbox_command, "--probe" };
+    const argv = [_][]const u8{ unshare, "--user", "--map-root-user", "--mount", "--fork", "--kill-child", selfExe(a), sandbox_command, "--as-user", asUserArgument(a), "--probe" };
     switch (run(a, env, &argv, capability_timeout_ms)) {
         .done => |r| {
             if (r.code == 0) {
@@ -597,6 +597,36 @@ const MS_REMOUNT = 1 << 5;
 const MS_BIND = 1 << 12;
 const MS_REC = 1 << 14;
 const MS_PRIVATE = 1 << 18;
+const CLONE_NEWUSER = 0x10000000;
+
+/// The invoking user's ids for the sandbox, which drops root after its mounts.
+pub fn asUserArgument(a: Allocator) []const u8 {
+    return a.print("{d}:{d}", .{ linux.getuid(), linux.getgid() }) catch oom();
+}
+
+fn writeProc(a: Allocator, name: []const u8, text: []const u8) ?[]const u8 {
+    const path = std.fs.path.join(a, &.{ "/proc/self", name }) catch oom();
+    const fd = sys.openat(fsx.cwd, path, .{ .ACCMODE = .WRONLY }, 0) catch |err| return a.print("open {s}: {t}", .{ path, err }) catch oom();
+    defer sys.close(fd);
+    sys.writeAll(fd, text) catch |err| return a.print("write {s}: {t}", .{ path, err }) catch oom();
+    return null;
+}
+
+/// _drop_to: a nested user namespace in which the invoking user's ids are
+/// the only ids. The mount namespace stays. Null on success, else the reason.
+fn dropTo(a: Allocator, spec: []const u8) ?[]const u8 {
+    const colon = std.mem.findScalar(u8, spec, ':') orelse return a.print("--as-user needs UID:GID, got '{s}'", .{spec}) catch oom();
+    const uid = std.fmt.parseInt(u32, spec[0..colon], 10) catch return a.print("--as-user needs UID:GID, got '{s}'", .{spec}) catch oom();
+    const gid = std.fmt.parseInt(u32, spec[colon + 1 ..], 10) catch return a.print("--as-user needs UID:GID, got '{s}'", .{spec}) catch oom();
+    const rc = linux.unshare(CLONE_NEWUSER);
+    if (linux.errno(rc) != .SUCCESS) return a.print("unshare user namespace: {s}", .{strerror(linux.errno(rc))}) catch oom();
+    if (writeProc(a, "setgroups", "deny")) |m| return m;
+    if (writeProc(a, "uid_map", a.print("{d} 0 1\n", .{uid}) catch oom())) |m| return m;
+    if (writeProc(a, "gid_map", a.print("{d} 0 1\n", .{gid}) catch oom())) |m| return m;
+    if (linux.getuid() != uid or linux.getgid() != gid)
+        return a.print("user namespace gives ids {d}:{d}, expected {d}:{d}", .{ linux.getuid(), linux.getgid(), uid, gid }) catch oom();
+    return null;
+}
 
 fn mountRaw(source: ?[*:0]const u8, target: [*:0]const u8, flags: u32) linux.E {
     return linux.errno(linux.mount(source, target, null, flags, 0));
@@ -609,6 +639,7 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
     var read_only: std.ArrayList([]const u8) = .empty;
     var binds: std.ArrayList([2][]const u8) = .empty;
     var probe_only = false;
+    var as_user: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--probe")) {
@@ -616,6 +647,9 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         } else if (std.mem.eql(u8, args[i], "--read-only") and i + 1 < args.len) {
             i += 1;
             read_only.append(a, args[i]) catch oom();
+        } else if (std.mem.eql(u8, args[i], "--as-user") and i + 1 < args.len) {
+            i += 1;
+            as_user = args[i];
         } else if (std.mem.eql(u8, args[i], "--bind") and i + 2 < args.len) {
             binds.append(a, .{ args[i + 1], args[i + 2] }) catch oom();
             i += 2;
@@ -650,7 +684,13 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
             cli.err(prefix ++ "read-only bind mount remained writable\n", .{});
             return sandbox_setup_exit;
         } else |err| switch (err) {
-            error.ReadOnly => return 0,
+            error.ReadOnly => {
+                if (as_user) |spec| if (dropTo(a, spec)) |msg| {
+                    cli.err(prefix ++ "{s}\n", .{msg});
+                    return sandbox_setup_exit;
+                };
+                return 0;
+            },
             else => {
                 cli.err(prefix ++ "{t}\n", .{err});
                 return sandbox_setup_exit;
@@ -662,6 +702,10 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         return sandbox_setup_exit;
     };
     for (binds.items) |pair| if (bindOver(a, pair[0], pair[1])) |msg| {
+        cli.err(prefix ++ "{s}\n", .{msg});
+        return sandbox_setup_exit;
+    };
+    if (as_user) |spec| if (dropTo(a, spec)) |msg| {
         cli.err(prefix ++ "{s}\n", .{msg});
         return sandbox_setup_exit;
     };
@@ -718,6 +762,13 @@ fn protect(a: Allocator, path_in: []const u8) ?[]const u8 {
     if (e == .SUCCESS) e = mountRaw(z.ptr, z.ptr, MS_BIND | MS_REMOUNT | MS_RDONLY);
     if (e != .SUCCESS) return a.print("mount {s}: {s}", .{ path, strerror(e) }) catch "mount failed";
     return null;
+}
+
+test "--as-user needs UID:GID" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("--as-user needs UID:GID, got 'x'", dropTo(arena.allocator(), "x").?);
+    try std.testing.expectEqualStrings("--as-user needs UID:GID, got '1:y'", dropTo(arena.allocator(), "1:y").?);
 }
 
 test "parseFrameworkVersion" {
