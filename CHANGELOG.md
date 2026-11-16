@@ -7,6 +7,13 @@
   rewrites that prefix to the stable install path before it exchanges the
   directory. A binary whose recorded path is shorter than the stable prefix
   is refused instead of published with the generation path still in it.
+* Fix: that rewrite edited each file in place. A crash tore the bytes, a
+  symbolic link was followed, a sparse file was filled, hard links were not
+  a single replacement, and `chmod` (which replaces an NFSv4 ACL) was used
+  to open a file that was not owner-writable. The rewrite now publishes a
+  same-directory replacement that keeps the owner, mode, ACL and user
+  attributes, keeps the tree's hard links on one inode, leaves a hole a
+  hole, and replaces a symbolic link by rename.
 
 ## 1.0.0
 
