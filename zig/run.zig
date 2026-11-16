@@ -245,36 +245,65 @@ fn resolveExe(a: Allocator, env: probe.Env, name: []const u8) ?[]const u8 {
 
 // ---- learning the module list ----------------------------------------------
 
-/// software_rels_from_dry_run: ^\s*\*\s+\[[ xFR-]\]\s+.*\(module:\s*(.+)\)\s*$
+/// The status of a line that starts a dry-run entry: ^\s*\*\s+\[([ xFR-])\]
+fn entryStatus(line: []const u8) ?u8 {
+    var i: usize = 0;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    if (i >= line.len or line[i] != '*') return null;
+    i += 1;
+    const ws = i;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    if (i == ws or i + 3 > line.len or line[i] != '[' or std.mem.findScalar(u8, " xFR-", line[i + 1]) == null or line[i + 2] != ']') return null;
+    return line[i + 1];
+}
+
+/// The module field of a whole entry:
+/// ^\s*\*\s+\[[ xFR-]\]\s+.*\(module:\s*(.+)\)\s*$
+fn moduleField(line: []const u8) ?[]const u8 {
+    if (entryStatus(line) == null) return null;
+    var i = (std.mem.findScalar(u8, line, ']') orelse return null) + 1;
+    const ws = i;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    if (i == ws) return null;
+    // .*\(module:\s*(.+)\)\s*$ : the last "(module:" whose tail closes.
+    const trimmed = std.mem.trimEnd(u8, line, " \t");
+    if (trimmed.len == 0 or trimmed[trimmed.len - 1] != ')') return null;
+    const at = std.mem.findLast(u8, trimmed[i..], "(module:") orelse return null;
+    const field = std.mem.trim(u8, trimmed[i + at + "(module:".len .. trimmed.len - 1], " \t");
+    return if (field.len == 0) null else field;
+}
+
+/// software_rels_from_dry_run: Name/version of each module the build
+/// replaces or installs. Off a terminal, EasyBuild's rich output wraps at
+/// the console width; the lines after an entry are joined until it names its
+/// module, or until the next entry, an EasyBuild log line or an empty line.
+/// [x] marks an installed module the build leaves alone, such as an EESSI
+/// dependency that --robot lists.
 fn relsFromDryRun(a: Allocator, text: []const u8) []const []const u8 {
     var rels: std.ArrayList([]const u8) = .empty;
+    var entry: std.ArrayList(u8) = .empty;
+    var open = false;
     var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |raw| {
-        const line = std.mem.trimEnd(u8, raw, "\r");
-        var i: usize = 0;
-        while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
-        if (i >= line.len or line[i] != '*') continue;
-        i += 1;
-        const ws = i;
-        while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
-        if (i == ws or i + 3 > line.len or line[i] != '[' or std.mem.findScalar(u8, " xFR-", line[i + 1]) == null or line[i + 2] != ']') continue;
-        i += 3;
-        const ws2 = i;
-        while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
-        if (i == ws2) continue;
-        // .*\(module:\s*(.+)\)\s*$ : the last "(module:" whose tail closes.
-        const trimmed = std.mem.trimEnd(u8, line, " \t");
-        if (trimmed.len == 0 or trimmed[trimmed.len - 1] != ')') continue;
-        const at = std.mem.findLast(u8, trimmed[i..], "(module:") orelse continue;
-        var field = trimmed[i + at + "(module:".len .. trimmed.len - 1];
-        field = std.mem.trimStart(u8, field, " \t");
-        if (field.len == 0) continue;
-        field = std.mem.trim(u8, field, " \t");
-        if (std.mem.find(u8, field, " | ")) |bar| {
-            const sub = std.mem.trim(u8, field[0..bar], " \t");
-            const short = std.mem.trim(u8, field[bar + 3 ..], " \t");
-            rels.append(a, std.fs.path.join(a, &.{ sub, short }) catch continue) catch oom();
-        } else rels.append(a, field) catch oom();
+    while (true) {
+        const raw = it.next();
+        const line = std.mem.trimEnd(u8, raw orelse "", "\r");
+        if (raw != null and open and line.len > 0 and !std.mem.startsWith(u8, line, "==") and entryStatus(line) == null and moduleField(entry.items) == null) {
+            entry.appendSlice(a, line) catch oom();
+            continue;
+        }
+        if (open and entryStatus(entry.items).? != 'x') {
+            if (moduleField(entry.items)) |field| {
+                if (std.mem.find(u8, field, " | ")) |bar| {
+                    const sub = std.mem.trim(u8, field[0..bar], " \t");
+                    const short = std.mem.trim(u8, field[bar + 3 ..], " \t");
+                    if (std.fs.path.join(a, &.{ sub, short })) |rel| rels.append(a, rel) catch oom() else |_| {}
+                } else rels.append(a, a.dupe(u8, field) catch oom()) catch oom();
+            }
+        }
+        if (raw == null) break;
+        open = entryStatus(line) != null;
+        entry.clearRetainingCapacity();
+        if (open) entry.appendSlice(a, line) catch oom();
     }
     return rels.items;
 }
@@ -285,7 +314,7 @@ fn learnRels(r: *R) E![]const []const u8 {
     for (r.spec.module_rels) |rel| if (!contains(rels.items, rel)) try rels.append(a, rel);
     var cmd: std.ArrayList([]const u8) = .empty;
     try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--dry-run" });
-    try cmd.appendSlice(a, engine.filterEbArgs(a, r.spec.eb_args));
+    try cmd.appendSlice(a, engine.ensureRebuild(a, engine.filterEbArgs(a, r.spec.eb_args)));
     log("module preflight: {s}", .{joinCmd(a, cmd.items)});
     const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
     var found: []const []const u8 = &.{};
@@ -1416,9 +1445,53 @@ test "relsFromDryRun" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    const rels = relsFromDryRun(a, " * [ ] /x/zlib-1.3.eb (module: zlib/1.3)\n * [x] /x/GCC.eb (module: Core | GCC/13)\nnoise\n * [R] /y.eb (module: a/b) \n");
+    const rels = relsFromDryRun(a, " * [ ] /x/zlib-1.3.eb (module: zlib/1.3)\n * [R] /x/GCC.eb (module: Core | GCC/13)\nnoise\n * [F] /y.eb (module: a/b) \n");
     try std.testing.expectEqual(@as(usize, 3), rels.len);
     try std.testing.expectEqualStrings("Core/GCC/13", rels[1]);
+}
+
+// EasyBuild 5.4.2 on EESSI 2026.06, eb --dry-run [--robot] --rebuild
+// pigz-2.8-GCCcore-15.2.0.eb; off a terminal, rich wraps at 80 columns.
+const eessi_ecs = "/cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/intel/sapphirerapids/software/EasyBuild/5.4.2/easybuild/easyconfigs";
+const eessi_tail = "== Temporary log file(s) /tmp/eb-o62b5_19/easybuild-q30ibs1n.log* have been \nremoved.\n== Temporary directory /tmp/eb-o62b5_19 has been removed.\n";
+const eessi_fold = "/cvmfs/software.eessi.io/versions/2026.06/software/linux/x86_64/intel/sapphirera\npids/software/EasyBuild/5.4.2/easybuild/easyconfigs/";
+
+test "relsFromDryRun reads a wrapped entry whole" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const text = "Dry run: printing build status of easyconfigs\n * [R] \n" ++ eessi_fold ++
+        "p/pigz/pigz-2.8-GCCcore-15.2\n.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    const rels = relsFromDryRun(arena_state.allocator(), text);
+    try std.testing.expectEqual(@as(usize, 1), rels.len);
+    try std.testing.expectEqualStrings("pigz/2.8-GCCcore-15.2.0", rels[0]);
+}
+
+test "relsFromDryRun leaves out installed dependencies" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const header = "Dry run: printing build status of easyconfigs and dependencies\n";
+    const whole = header ++
+        " * [x] " ++ eessi_ecs ++ "/m/M4/M4-1.4.20.eb (module: M4/1.4.20)\n" ++
+        " * [x] " ++ eessi_ecs ++ "/g/GCCcore/GCCcore-15.2.0.eb (module: GCCcore/15.2.0)\n" ++
+        " * [R] " ++ eessi_ecs ++ "/p/pigz/pigz-2.8-GCCcore-15.2.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    const wrapped = header ++
+        " * [x] \n" ++ eessi_fold ++ "m/M4/M4-1.4.20.eb (module: \nM4/1.4.20)\n" ++
+        " * [x] \n" ++ eessi_fold ++ "g/GCCcore/GCCcore-15.2.0.eb \n(module: GCCcore/15.2.0)\n" ++
+        " * [R] \n" ++ eessi_fold ++ "p/pigz/pigz-2.8-GCCcore-15.2\n.0.eb (module: pigz/2.8-GCCcore-15.2.0)\n" ++ eessi_tail;
+    for ([_][]const u8{ whole, wrapped }) |text| {
+        const rels = relsFromDryRun(a, text);
+        try std.testing.expectEqual(@as(usize, 1), rels.len);
+        try std.testing.expectEqualStrings("pigz/2.8-GCCcore-15.2.0", rels[0]);
+    }
+}
+
+test "relsFromDryRun ends an entry at the next entry or log line" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const rels = relsFromDryRun(arena_state.allocator(), " * [R] /x/a.eb (module: a/1\n * [ ] /x/b.eb (module: \nb/1)\n * [F] /x/c.eb\n== done\n(module: c/1)\n");
+    try std.testing.expectEqual(@as(usize, 1), rels.len);
+    try std.testing.expectEqualStrings("b/1", rels[0]);
 }
 
 test "childEnv fails rather than fall back to the parent environment" {

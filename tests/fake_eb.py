@@ -7,6 +7,7 @@ it records the argv it was given. It does not build software.
 
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -131,6 +132,53 @@ def _write_tree(software, modules, root_in_module, rel=None):
         os.symlink(module, link)
 
 
+def wrap(line, width):
+    """Break a line as EasyBuild's rich output does at that console width.
+
+    A break goes before a word that does not fit and the space before it
+    stays on the line above; a word wider than the console is cut into
+    pieces of that width, each on its own line.
+    """
+    lines = [""]
+    start = 0
+    for word in re.findall(r"\s*\S+\s*", line):
+        length = len(word.rstrip())
+        if width - len(lines[-1]) >= length:
+            lines[-1] += word
+        elif length > width:
+            for offset in range(0, len(word), width):
+                if start + offset:
+                    lines.append("")
+                lines[-1] = word[offset:offset + width]
+        elif lines[-1] and start:
+            lines.append(word)
+        else:
+            lines[-1] += word
+        start += len(word)
+    return lines
+
+
+def _dry_run(argv):
+    """Print the module list as EasyBuild 5.4.2 does for eb --dry-run.
+
+    The listed easyconfigs are [R] with --rebuild, [F] with --force and [x]
+    otherwise. FAKE_EB_DEPS names installed dependencies, as EESSI's are,
+    that --robot lists as [x] before them. FAKE_EB_WRAP wraps every line at
+    that many columns, as rich does when stdout is not a terminal.
+    """
+    names = {arg.split("=", 1)[0] for arg in argv}
+    status = "F" if names & {"--force", "-f"} else "R" if "--rebuild" in names else "x"
+    robot = bool(names & {"--robot", "-r"})
+    deps = [rel for rel in os.environ.get("FAKE_EB_DEPS", "").split(",") if rel] if robot else []
+    lines = ["Dry run: printing build status of easyconfigs" + (" and dependencies" if robot else "")]
+    lines += [f" * [x] {rel.replace('/', '-')}.eb (module: {rel})" for rel in deps]
+    for rel in (os.environ.get("FAKE_EB_RELS") or _rel()).split(","):
+        lines.append(f" * [{status}] {rel.replace('/', '-')}.eb (module: {rel})")
+    width = int(os.environ.get("FAKE_EB_WRAP") or 0)
+    for line in lines:
+        print("\n".join(wrap(line, width)) if width else line)
+
+
 def main(argv):
     _record(argv)
     # FAKE_EB_VERSION: answer eb --version as that EasyBuild release does.
@@ -139,9 +187,7 @@ def main(argv):
         print(f"This is EasyBuild {version} (framework: {version}, easyblocks: {version}) on host fake.")
         return 0
     if "--dry-run" in argv:
-        print("Dry run: printing build status of easyconfigs")
-        for rel in (os.environ.get("FAKE_EB_RELS") or _rel()).split(","):
-            print(f" * [R] {rel.replace('/', '-')}.eb (module: {rel})")
+        _dry_run(argv)
         return 0
     if os.environ.get("FAKE_EB_FAIL") == "1":
         print("fake eb forced failure", file=sys.stderr)

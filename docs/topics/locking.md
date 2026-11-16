@@ -4,7 +4,7 @@ A local `flock` on `<state-root>/.lock` is taken first. A POSIX record lock is t
 
 The sidecar is opened only while the flock is held, and it is closed before the flock is released. Other code in the same process must not open the sidecar. Closing any descriptor for that inode drops the process's record locks. A forked child closes inherited descriptors and does not release the parent's locks. Neither file is unlinked while the state root is in use.
 
-The lock covers build, publish, resume, rollback, retire, and garbage collection. The module preflight `eb --dry-run` runs before the lock is taken. `status`, `probe`, and `resolve` do not take it. `status` does not accept `--lock-timeout`.
+The lock covers build, publish, resume, rollback, retire, and garbage collection. The module preflight `eb --dry-run --rebuild` runs before the lock is taken. `status`, `probe`, and `resolve` do not take it. `status` does not accept `--lock-timeout`.
 
 A file left behind after a crash is not itself a held lock. The kernel releases the locks when the process exits. The next acquirer truncates `.lock` and writes its pid only when that file is a regular file with one hard link. A hard link, a FIFO or any other non-regular file is refused before it is opened, so the pid write cannot truncate another inode and a FIFO cannot block the acquirer. A symlink component of the state root is refused. Both lock files are mode `0600`, so another user who can traverse the directory cannot open them and take the flock.
 

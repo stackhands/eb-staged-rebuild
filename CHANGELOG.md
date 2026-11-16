@@ -32,6 +32,15 @@
   component of the state root is refused, and both lock files are owner-only
   so another user who can traverse the directory cannot open them and take
   the flock.
+* Fix: `run` with `--robot` on EESSI refused before building, naming an
+  EESSI dependency such as `M4/1.4.20` as "a missing, not an existing
+  rebuild directory". The module preflight now runs `eb --dry-run` with the
+  build's arguments and `--rebuild`, and leaves out the installed
+  dependencies EasyBuild marks `[x]`; the easyconfigs to rebuild are `[R]`.
+  Both the Python tool and the binary.
+* Fix: off a terminal, EasyBuild 5.4's rich output wraps each dry-run line
+  at 80 columns, so `run` without `--module` found no module line and
+  refused. A wrapped module line is now read whole.
 
 ## 1.0.0
 

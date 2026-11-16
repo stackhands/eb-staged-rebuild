@@ -280,6 +280,12 @@ compare_admin "status, ledger run" status --state-root @ROOT@/state r5
 compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run again" rollback --state-root @ROOT@/state r5
+# The module list from eb --dry-run alone: wrapped as rich wraps it off a
+# terminal, and with --robot listing installed dependencies as [x].
+compare_admin "run, wrapped dry-run lines" env FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id w1 --skip-live-check -- demo-1.eb
+compare_admin "rollback the wrapped run" rollback --state-root @ROOT@/state w1
+compare_admin "run, --robot with installed dependencies" env FAKE_EB_DEPS=M4/1.4.20,GCCcore/15.2.0 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d1 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the --robot run" rollback --state-root @ROOT@/state d1
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

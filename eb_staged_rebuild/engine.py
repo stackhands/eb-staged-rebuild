@@ -60,7 +60,8 @@ from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
 
 import re
 
-_MODULE_LINE = re.compile(r"^\s*\*\s+\[[ xFR-]\]\s+.*\(module:\s*(.+)\)\s*$")
+_ENTRY = re.compile(r"^\s*\*\s+\[[ xFR-]\]")
+_MODULE_LINE = re.compile(r"^\s*\*\s+\[([ xFR-])\]\s+.*\(module:\s*(.+)\)\s*$")
 
 
 @dataclass
@@ -162,13 +163,39 @@ def _check_install_dir(software, rel):
         raise Refused(f"{path} is a {kind}, not an existing rebuild directory")
 
 
-def software_rels_from_dry_run(text):
-    rels = []
+def _dry_run_entries(text):
+    """Each module line of eb --dry-run, whole.
+
+    Off a terminal, EasyBuild's rich output wraps at the console width: it
+    breaks after a space, which stays on the line above, and cuts a path
+    wider than the console. Joining the lines after an entry restores it.
+    An entry ends once it names its module, or at the next entry, an
+    EasyBuild log line or an empty line.
+    """
+    entry = None
     for line in text.splitlines():
-        match = _MODULE_LINE.match(line)
-        if not match:
+        if entry is not None and line and not line.startswith("==") and not _ENTRY.match(line) and not _MODULE_LINE.match(entry):
+            entry += line
             continue
-        field_text = match.group(1).strip()
+        if entry is not None:
+            yield entry
+        entry = line if _ENTRY.match(line) else None
+    if entry is not None:
+        yield entry
+
+
+def software_rels_from_dry_run(text):
+    """Name/version of each module the build replaces or installs.
+
+    [x] marks a module that is installed and that the build leaves alone,
+    such as an EESSI dependency that --robot lists.
+    """
+    rels = []
+    for line in _dry_run_entries(text):
+        match = _MODULE_LINE.match(line)
+        if not match or match.group(1) == "x":
+            continue
+        field_text = match.group(2).strip()
         if " | " in field_text:
             subdir, short = field_text.split(" | ", 1)
             rels.append(os.path.join(subdir.strip(), short.strip()))
