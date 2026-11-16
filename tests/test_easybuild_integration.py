@@ -205,6 +205,41 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             self._assert_switched(live, module, inode, watcher, "payload-v2\n")
             self.assertFalse(os.path.islink(live))
 
+    def test_userns_backend_records_the_stable_path(self):
+        from eb_staged_rebuild.probe import probe_userns_sandbox
+
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(f"the user-namespace sandbox is not usable here: {probe.get('reason')}")
+        with tempfile.TemporaryDirectory() as work:
+            prefix, src, ec, live, module = self._install_v1(work)
+            inode = os.lstat(live).st_ino
+            self._retarget(src, ec, "payload-v2\n")
+            watcher = Watcher(
+                os.path.join(live, "stagedemo-1.txt"),
+                {"payload-v1\n", "payload-v2\n"},
+            )
+            watcher.start()
+            try:
+                result = self._rebuild(prefix, ec, src, "userns")
+            finally:
+                self.stop_watcher(watcher)
+            self.assertEqual(result.returncode, 0, result.message)
+            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
+            # EasyBuild ran with the generation mounted over the live path, so
+            # nothing it wrote, its build record included, names the generation.
+            generations = os.path.join(prefix, ".eb-staged-rebuild", "generations").encode()
+            named = []
+            for directory, _dirs, files in os.walk(live):
+                for name in files:
+                    path = os.path.join(directory, name)
+                    if os.path.islink(path):
+                        continue
+                    with open(path, "rb") as handle:
+                        if generations in handle.read():
+                            named.append(os.path.relpath(path, live))
+            self.assertEqual(named, [])
+
     def test_symlink_name_version_is_refused(self):
         with tempfile.TemporaryDirectory() as work:
             prefix, src, ec, live, module = self._install_v1(work)

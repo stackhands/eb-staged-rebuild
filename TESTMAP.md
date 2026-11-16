@@ -329,6 +329,7 @@ The fake `eb` writes what a build records about its install prefix (`FAKE_EB_REC
 |---|---|
 | EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_userns_backend_records_the_stable_path | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_records_the_stable_path |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |
 
 ### tests/test_sealed_install.py
