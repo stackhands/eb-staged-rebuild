@@ -37,6 +37,22 @@ python3 -m pip install .
 eb-staged-rebuild --version
 ```
 
+## Usage
+
+Rebuild pigz in an EESSI 2026.06 user installation, look at the run, and put the previous tree back:
+
+```bash
+module load EESSI-extend/2026.06-easybuild
+P=$EASYBUILD_INSTALLPATH
+eb-staged-rebuild probe --path "$P/software"
+eb-staged-rebuild run --software "$P/software" --modules "$P/modules" \
+  --run-id pigz-1 --module pigz/2.8-GCCcore-15.2.0 -- pigz-2.8-GCCcore-15.2.0.eb
+eb-staged-rebuild status --state-root "$P/.eb-staged-rebuild" pigz-1
+eb-staged-rebuild rollback --state-root "$P/.eb-staged-rebuild" pigz-1
+```
+
+`probe` reports the sandbox and whether the filesystem exchanges directories. `run` builds into `$P/.eb-staged-rebuild/generations/pigz-1`, the default state root for that software tree, and swaps it in for `software/pigz/2.8-GCCcore-15.2.0` and its module file. Arguments after `--` go to `eb`. `rollback` swaps the previous tree back. The [how-to](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers dry runs, resume and `gc`.
+
 ## Build the documentation
 
 ```bash
@@ -57,6 +73,7 @@ eb-staged-rebuild is one of the [stackhands](https://github.com/stackhands) tool
 
 | Tool | Job | Docs |
 |---|---|---|
+| [eb-pipeline](https://github.com/stackhands/eb-pipeline) | Run a site's EasyBuild build lists from one TOML file through eb-stack, eb-keep-logs and eb-staged-rebuild | [README](https://github.com/stackhands/eb-pipeline#readme) |
 | [eb-stack](https://github.com/stackhands/eb-stack) | Solve, shard and plan an EasyBuild build list; admit builds under a scratch inode budget | [docs](https://eb-stack.rgoswami.me/) |
 | **eb-staged-rebuild** | Rebuild an installation in a staged tree and swap it in, so running jobs keep their paths | [docs](https://stackhands.github.io/eb-staged-rebuild/) |
 | [eessi-arch-guard](https://github.com/stackhands/eessi-arch-guard) | Reload EESSI in a Slurm task that inherited it for another CPU or GPU | [docs](https://stackhands.github.io/eessi-arch-guard/) |

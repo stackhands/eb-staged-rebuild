@@ -48,6 +48,11 @@
   `build.zig.zon` alone, and release binaries name the tag's commit.
 * The static build uses zig-common 0.8.1.
 * Docs: `docs/reference/cli.md` named version 0.4.1.
+* Docs: the README shows `probe`, `run`, `status` and `rollback` on an
+  EESSI 2026.06 user installation.
+* Docs: `COMPAT.md` said the Python tool stays the one to use; it now says
+  either build can be used, as the README does.
+* Docs: the stackhands table and the documentation menu list eb-pipeline.
 
 ## 1.0.0
 

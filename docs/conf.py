@@ -51,6 +51,11 @@ html_theme_options = {
             "title": "stackhands",
             "children": [
                 {
+                    "title": "eb-pipeline",
+                    "url": "https://github.com/stackhands/eb-pipeline#readme",
+                    "summary": "Run a site's EasyBuild build lists from one TOML file through eb-stack, eb-keep-logs and eb-staged-rebuild",
+                },
+                {
                     "title": "eb-stack",
                     "url": "https://eb-stack.rgoswami.me/",
                     "summary": "Solve, shard and plan an EasyBuild build list; admit builds under a scratch inode budget",
