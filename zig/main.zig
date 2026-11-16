@@ -14,6 +14,7 @@ const probe = @import("probe.zig");
 const ledger = @import("ledger.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
+const build_options = @import("build_options");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -22,7 +23,7 @@ const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
 
-pub const version = "1.0.0";
+pub const version = build_options.version;
 const prog = "eb-staged-rebuild";
 
 const commands = [_][]const u8{ "probe", "run", "resume", "rollback", "gc", "retire", "status", "resolve" };
@@ -794,7 +795,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             return 0;
         }
         if (std.mem.eql(u8, arg, "--version") or (arg.len >= 3 and std.mem.startsWith(u8, "--version", arg))) {
-            cli.put(1, prog ++ " " ++ version ++ "\n");
+            cli.put(1, comptime cli.versionLine(prog, version, build_options.commit));
             return 0;
         }
         if (arg.len > 0 and arg[0] == '-') usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});

@@ -95,7 +95,9 @@ jobs:
           ! zig build -Dtest-ops -Drelease=true
       - name: the -Dtest-ops test artifact
         run: zig build -Dtest-ops
-      - run: shellcheck -S warning tests/differential.sh
+      - name: build.zig.zon's version and -Dcommit reach --version
+        run: bash tests/build_version.sh
+      - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
       - name: commands against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/differential.sh
       - name: a run and a rollback killed at every step, then resumed

@@ -17,7 +17,7 @@ gh attestation verify "eb-staged-rebuild-${v}-${arch}-linux-musl" --repo stackha
 install -m 0755 "eb-staged-rebuild-${v}-${arch}-linux-musl" ~/.local/bin/eb-staged-rebuild
 ```
 
-The binary needs nothing else at run time; the probe tools in the table below are the same. {doc}`../reference/compat` lists where its output differs from the Python tool on purpose. From a checkout, `zig build -Drelease=true` builds it into `zig-out/bin/`.
+The binary needs nothing else at run time; the probe tools in the table below are the same. {doc}`../reference/compat` lists where its output differs from the Python tool on purpose. From a checkout, `zig build -Drelease=true` builds it into `zig-out/bin/`. Its `--version` adds the target, build mode, Zig version and the commit given with `-Dcommit=SHA` (`unknown` without it); a release binary names the tag's commit.
 
 ## From a checkout
 
