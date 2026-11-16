@@ -1,0 +1,50 @@
+name: changelog
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  draft:
+    name: towncrier build --draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      # The towncrier release eb-local, eb-stack and rfc9162 pin.
+      - name: Install towncrier 26.9.0
+        run: python -m pip install --disable-pip-version-check 'towncrier==26.9.0'
+      - name: Draft the changelog
+        run: |
+          set -euo pipefail
+          # The draft heading needs a version; build.zig.zon holds the one a release cuts.
+          version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' build.zig.zon)
+          test -n "$version"
+          towncrier build --draft --version "$version"
+      - name: A malformed fragment fails the draft
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^ *\.version = "\(.*\)",$/\1/p' build.zig.zon)
+          name=not-a-fragment.md
+          printf '%s\n' 'This name has no fragment type.' > "changelog.d/$name"
+          set +e
+          out=$(towncrier build --draft --version "$version" 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          rm -f "changelog.d/$name"
+          test "$code" -ne 0
+          printf '%s\n' "$out" | grep -F "Invalid news fragment name: $name"

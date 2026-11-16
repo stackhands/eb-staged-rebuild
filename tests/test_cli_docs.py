@@ -19,7 +19,12 @@ INTERNAL_ID = re.compile(r"\b(?:open|ns)-\d{3}\b")
 def internal_ids():
     """Lines of the docs and sources that cite a design-note id such as ns-051."""
     paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md", "TESTMAP.md")]
-    for sub, suffixes in (("docs", (".md", ".org")), ("eb_staged_rebuild", (".py",)), ("zig", (".zig",))):
+    for sub, suffixes in (
+        ("changelog.d", (".md",)),
+        ("docs", (".md", ".org")),
+        ("eb_staged_rebuild", (".py",)),
+        ("zig", (".zig",)),
+    ):
         for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, sub)):
             dirnames[:] = [name for name in dirnames if name not in {"_build", "__pycache__"}]
             paths.extend(os.path.join(dirpath, name) for name in filenames if name.endswith(suffixes))
