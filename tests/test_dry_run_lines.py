@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 from eb_staged_rebuild.engine import Spec, run, software_rels_from_dry_run
+from eb_staged_rebuild.errors import Refused
 from tests.fake_eb import wrap
 from tests.support import PROBES, classic_install
 
@@ -50,6 +51,43 @@ TAIL = (
     "removed.",
     "== Temporary directory /tmp/eb-o62b5_19 has been removed.",
 )
+# EasyBuild 5.4.2, eb --extended-dry-run Top-1.0-GCCcore-15.2.0.eb
+# --robot=$HOME/easyconfigs: --rebuild --stop=fetch --ignore-locks, where Top
+# needs Dep and neither is installed: the output of each easyconfig up to its
+# first step, and the summary.
+NOTE = (
+    "Important note: the actual build & install procedure that will be performed may diverge",
+    "(slightly) from what is outlined below, due to conditions in the easyblock which are",
+    "incorrectly handled in a dry run.",
+    "Any errors that may occur are ignored and reported as warnings, on a per-step basis.",
+    "Please be aware of this, and only use the information below for quick debugging purposes.",
+    "",
+    "*** DRY RUN using 'Binary' easyblock (easybuild.easyblocks.generic.binary @ "
+    "/opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/binary.py) ***",
+    "",
+)
+EXTENDED = (
+    "== resolving dependencies ...",
+    "",
+    "== processing EasyBuild easyconfig /home/alice/easyconfigs/Dep-1.0-GCCcore-15.2.0.eb",
+    "",
+    *NOTE,
+    "== building and installing Dep/1.0-GCCcore-15.2.0...",
+    "  >> installation prefix: /tmp/eb-0yw4vdhi/__ROOT__/opt/site/software/Dep/1.0-GCCcore-15.2.0",
+    "fetching files and verifying checksums... [DRY RUN]",
+    "",
+    "== processing EasyBuild easyconfig /home/alice/easyconfigs/Top-1.0-GCCcore-15.2.0.eb",
+    "",
+    *NOTE,
+    "== building and installing Top/1.0-GCCcore-15.2.0...",
+    "  >> installation prefix: /tmp/eb-0yw4vdhi/__ROOT__/opt/site/software/Top/1.0-GCCcore-15.2.0",
+    "fetching files and verifying checksums... [DRY RUN]",
+    "",
+    "== Build succeeded for 2 out of 2 (total: 0 secs)",
+    "== Summary:",
+    "   * [SUCCESS] Dep/1.0-GCCcore-15.2.0",
+    "   * [SUCCESS] Top/1.0-GCCcore-15.2.0",
+)
 
 
 def _text(*parts):
@@ -72,6 +110,16 @@ class ParseTests(unittest.TestCase):
         wrapped = [piece for line in ROBOT for piece in wrap(line, 80)]
         self.assertEqual(tuple(wrapped), ROBOT_80)
 
+    def test_the_extended_dry_run_names_the_modules_it_builds(self):
+        from eb_staged_rebuild.engine import modules_built_by_extended_dry_run
+
+        built = ["Dep/1.0-GCCcore-15.2.0", "Top/1.0-GCCcore-15.2.0"]
+        self.assertEqual(modules_built_by_extended_dry_run(_text(EXTENDED)), built)
+        for width in (24, 30, 40, 80):
+            wrapped = [piece for line in EXTENDED for piece in wrap(line, width)]
+            self.assertEqual(modules_built_by_extended_dry_run(_text(wrapped)), built, width)
+        self.assertEqual(modules_built_by_extended_dry_run("== building and installing a/1\n== done\n"), [])
+
 
 class RunTests(unittest.TestCase):
     def setUp(self):
@@ -85,7 +133,15 @@ class RunTests(unittest.TestCase):
         self.install, self.module, _ = classic_install(self.software, self.modules, "demo/1", "v0\n", "all/demo/1.lua")
         self.argv = os.path.join(self.root, "argv.log")
         self._env = dict(os.environ)
-        for key in ("FAKE_EB_FAIL", "FAKE_EB_RELS", "FAKE_EB_DEPS", "FAKE_EB_WRAP"):
+        for key in (
+            "FAKE_EB_FAIL",
+            "FAKE_EB_RELS",
+            "FAKE_EB_DEPS",
+            "FAKE_EB_WRAP",
+            "FAKE_EB_UNBUILT",
+            "FAKE_EB_MISSING",
+            "FAKE_EB_XFAIL",
+        ):
             os.environ.pop(key, None)
         os.environ["FAKE_EB_ARGV"] = self.argv
         os.environ["FAKE_EB_PAYLOAD"] = "v1\n"
@@ -95,8 +151,8 @@ class RunTests(unittest.TestCase):
         os.environ.update(self._env)
         self.tmp.cleanup()
 
-    def _run(self, *eb_args):
-        spec = Spec(
+    def _spec(self, *eb_args):
+        return Spec(
             software=self.software,
             modules=self.modules,
             state_root=os.path.join(self.root, "state"),
@@ -106,7 +162,17 @@ class RunTests(unittest.TestCase):
             probes=json.loads(json.dumps(PROBES)),
             run_id="run1",
         )
-        result = run(spec)
+
+    def _refused(self, *eb_args):
+        with self.assertRaises(Refused) as caught:
+            run(self._spec(*eb_args))
+        with open(os.path.join(self.install, "PAYLOAD"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "v0\n")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "state", "runs", "run1")))
+        return str(caught.exception)
+
+    def _run(self, *eb_args):
+        result = run(self._spec(*eb_args))
         self.assertEqual(result.returncode, 0, result.message)
         with open(os.path.join(self.install, "PAYLOAD"), encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "v1\n")
@@ -125,6 +191,50 @@ class RunTests(unittest.TestCase):
             plan = json.load(handle)["modules_plan"]
         self.assertEqual([item["rel"] for item in plan], ["all/demo/1.lua"])
         self.assertEqual(commands[0], ["--dry-run", "demo-1.eb", "--robot", "--rebuild"])
+
+    def test_robot_leaves_out_dependencies_eb_would_not_build(self):
+        os.environ["FAKE_EB_DEPS"] = "GCCcore/15.2.0"
+        os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20,zlib/1.3.1"
+        commands = self._run("--robot")
+        journal = os.path.join(self.root, "state", "runs", "run1", "journal.json")
+        with open(journal, encoding="utf-8") as handle:
+            plan = json.load(handle)["modules_plan"]
+        self.assertEqual([item["rel"] for item in plan], ["all/demo/1.lua"])
+        self.assertEqual(
+            commands[1],
+            ["--extended-dry-run", "demo-1.eb", "--robot", "--rebuild", "--stop=fetch", "--ignore-locks"],
+        )
+        self.assertEqual(sorted(os.listdir(self.software)), ["demo"])
+
+    def test_bwrap_mount_points_of_unbuilt_dependencies_are_removed(self):
+        os.makedirs(os.path.join(self.software, "M4", "1.4.19"))
+        os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20,zlib/1.3.1"
+        spec = self._spec("--robot")
+        spec.backend = "bwrap"
+        result = run(spec)
+        self.assertEqual(result.returncode, 0, result.message)
+        self.assertEqual(sorted(os.listdir(self.software)), ["M4", "demo"])
+        self.assertEqual(os.listdir(os.path.join(self.software, "M4")), ["1.4.19"])
+        with open(os.path.join(self.root, "state", "runs", "run1", "journal.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["mount_points"], ["M4/1.4.20", "zlib/1.3.1", "zlib"])
+
+    def test_wrapped_extended_dry_run_lines_name_the_modules(self):
+        os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20"
+        os.environ["FAKE_EB_WRAP"] = "24"
+        self._run("--robot")
+
+    def test_robot_refuses_a_missing_dependency_that_eb_would_build(self):
+        os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20"
+        os.environ["FAKE_EB_MISSING"] = "dep/2"
+        message = self._refused("--robot")
+        self.assertIn(os.path.join(self.software, "dep", "2"), message)
+
+    def test_an_extended_dry_run_that_fails_refuses(self):
+        os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20"
+        os.environ["FAKE_EB_XFAIL"] = "31"
+        message = self._refused("--robot")
+        self.assertIn("eb --extended-dry-run exited 31", message)
+        self.assertIn("Missing dependencies: dep/9", message)
 
 
 if __name__ == "__main__":

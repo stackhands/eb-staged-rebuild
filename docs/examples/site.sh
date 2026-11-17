@@ -149,8 +149,9 @@ case_lock() {
 }
 
 case_robot() {
-    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+    step 0 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
         --run-id example-robot -- Example-1.0-GCCcore-15.2.0.eb --robot
+    step 0 ls -A "$SITE/software" "$SITE/software/.locks"
 }
 
 case_userns() {

@@ -300,7 +300,10 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 ### tests/test_dry_run_lines.py
 
 The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `--rebuild`, the
-`FAKE_EB_DEPS` dependencies as `[x]` with `--robot`, and every line wrapped at `FAKE_EB_WRAP` columns.
+`FAKE_EB_DEPS` dependencies as `[x]` with `--robot`, the `FAKE_EB_UNBUILT` and `FAKE_EB_MISSING` ones as
+`[ ]`, and every line wrapped at `FAKE_EB_WRAP` columns. Its `--extended-dry-run` builds the
+`FAKE_EB_MISSING` dependencies and the listed easyconfigs, or exits `FAKE_EB_XFAIL`, and its `--bwrap`
+makes a live mount point for each module the dry run lists, as EasyBuild's `prepare_bwrap` does.
 
 | test | replacement |
 |---|---|
@@ -308,8 +311,14 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 | ParseTests.test_installed_dependencies_are_left_out | `zig/run.zig` test "relsFromDryRun leaves out installed dependencies" |
 | ParseTests.test_an_entry_ends_at_the_next_entry_or_log_line | `zig/run.zig` test "relsFromDryRun ends an entry at the next entry or log line" |
 | ParseTests.test_the_fake_wraps_as_easybuild_does | the fake itself, used by differential "run, wrapped dry-run lines" |
+| ParseTests.test_the_extended_dry_run_names_the_modules_it_builds | `zig/run.zig` test "builtByExtendedDryRun names the modules it builds" |
 | RunTests.test_a_wrapped_module_line_names_the_module | differential "run, wrapped dry-run lines" |
 | RunTests.test_robot_rebuilds_only_the_listed_easyconfig | differential "run, --robot with installed dependencies" |
+| RunTests.test_robot_leaves_out_dependencies_eb_would_not_build | differential "run, --robot with dependencies eb would not build" |
+| RunTests.test_bwrap_mount_points_of_unbuilt_dependencies_are_removed | differential "run, bwrap, --robot leaves no mount point behind" |
+| RunTests.test_wrapped_extended_dry_run_lines_name_the_modules | differential "run, --robot, wrapped extended dry-run lines" |
+| RunTests.test_robot_refuses_a_missing_dependency_that_eb_would_build | differential "run, --robot with a missing dependency eb would build" |
+| RunTests.test_an_extended_dry_run_that_fails_refuses | differential "run, --robot, the extended dry run fails" |
 
 ### tests/test_prepare_recovery.py
 
@@ -345,6 +354,8 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 | EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build |
+| EasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |
 
 ### tests/test_sealed_install.py

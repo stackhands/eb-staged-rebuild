@@ -286,11 +286,18 @@ compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run again" rollback --state-root @ROOT@/state r5
 # The module list from eb --dry-run alone: wrapped as rich wraps it off a
-# terminal, and with --robot listing installed dependencies as [x].
+# terminal, and with --robot listing installed dependencies as [x]. The
+# dependencies marked [ ] are kept only if eb --extended-dry-run builds them.
 compare_admin "run, wrapped dry-run lines" env FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id w1 --skip-live-check -- demo-1.eb
 compare_admin "rollback the wrapped run" rollback --state-root @ROOT@/state w1
 compare_admin "run, --robot with installed dependencies" env FAKE_EB_DEPS=M4/1.4.20,GCCcore/15.2.0 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d1 --skip-live-check -- demo-1.eb --robot
 compare_admin "rollback the --robot run" rollback --state-root @ROOT@/state d1
+compare_admin "run, --robot with dependencies eb would not build" env FAKE_EB_DEPS=GCCcore/15.2.0 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d2 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the run with unbuilt dependencies" rollback --state-root @ROOT@/state d2
+compare_admin "run, --robot, wrapped extended dry-run lines" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d3 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the wrapped --robot run" rollback --state-root @ROOT@/state d3
+compare_admin "run, --robot with a missing dependency eb would build" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d4 --skip-live-check -- demo-1.eb --robot
+compare_admin "run, --robot, the extended dry run fails" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_XFAIL=31 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d5 --skip-live-check -- demo-1.eb --robot
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
@@ -349,6 +356,7 @@ compare_admin "run, bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROO
 compare_admin "run, bwrap, 5.3 layout without stage keys" ${bw} FAKE_EB_VERSION=5.3.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b2 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, unknown release without stage keys" ${bw} FAKE_EB_VERSION=5.5.0 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b3 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, 5.4.1 without stage keys" ${bw} FAKE_EB_VERSION=5.4.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b7 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, --robot leaves no mount point behind" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b9 --skip-live-check -- demo-1.eb --robot
 compare_admin "run, bwrap, overlay" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_OVERLAY=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap probe fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b5 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, auto prefers bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --run-id b6 --skip-live-check --module demo/1 -- demo-1.eb

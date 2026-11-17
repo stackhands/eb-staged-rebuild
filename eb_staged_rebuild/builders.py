@@ -167,6 +167,27 @@ def dry_run_command(ctx):
     return cmd, env
 
 
+def extended_dry_run_command(ctx):
+    """Name each module the build installs, without installing.
+
+    The dry run's arguments, with ``--extended-dry-run`` for ``--dry-run``:
+    EasyBuild resolves the dependencies as the build does and goes through
+    each easyconfig it would build, which ``--stop=fetch`` ends after its
+    first step. EasyBuild 5.4.2 creates the install lock of each in
+    ``.locks`` under the live software tree and, in this mode, does not
+    remove it; ``--ignore-locks`` takes none.
+    """
+    cmd = [
+        ctx.eb_executable,
+        "--extended-dry-run",
+        *ensure_rebuild(filter_eb_args(ctx.eb_args)),
+        "--stop=fetch",
+        "--ignore-locks",
+    ]
+    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules)
+    return cmd, env
+
+
 def _signal_group(child, signum):
     try:
         os.killpg(child.pid, signum)

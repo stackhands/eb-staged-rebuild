@@ -158,25 +158,71 @@ def wrap(line, width):
     return lines
 
 
+def _listed(name):
+    return [rel for rel in os.environ.get(name, "").split(",") if rel]
+
+
+def _robot(argv):
+    return bool({arg.split("=", 1)[0] for arg in argv} & {"--robot", "-r"})
+
+
+def _print_wrapped(lines):
+    width = int(os.environ.get("FAKE_EB_WRAP") or 0)
+    for line in lines:
+        print("\n".join(wrap(line, width)) if width else line)
+
+
 def _dry_run(argv):
     """Print the module list as EasyBuild 5.4.2 does for eb --dry-run.
 
     The listed easyconfigs are [R] with --rebuild, [F] with --force and [x]
-    otherwise. FAKE_EB_DEPS names installed dependencies, as EESSI's are,
-    that --robot lists as [x] before them. FAKE_EB_WRAP wraps every line at
-    that many columns, as rich does when stdout is not a terminal.
+    otherwise. With --robot, the dependencies come before them:
+    FAKE_EB_DEPS names installed ones, as EESSI's are, marked [x];
+    FAKE_EB_UNBUILT names ones marked [ ] that the build leaves alone, as the
+    build dependencies of an installed toolchain are; FAKE_EB_MISSING names
+    ones marked [ ] that the build installs. FAKE_EB_WRAP wraps every line
+    at that many columns, as rich does when stdout is not a terminal.
     """
     names = {arg.split("=", 1)[0] for arg in argv}
     status = "F" if names & {"--force", "-f"} else "R" if "--rebuild" in names else "x"
-    robot = bool(names & {"--robot", "-r"})
-    deps = [rel for rel in os.environ.get("FAKE_EB_DEPS", "").split(",") if rel] if robot else []
+    robot = _robot(argv)
     lines = ["Dry run: printing build status of easyconfigs" + (" and dependencies" if robot else "")]
-    lines += [f" * [x] {rel.replace('/', '-')}.eb (module: {rel})" for rel in deps]
+    if robot:
+        lines += [f" * [x] {rel.replace('/', '-')}.eb (module: {rel})" for rel in _listed("FAKE_EB_DEPS")]
+        unbuilt = _listed("FAKE_EB_UNBUILT") + _listed("FAKE_EB_MISSING")
+        lines += [f" * [ ] {rel.replace('/', '-')}.eb (module: {rel})" for rel in unbuilt]
     for rel in (os.environ.get("FAKE_EB_RELS") or _rel()).split(","):
         lines.append(f" * [{status}] {rel.replace('/', '-')}.eb (module: {rel})")
-    width = int(os.environ.get("FAKE_EB_WRAP") or 0)
-    for line in lines:
-        print("\n".join(wrap(line, width)) if width else line)
+    _print_wrapped(lines)
+
+
+def _extended_dry_run(argv):
+    """Go through the easyconfigs to build as eb --extended-dry-run does.
+
+    With --robot, the dependencies FAKE_EB_MISSING come first, then the
+    listed easyconfigs. FAKE_EB_XFAIL is the exit status of a resolution
+    that fails, and FAKE_EB_WRAP wraps the lines as for the dry run. As
+    EasyBuild 5.4.2 does in this mode, each install lock is left in .locks
+    under the software tree unless --ignore-locks takes none.
+    """
+    failed = os.environ.get("FAKE_EB_XFAIL")
+    if failed:
+        print("ERROR: Missing dependencies: dep/9 (no easyconfig file or existing module found)", file=sys.stderr)
+        return int(failed)
+    rels = (_listed("FAKE_EB_MISSING") if _robot(argv) else []) + (os.environ.get("FAKE_EB_RELS") or _rel()).split(",")
+    lines = []
+    for rel in rels:
+        if "--ignore-locks" not in argv:
+            locks = os.path.join(os.environ["EASYBUILD_INSTALLPATH_SOFTWARE"], ".locks")
+            os.makedirs(os.path.join(locks, f"_tmp_eb-fake___ROOT___{rel.replace('/', '_')}.lock"), exist_ok=True)
+        lines += [
+            f"== processing EasyBuild easyconfig {rel.replace('/', '-')}.eb",
+            f"== building and installing {rel}...",
+            "== COMPLETED: Installation ended successfully (took 0 secs)",
+        ]
+    lines.append(f"== Build succeeded for {len(rels)} out of {len(rels)} (total: 0 secs)")
+    _print_wrapped(lines)
+    return 0
 
 
 def main(argv):
@@ -191,6 +237,8 @@ def main(argv):
     if version and "--version" in argv:
         print(f"This is EasyBuild {version} (framework: {version}, easyblocks: {version}) on host fake.")
         return 0
+    if "--extended-dry-run" in argv:
+        return _extended_dry_run(argv)
     if "--dry-run" in argv:
         _dry_run(argv)
         return 0
@@ -207,20 +255,21 @@ def main(argv):
         software = os.path.join(stage, "software")
         modules = os.path.join(stage, "modules")
         _write_tree(software, modules, os.path.join(live_software, rel))
+        # Each module the dry run lists gets a mount point, as EasyBuild
+        # 5.4.2's prepare_bwrap makes one: its live installation directory,
+        # created if missing, with the stage directory bound over it.
+        mounts = sorted([rel, *(_listed("FAKE_EB_UNBUILT") + _listed("FAKE_EB_MISSING") if _robot(argv) else [])])
+        binds = []
+        for mod in mounts:
+            os.makedirs(os.path.join(live_software, mod), exist_ok=True)
+            os.makedirs(os.path.join(software, mod), exist_ok=True)
+            binds += ["--bind", os.path.join(software, mod), os.path.join(live_software, mod)]
         keys = {
-            "bwrap_cmd": [
-                "bwrap",
-                "--dev-bind",
-                "/",
-                "/",
-                "--bind",
-                os.path.join(software, rel),
-                os.path.join(live_software, rel),
-            ],
+            "bwrap_cmd": ["bwrap", "--dev-bind", "/", "/", *binds],
             "bwrap_installpath": stage,
             "installpath_software": live_software,
             "installpath_modules": os.environ.get("EASYBUILD_INSTALLPATH_MODULES", ""),
-            "modules_to_install": [rel],
+            "modules_to_install": mounts,
         }
         if os.environ.get("FAKE_EB_OVERLAY") == "1":
             keys["bwrap_cmd"] = ["bwrap", "--overlay", "upper", "work", "dest"]

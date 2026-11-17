@@ -15,7 +15,7 @@ Build nodes of a cluster often share the software tree, so the second run may st
 
 Every command that changes something takes the lock of its state root first and keeps it until it is done: =run= for its build and its publication, =resume=, =rollback=, =retire= and =gc=.
 =status=, =probe= and =resolve= only read, and take no lock.
-A run asks EasyBuild for its list of modules, with =eb --dry-run=, before it takes the lock, and builds after: EasyBuild runs twice for each run.
+A run asks EasyBuild for its list of modules, with =eb --dry-run= and, when that marks a module =[ ]=, =eb --extended-dry-run=, before it takes the lock, and builds after: EasyBuild runs two or three times for each run.
 
 The lock is two locks, taken in this order:
 

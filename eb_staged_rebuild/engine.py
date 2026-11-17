@@ -20,6 +20,7 @@ from eb_staged_rebuild.ledger_adapter import EbStackLedger, load_config, publica
 from eb_staged_rebuild.builders import (
     bwrap_command,
     dry_run_command,
+    extended_dry_run_command,
     format_command,
     installpath_command,
     installpath_dirs,
@@ -62,6 +63,7 @@ import re
 
 _ENTRY = re.compile(r"^\s*\*\s+\[[ xFR-]\]")
 _MODULE_LINE = re.compile(r"^\s*\*\s+\[([ xFR-])\]\s+.*\(module:\s*(.+)\)\s*$")
+_BUILDING = "== building and installing"
 
 
 @dataclass
@@ -192,46 +194,118 @@ def _dry_run_entries(text):
         yield entry
 
 
+def _dry_run_modules(text):
+    """The status and Name/version of each module line of eb --dry-run."""
+    modules = []
+    for line in _dry_run_entries(text):
+        match = _MODULE_LINE.match(line)
+        if not match:
+            continue
+        field_text = match.group(2).strip()
+        if " | " in field_text:
+            subdir, short = field_text.split(" | ", 1)
+            modules.append((match.group(1), os.path.join(subdir.strip(), short.strip())))
+        else:
+            modules.append((match.group(1), field_text))
+    return modules
+
+
 def software_rels_from_dry_run(text):
     """Name/version of each module the build replaces or installs.
 
     [x] marks a module that is installed and that the build leaves alone,
     such as an EESSI dependency that --robot lists.
     """
-    rels = []
-    for line in _dry_run_entries(text):
-        match = _MODULE_LINE.match(line)
-        if not match or match.group(1) == "x":
-            continue
-        field_text = match.group(2).strip()
-        if " | " in field_text:
-            subdir, short = field_text.split(" | ", 1)
-            rels.append(os.path.join(subdir.strip(), short.strip()))
+    return [rel for status, rel in _dry_run_modules(text) if status != "x"]
+
+
+def modules_built_by_extended_dry_run(text):
+    """Name/version of each module that eb --extended-dry-run builds, in order.
+
+    EasyBuild prints ``== building and installing NAME/VERSION...`` for each
+    easyconfig it builds. A line wider than the console is wrapped as in
+    the dry run, so the lines after one that starts with ``==`` are joined
+    while they can still make such a line, and until the ``...``.
+    """
+    built = []
+    entry = None
+    for line in text.splitlines():
+        if line.startswith("=="):
+            entry = line
+        elif entry is not None and line.strip():
+            entry += line
         else:
-            rels.append(field_text)
-    return rels
+            entry = None
+            continue
+        if entry.startswith(_BUILDING) and entry.rstrip().endswith("..."):
+            built.append(entry[len(_BUILDING):].rstrip()[:-3].strip())
+            entry = None
+        elif not (entry.startswith(_BUILDING) or _BUILDING.startswith(entry)):
+            entry = None
+    return built
+
+
+def _leave_out_unbuilt(ctx, modules, found, log):
+    """The modules of ``found`` that the build installs, and the others.
+
+    With --robot, the dry run marks [ ] the dependencies of installed
+    modules too, such as the build dependencies of an installed toolchain,
+    which the build leaves alone. eb --extended-dry-run resolves the
+    dependencies as the build does and names each module it would build.
+    """
+    import subprocess
+
+    cmd, env = extended_dry_run_command(ctx)
+    log("module preflight: " + format_command(cmd))
+    completed = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        tail = (completed.stderr or completed.stdout or "").strip()
+        raise Refused(
+            f"eb --extended-dry-run exited {completed.returncode}, so it is not known which "
+            f"modules marked [ ] the build installs. {tail}"
+        )
+    built = modules_built_by_extended_dry_run((completed.stdout or "") + "\n" + (completed.stderr or ""))
+    unnamed = [rel for status, rel in modules if status in ("R", "F") and rel not in built]
+    if not built or unnamed:
+        raise Refused(
+            f"eb --extended-dry-run did not name {', '.join(unnamed) or 'any module'} among the "
+            "modules it builds; refusing to build for an unknown live path"
+        )
+    unbuilt = {rel for status, rel in modules if status == " " and rel not in built}
+    left_out = [rel for rel in found if rel in unbuilt]
+    if left_out:
+        log(
+            f"module preflight: eb would not build {len(left_out)} module(s) that the dry run "
+            f"marks [ ]: {', '.join(left_out)}"
+        )
+    return [rel for rel in found if rel not in unbuilt], left_out
 
 
 def _learn_rels(spec, faults, log):
+    """The modules the build replaces, and those the dry run lists that it leaves out."""
     rels = []
+    left_out = []
     for rel in spec.module_rels:
         if rel not in rels:
             rels.append(rel)
     if spec.builder is not None:
-        return rels
+        return rels, left_out
     ctx = _Ctx(spec, generation_root_for(spec.state_root, "dry-run"), faults)
     cmd, env = dry_run_command(ctx)
     log("module preflight: " + format_command(cmd))
     import subprocess
 
     completed = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
-    found = software_rels_from_dry_run((completed.stdout or "") + "\n" + (completed.stderr or ""))
+    modules = _dry_run_modules((completed.stdout or "") + "\n" + (completed.stderr or ""))
+    found = [rel for status, rel in modules if status != "x"]
     if completed.returncode != 0 and spec.backend == "bwrap" and not found and not rels:
         tail = (completed.stderr or completed.stdout or "").strip()
         raise Refused(
             "bwrap backend did not get a module list from eb --dry-run, so it will not "
             f"mount on an unknown path (eb exited {completed.returncode}). {tail}"
         )
+    if any(status == " " and rel not in rels for status, rel in modules):
+        found, left_out = _leave_out_unbuilt(ctx, modules, found, log)
     for rel in found:
         if rel not in rels:
             rels.append(rel)
@@ -240,7 +314,42 @@ def _learn_rels(spec, faults, log):
             "run needs --module Name/version or an eb --dry-run module line; "
             "refusing to build for an unknown live path"
         )
-    return rels
+    return rels, left_out
+
+
+def _mount_points(spec, left_out):
+    """The live paths EasyBuild's bubblewrap mode would leave behind.
+
+    It creates the live installation directory of each module its dry run
+    lists, as a mount point for the generation, including the modules the
+    build leaves out. Those paths under --software, and their parents, that
+    do not exist yet, deepest first.
+    """
+    if spec.backend != "bwrap":
+        return []
+    absent = []
+    for rel in left_out:
+        parts = rel.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            continue
+        for depth in range(len(parts), 0, -1):
+            sub = "/".join(parts[:depth])
+            if lstat_kind(os.path.join(spec.software, sub)) != "missing":
+                break
+            if sub not in absent:
+                absent.append(sub)
+    return sorted(absent, key=lambda sub: -sub.count("/"))
+
+
+def _remove_mount_points(spec, journal):
+    """Remove the mount points of _mount_points that are still empty directories."""
+    for sub in journal.get("mount_points") or []:
+        path = os.path.join(spec.software, sub)
+        try:
+            if empty_real_dir(path):
+                os.rmdir(path)
+        except OSError:
+            pass
 
 
 def _new_run_id(spec):
@@ -837,6 +946,7 @@ def _build(spec, journal, faults):
         journal["eb_command"] = cmd
         _log("running " + format_command(cmd))
         rc = run_command(cmd, env, faults, "build.invoke")
+        _remove_mount_points(spec, journal)
     elif spec.backend == "userns":
         software, modules = installpath_dirs(journal["generation_root"])
         os.makedirs(software, exist_ok=True)
@@ -1035,7 +1145,7 @@ def _run_locked(spec, faults, journal, fresh_build):
     return _publish_recorded(spec, journal, faults)
 
 
-def _blank_journal(spec, run_id, probes, rels):
+def _blank_journal(spec, run_id, probes, rels, left_out):
     now = _clock(spec)()
     return {
         "schema": SCHEMA,
@@ -1057,6 +1167,7 @@ def _blank_journal(spec, run_id, probes, rels):
         "prepare_returncode": None,
         "publication": "directory-swap",
         "module_rels": rels,
+        "mount_points": _mount_points(spec, left_out),
         "created_at": now,
         "updated_at": now,
         "manifests": _snapshots(spec, rels),
@@ -1111,7 +1222,7 @@ def run(spec):
             or "the user-namespace sandbox is not usable"
         )
         raise Refused(f"{reason}; refusing to run the userns backend")
-    rels = _learn_rels(spec, faults, _log)
+    rels, left_out = _learn_rels(spec, faults, _log)
     for rel in rels:
         _check_install_dir(spec.software, rel)
     run_id = _new_run_id(spec)
@@ -1121,7 +1232,7 @@ def run(spec):
         if os.path.exists(journal_path(spec.state_root, run_id)):
             raise Refused(f"run {run_id} already exists; resume it or choose another --run-id")
         os.makedirs(run_dir_for(spec.state_root, run_id), exist_ok=True)
-        journal = _blank_journal(spec, run_id, probes, rels)
+        journal = _blank_journal(spec, run_id, probes, rels, left_out)
         save_journal(journal_path(spec.state_root, run_id), journal, faults, "journal.created")
         _log(f"run {run_id} backend {spec.backend} generation {journal['generation_root']}")
         return _run_locked(spec, faults, journal, fresh_build=True)

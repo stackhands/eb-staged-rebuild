@@ -277,14 +277,14 @@ fn moduleField(line: []const u8) ?[]const u8 {
     return if (field.len == 0) null else field;
 }
 
-/// software_rels_from_dry_run: Name/version of each module the build
-/// replaces or installs. Off a terminal, EasyBuild's rich output wraps at
-/// the console width; the lines after an entry are joined until it names its
-/// module, or until the next entry, an EasyBuild log line or an empty line.
-/// [x] marks an installed module the build leaves alone, such as an EESSI
-/// dependency that --robot lists.
-fn relsFromDryRun(a: Allocator, text: []const u8) []const []const u8 {
-    var rels: std.ArrayList([]const u8) = .empty;
+const DryRunModule = struct { status: u8, rel: []const u8 };
+
+/// The status and Name/version of each module line of eb --dry-run. Off a
+/// terminal, EasyBuild's rich output wraps at the console width; the lines
+/// after an entry are joined until it names its module, or until the next
+/// entry, an EasyBuild log line or an empty line.
+fn dryRunModules(a: Allocator, text: []const u8) []const DryRunModule {
+    var modules: std.ArrayList(DryRunModule) = .empty;
     var entry: std.ArrayList(u8) = .empty;
     var open = false;
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -295,13 +295,14 @@ fn relsFromDryRun(a: Allocator, text: []const u8) []const []const u8 {
             entry.appendSlice(a, line) catch oom();
             continue;
         }
-        if (open and entryStatus(entry.items).? != 'x') {
+        if (open) {
             if (moduleField(entry.items)) |field| {
+                const status = entryStatus(entry.items).?;
                 if (std.mem.find(u8, field, " | ")) |bar| {
                     const sub = std.mem.trim(u8, field[0..bar], " \t");
                     const short = std.mem.trim(u8, field[bar + 3 ..], " \t");
-                    if (std.fs.path.join(a, &.{ sub, short })) |rel| rels.append(a, rel) catch oom() else |_| {}
-                } else rels.append(a, a.dupe(u8, field) catch oom()) catch oom();
+                    if (std.fs.path.join(a, &.{ sub, short })) |rel| modules.append(a, .{ .status = status, .rel = rel }) catch oom() else |_| {}
+                } else modules.append(a, .{ .status = status, .rel = a.dupe(u8, field) catch oom() }) catch oom();
             }
         }
         if (raw == null) break;
@@ -309,34 +310,179 @@ fn relsFromDryRun(a: Allocator, text: []const u8) []const []const u8 {
         entry.clearRetainingCapacity();
         if (open) entry.appendSlice(a, line) catch oom();
     }
+    return modules.items;
+}
+
+/// software_rels_from_dry_run: Name/version of each module the build
+/// replaces or installs. [x] marks an installed module the build leaves
+/// alone, such as an EESSI dependency that --robot lists.
+fn relsFromDryRun(a: Allocator, text: []const u8) []const []const u8 {
+    return relsOf(a, dryRunModules(a, text));
+}
+
+fn relsOf(a: Allocator, modules: []const DryRunModule) []const []const u8 {
+    var rels: std.ArrayList([]const u8) = .empty;
+    for (modules) |m| if (m.status != 'x') rels.append(a, m.rel) catch oom();
     return rels.items;
 }
 
-fn learnRels(r: *R) E![]const []const u8 {
+const building = "== building and installing";
+
+/// modules_built_by_extended_dry_run: Name/version of each module that eb
+/// --extended-dry-run builds, in order. EasyBuild prints "== building and
+/// installing NAME/VERSION..." for each easyconfig it builds. A line wider
+/// than the console is wrapped as in the dry run, so the lines after one
+/// that starts with "==" are joined while they can still make such a line,
+/// and until the "...".
+fn builtByExtendedDryRun(a: Allocator, text: []const u8) []const []const u8 {
+    var built: std.ArrayList([]const u8) = .empty;
+    var entry: std.ArrayList(u8) = .empty;
+    var open = false;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        if (std.mem.startsWith(u8, line, "==")) {
+            entry.clearRetainingCapacity();
+            entry.appendSlice(a, line) catch oom();
+            open = true;
+        } else if (open and std.mem.trim(u8, line, " \t").len > 0) {
+            entry.appendSlice(a, line) catch oom();
+        } else {
+            open = false;
+            continue;
+        }
+        const e = entry.items;
+        const tail = std.mem.trimEnd(u8, e, " \t");
+        if (std.mem.startsWith(u8, e, building) and std.mem.endsWith(u8, tail, "...")) {
+            built.append(a, a.dupe(u8, std.mem.trim(u8, tail[building.len .. tail.len - 3], " \t")) catch oom()) catch oom();
+            open = false;
+        } else if (!std.mem.startsWith(u8, e, building) and !std.mem.startsWith(u8, building, e)) open = false;
+    }
+    return built.items;
+}
+
+/// The modules the build replaces, and those the dry run lists that it
+/// leaves out.
+const Learned = struct { rels: []const []const u8, left_out: []const []const u8 = &.{} };
+
+/// The modules of found that the build installs, and the others. With
+/// --robot, the dry run marks [ ] the dependencies of installed modules
+/// too, such as the build dependencies of an installed toolchain, which the
+/// build leaves alone. eb --extended-dry-run resolves the dependencies as
+/// the build does and names each module it would build.
+fn leaveOutUnbuilt(r: *R, modules: []const DryRunModule, found: []const []const u8) E!Learned {
+    const a = r.a;
+    var cmd: std.ArrayList([]const u8) = .empty;
+    try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--extended-dry-run" });
+    try cmd.appendSlice(a, engine.ensureRebuild(a, engine.filterEbArgs(a, r.spec.eb_args)));
+    // EasyBuild 5.4.2 creates the install lock of each easyconfig in .locks
+    // under the live software tree and, in this mode, does not remove it.
+    try cmd.appendSlice(a, &.{ "--stop=fetch", "--ignore-locks" });
+    log("module preflight: {s}", .{joinCmd(a, cmd.items)});
+    const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    const exe = resolveExe(a, r.env, r.spec.eb_executable) orelse return r.refuse("[Errno 2] No such file or directory: '{s}'", .{r.spec.eb_executable});
+    const res = common.proc.run(a, exe, cmd.items, envp, .{ .stdout_limit = 256 << 20, .stderr_limit = 64 << 20, .timeout_ms = null, .new_session = false }) catch |err|
+        return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.eb_executable)});
+    const code = res.term.code();
+    if (code != 0) {
+        const tail = std.mem.trim(u8, if (res.stderr.len > 0) res.stderr else res.stdout, " \t\n\r");
+        return r.refuse("eb --extended-dry-run exited {d}, so it is not known which modules marked [ ] the build installs. {s}", .{ code, tail });
+    }
+    const built = builtByExtendedDryRun(a, try a.print("{s}\n{s}", .{ res.stdout, res.stderr }));
+    var unnamed: std.ArrayList([]const u8) = .empty;
+    for (modules) |m| if ((m.status == 'R' or m.status == 'F') and !contains(built, m.rel)) try unnamed.append(a, m.rel);
+    if (built.len == 0 or unnamed.items.len > 0)
+        return r.refuse("eb --extended-dry-run did not name {s} among the modules it builds; refusing to build for an unknown live path", .{if (unnamed.items.len > 0) try std.mem.join(a, ", ", unnamed.items) else "any module"});
+    var kept: std.ArrayList([]const u8) = .empty;
+    var left_out: std.ArrayList([]const u8) = .empty;
+    for (found) |rel| try (if (unbuilt(modules, built, rel)) &left_out else &kept).append(a, rel);
+    if (left_out.items.len > 0)
+        log("module preflight: eb would not build {d} module(s) that the dry run marks [ ]: {s}", .{ left_out.items.len, try std.mem.join(a, ", ", left_out.items) });
+    return .{ .rels = kept.items, .left_out = left_out.items };
+}
+
+fn unbuilt(modules: []const DryRunModule, built: []const []const u8, rel: []const u8) bool {
+    if (contains(built, rel)) return false;
+    for (modules) |m| if (m.status == ' ' and std.mem.eql(u8, m.rel, rel)) return true;
+    return false;
+}
+
+fn learnRels(r: *R) E!Learned {
     const a = r.a;
     var rels: std.ArrayList([]const u8) = .empty;
+    var left_out: []const []const u8 = &.{};
     for (r.spec.module_rels) |rel| if (!contains(rels.items, rel)) try rels.append(a, rel);
     var cmd: std.ArrayList([]const u8) = .empty;
     try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--dry-run" });
     try cmd.appendSlice(a, engine.ensureRebuild(a, engine.filterEbArgs(a, r.spec.eb_args)));
     log("module preflight: {s}", .{joinCmd(a, cmd.items)});
     const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
-    var found: []const []const u8 = &.{};
+    var modules: []const DryRunModule = &.{};
     var code: u32 = 0;
     var tail: []const u8 = "";
     if (resolveExe(a, r.env, r.spec.eb_executable)) |exe| {
         if (common.proc.run(a, exe, cmd.items, envp, .{ .stdout_limit = 256 << 20, .stderr_limit = 64 << 20, .timeout_ms = null, .new_session = false })) |res| {
             code = res.term.code();
             const both = try a.print("{s}\n{s}", .{ res.stdout, res.stderr });
-            found = relsFromDryRun(a, both);
+            modules = dryRunModules(a, both);
             tail = std.mem.trim(u8, if (res.stderr.len > 0) res.stderr else res.stdout, " \t\n\r");
         } else |err| return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.eb_executable)});
     } else return r.refuse("[Errno 2] No such file or directory: '{s}'", .{r.spec.eb_executable});
+    var found = relsOf(a, modules);
     if (code != 0 and std.mem.eql(u8, r.spec.backend, "bwrap") and found.len == 0 and rels.items.len == 0)
         return r.refuse("bwrap backend did not get a module list from eb --dry-run, so it will not mount on an unknown path (eb exited {d}). {s}", .{ code, tail });
+    for (modules) |m| {
+        if (m.status == ' ' and !contains(rels.items, m.rel)) {
+            const learned = try leaveOutUnbuilt(r, modules, found);
+            found = learned.rels;
+            left_out = learned.left_out;
+            break;
+        }
+    }
     for (found) |rel| if (!contains(rels.items, rel)) try rels.append(a, rel);
     if (rels.items.len == 0) return r.refuse("run needs --module Name/version or an eb --dry-run module line; refusing to build for an unknown live path", .{});
-    return rels.items;
+    return .{ .rels = rels.items, .left_out = left_out };
+}
+
+/// The live paths EasyBuild's bubblewrap mode would leave behind. It
+/// creates the live installation directory of each module its dry run
+/// lists, as a mount point for the generation, including the modules the
+/// build leaves out. Those paths under --software, and their parents, that
+/// do not exist yet, deepest first.
+fn mountPoints(r: *R, left_out: []const []const u8) E![]const []const u8 {
+    const a = r.a;
+    var absent: std.ArrayList([]const u8) = .empty;
+    if (!std.mem.eql(u8, r.spec.backend, "bwrap")) return absent.items;
+    for (left_out) |rel| {
+        var parts = std.mem.splitScalar(u8, rel, '/');
+        const sane = while (parts.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) break false;
+        } else true;
+        if (!sane) continue;
+        var end = rel.len;
+        while (true) {
+            const sub = rel[0..end];
+            if (!isKind(try std.fs.path.join(a, &.{ r.spec.software, sub }), "missing")) break;
+            if (!contains(absent.items, sub)) try absent.append(a, sub);
+            end = std.mem.findScalarLast(u8, sub, '/') orelse break;
+        }
+    }
+    std.mem.sort([]const u8, absent.items, {}, deeperFirst);
+    return absent.items;
+}
+
+fn deeperFirst(_: void, x: []const u8, y: []const u8) bool {
+    return std.mem.countScalar(u8, x, '/') > std.mem.countScalar(u8, y, '/');
+}
+
+/// Remove the mount points of mountPoints that are still empty directories.
+fn removeMountPoints(r: *R) void {
+    const points = r.get("mount_points") orelse return;
+    if (points != .list) return;
+    for (points.list) |p| if (p == .str) {
+        const path = std.fs.path.join(r.a, &.{ r.spec.software, p.str }) catch return;
+        if (livecheck.emptyRealDir(r.a, path)) sys.unlinkat(fsx.cwd, path, linux.AT.REMOVEDIR) catch {};
+    };
 }
 
 fn contains(list: []const []const u8, x: []const u8) bool {
@@ -421,6 +567,7 @@ fn build(r: *R) E!u8 {
         else
             return r.refuse("[Errno {d}] {s}: '{s}'", .{ @backingInt(builders.exec_errno), builders.strerror(builders.exec_errno), cmd.items[0] }),
     };
+    if (std.mem.eql(u8, r.spec.backend, "bwrap")) removeMountPoints(r);
     try hit(r, r.faults(), "build.finish");
     r.set("eb_returncode", .{ .int = rc });
     return rc;
@@ -1155,7 +1302,8 @@ pub fn run(r: *R, probes: Py) E!Result {
         };
         r.spec.ledger_config = s(pyfmt.get(policy, "path"));
     }
-    const rels = try learnRels(r);
+    const learned = try learnRels(r);
+    const rels = learned.rels;
     for (rels) |rel| try checkInstallDir(r, rel);
     var run_id: []const u8 = r.spec.run_id orelse "";
     if (run_id.len == 0) {
@@ -1199,6 +1347,7 @@ pub fn run(r: *R, probes: Py) E!Result {
         .{ .key = "prepare_returncode", .value = .null },
         .{ .key = "publication", .value = Py.s("directory-swap") },
         .{ .key = "module_rels", .value = pyList(a, rels) },
+        .{ .key = "mount_points", .value = pyList(a, try mountPoints(r, learned.left_out)) },
         .{ .key = "created_at", .value = .{ .float = t } },
         .{ .key = "updated_at", .value = .{ .float = t } },
         .{ .key = "manifests", .value = .{ .dict = manifests.items } },
@@ -1498,6 +1647,105 @@ test "relsFromDryRun ends an entry at the next entry or log line" {
     const rels = relsFromDryRun(arena_state.allocator(), " * [R] /x/a.eb (module: a/1\n * [ ] /x/b.eb (module: \nb/1)\n * [F] /x/c.eb\n== done\n(module: c/1)\n");
     try std.testing.expectEqual(@as(usize, 1), rels.len);
     try std.testing.expectEqualStrings("b/1", rels[0]);
+}
+
+// EasyBuild 5.4.2, eb --extended-dry-run Top-1.0-GCCcore-15.2.0.eb
+// --robot=$HOME/easyconfigs: --rebuild --stop=fetch --ignore-locks, where Top
+// needs Dep and neither is installed: the output of each easyconfig up to its
+// first step, and the summary; whole, and wrapped at 24 columns.
+const extended_whole =
+    "== resolving dependencies ...\n" ++
+    "\n" ++
+    "== processing EasyBuild easyconfig /home/alice/easyconfigs/Dep-1.0-GCCcore-15.2.0.eb\n" ++
+    "\n" ++
+    "Important note: the actual build & install procedure that will be performed may diverge\n" ++
+    "(slightly) from what is outlined below, due to conditions in the easyblock which are\n" ++
+    "incorrectly handled in a dry run.\n" ++
+    "Any errors that may occur are ignored and reported as warnings, on a per-step basis.\n" ++
+    "Please be aware of this, and only use the information below for quick debugging purposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using 'Binary' easyblock (easybuild.easyblocks.generic.binary @ /opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/binary.py) ***\n" ++
+    "\n" ++
+    "== building and installing Dep/1.0-GCCcore-15.2.0...\n" ++
+    "  >> installation prefix: /tmp/eb-0yw4vdhi/__ROOT__/opt/site/software/Dep/1.0-GCCcore-15.2.0\n" ++
+    "fetching files and verifying checksums... [DRY RUN]\n" ++
+    "\n" ++
+    "== processing EasyBuild easyconfig /home/alice/easyconfigs/Top-1.0-GCCcore-15.2.0.eb\n" ++
+    "\n" ++
+    "Important note: the actual build & install procedure that will be performed may diverge\n" ++
+    "(slightly) from what is outlined below, due to conditions in the easyblock which are\n" ++
+    "incorrectly handled in a dry run.\n" ++
+    "Any errors that may occur are ignored and reported as warnings, on a per-step basis.\n" ++
+    "Please be aware of this, and only use the information below for quick debugging purposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using 'Binary' easyblock (easybuild.easyblocks.generic.binary @ /opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/binary.py) ***\n" ++
+    "\n" ++
+    "== building and installing Top/1.0-GCCcore-15.2.0...\n" ++
+    "  >> installation prefix: /tmp/eb-0yw4vdhi/__ROOT__/opt/site/software/Top/1.0-GCCcore-15.2.0\n" ++
+    "fetching files and verifying checksums... [DRY RUN]\n" ++
+    "\n" ++
+    "== Build succeeded for 2 out of 2 (total: 0 secs)\n" ++
+    "== Summary:\n" ++
+    "   * [SUCCESS] Dep/1.0-GCCcore-15.2.0\n" ++
+    "   * [SUCCESS] Top/1.0-GCCcore-15.2.0\n";
+const extended_24 =
+    "== resolving \ndependencies ...\n" ++
+    "\n" ++
+    "== processing EasyBuild \neasyconfig \n/home/alice/easyconfigs/\nDep-1.0-GCCcore-15.2.0.e\nb\n" ++
+    "\n" ++
+    "Important note: the \nactual build & install \nprocedure that will be \nperformed may diverge\n" ++
+    "(slightly) from what is \noutlined below, due to \nconditions in the \neasyblock which are\n" ++
+    "incorrectly handled in a \ndry run.\n" ++
+    "Any errors that may \noccur are ignored and \nreported as warnings, on \na per-step basis.\n" ++
+    "Please be aware of this, \nand only use the \ninformation below for \nquick debugging \npurposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using \n'Binary' easyblock \n(easybuild.easyblocks.ge\nneric.binary @ \n/opt/easybuild/lib/pytho\nn3.12/site-packages/easy\nbuild/easyblocks/generic\n/binary.py) ***\n" ++
+    "\n" ++
+    "== building and \ninstalling \nDep/1.0-GCCcore-15.2.0..\n.\n" ++
+    "  >> installation \nprefix: \n/tmp/eb-0yw4vdhi/__ROOT_\n_/opt/site/software/Dep/\n1.0-GCCcore-15.2.0\n" ++
+    "fetching files and \nverifying checksums... \n[DRY RUN]\n" ++
+    "\n" ++
+    "== processing EasyBuild \neasyconfig \n/home/alice/easyconfigs/\nTop-1.0-GCCcore-15.2.0.e\nb\n" ++
+    "\n" ++
+    "Important note: the \nactual build & install \nprocedure that will be \nperformed may diverge\n" ++
+    "(slightly) from what is \noutlined below, due to \nconditions in the \neasyblock which are\n" ++
+    "incorrectly handled in a \ndry run.\n" ++
+    "Any errors that may \noccur are ignored and \nreported as warnings, on \na per-step basis.\n" ++
+    "Please be aware of this, \nand only use the \ninformation below for \nquick debugging \npurposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using \n'Binary' easyblock \n(easybuild.easyblocks.ge\nneric.binary @ \n/opt/easybuild/lib/pytho\nn3.12/site-packages/easy\nbuild/easyblocks/generic\n/binary.py) ***\n" ++
+    "\n" ++
+    "== building and \ninstalling \nTop/1.0-GCCcore-15.2.0..\n.\n" ++
+    "  >> installation \nprefix: \n/tmp/eb-0yw4vdhi/__ROOT_\n_/opt/site/software/Top/\n1.0-GCCcore-15.2.0\n" ++
+    "fetching files and \nverifying checksums... \n[DRY RUN]\n" ++
+    "\n" ++
+    "== Build succeeded for 2 \nout of 2 (total: 0 secs)\n" ++
+    "== Summary:\n" ++
+    "   * [SUCCESS] \nDep/1.0-GCCcore-15.2.0\n" ++
+    "   * [SUCCESS] \nTop/1.0-GCCcore-15.2.0\n";
+
+test "builtByExtendedDryRun names the modules it builds" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    for ([_][]const u8{ extended_whole, extended_24 }) |text| {
+        const built = builtByExtendedDryRun(a, text);
+        try std.testing.expectEqual(@as(usize, 2), built.len);
+        try std.testing.expectEqualStrings("Dep/1.0-GCCcore-15.2.0", built[0]);
+        try std.testing.expectEqualStrings("Top/1.0-GCCcore-15.2.0", built[1]);
+    }
+    try std.testing.expectEqual(@as(usize, 0), builtByExtendedDryRun(a, "== building and installing a/1\n== done\n").len);
+}
+
+test "dryRunModules keeps the status of each entry" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const modules = dryRunModules(arena_state.allocator(), " * [x] /x/M4.eb (module: M4/1.4.20)\n * [ ] /x/zlib.eb (module: \nzlib/1.3.1)\n * [R] /x/a.eb (module: a/1)\n");
+    try std.testing.expectEqual(@as(usize, 3), modules.len);
+    try std.testing.expectEqual(@as(u8, 'x'), modules[0].status);
+    try std.testing.expectEqual(@as(u8, ' '), modules[1].status);
+    try std.testing.expectEqualStrings("zlib/1.3.1", modules[1].rel);
+    try std.testing.expectEqual(@as(u8, 'R'), modules[2].status);
 }
 
 test "childEnv fails rather than fall back to the parent environment" {

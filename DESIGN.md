@@ -42,6 +42,19 @@ EasyBuild options that could redirect the build are removed:
 `--remove-ghost-install-dirs`. `--rebuild` is added unless `--rebuild`,
 `--force`, or `-f` is already present.
 
+The module preflight runs `eb --dry-run` against the live tree. With
+`--robot`, the dry run marks `[ ]` the missing dependencies of installed
+modules, such as the build dependencies of an installed toolchain, which the
+build does not install. When it marks a module `[ ]`, the preflight runs
+`eb --extended-dry-run --stop=fetch --ignore-locks`, in which EasyBuild
+resolves the dependencies as the build does and names each module it builds,
+and leaves out the modules it does not build. The tool does not resolve
+dependencies itself. EasyBuild 5.4.2 takes an install lock in the live tree in
+that mode and keeps it; `--ignore-locks` takes none. With `bwrap`, EasyBuild
+creates the live directory of every module the dry run lists as a mount
+point; the journal records those of the left-out modules that did not exist,
+and the run removes them after the build while they are empty.
+
 ## Publish path
 
 The planner requires an existing non-symlink live `Name/version` directory for
@@ -236,14 +249,14 @@ one is closed in this tree, or kept on purpose.
 4. Closed. The tool refuses a `--module` value or a parsed module path that leaves the software or module root.
 5. Closed. Symlink components of a module path are refused. The refusal still applies when the module file is missing.
 6. Closed. Stage roots taken from `bwrap_info.json` must stay inside the run's generation directory.
-7. Closed. A missing `Name/version` is refused before EasyBuild. The build does not create the live directory.
+7. Closed. A missing `Name/version` is refused before EasyBuild. The build does not create the live directory. A `--robot` dependency that EasyBuild would not build is left out instead; the empty mount point that bubblewrap needs for it is removed after the build.
 8. Closed. The temporary file for an atomic write is `.{basename}.new` in the destination's directory. A name already there is removed only when it is a regular file with one hard link, owned by the writer or the metadata owner. Any other file, including a hard link, is refused.
 9. Closed. The state root is refused when any existing component is a symlink.
 10. Closed. An `OSError` from the command line is printed as `eb-staged-rebuild:` and exits 2, without a traceback.
 11. Closed. The unit suite passes with `ResourceWarning` promoted to an error.
 12. Intended. The module preflight can run before a software-symlink refusal. The install build does not. A module-file symlink is refused in planning, after the build and before any swap, because the path may be known only from that preflight.
 13. Intended. Bubblewrap is accepted when `bwrap --dev-bind / / true` succeeds. `user.max_user_namespaces` is reported. A zero value does not by itself refuse a setuid bubblewrap that passes the probe.
-14. Closed. The documentation's explanation of the lock states that the preflight runs before the lock and that EasyBuild runs twice. The lock covers build, publish, resume, rollback, retire, and garbage collection.
+14. Closed. The documentation's explanation of the lock states that the preflight runs before the lock and that EasyBuild runs two or three times. The lock covers build, publish, resume, rollback, retire, and garbage collection.
 15. Intended. Dry-run checks the software directory named by `--module`. It does not check the live module file. That file is checked when a real run plans the publish.
 16. Closed. `--run-id`, `--lock-timeout`, `--skip-live-check`, `--eb`, `EB_STAGED_REBUILD_EB`, `EB_STAGED_REBUILD_STATE_ROOT`, and `EB_STAGED_REBUILD_GRACE_HOURS` are documented.
 17. Closed for the collector: `gc` keeps the state-root lock until collection finishes. Intended for the rest: two state roots are two locks, even when both runs name the same live trees. One state root per live tree is the deployment rule.

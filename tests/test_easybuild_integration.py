@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from eb_staged_rebuild.engine import Spec, run
 from eb_staged_rebuild.errors import Refused
@@ -26,18 +27,18 @@ def _sha256(data):
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-def _easyconfig(path, digest):
+def _easyconfig(path, digest, name="stagedemo", deps=""):
     text = f"""\
 easyblock = 'Binary'
-name = 'stagedemo'
+name = '{name}'
 version = '1'
 homepage = 'https://easybuild.io'
 description = "Local file copy used to exercise a staged rebuild."
 toolchain = SYSTEM
-sources = ['stagedemo-1.txt']
+sources = ['{name}-1.txt']
 checksums = ['{digest}']
-sanity_check_paths = {{'files': ['stagedemo-1.txt'], 'dirs': []}}
-moduleclass = 'tools'
+sanity_check_paths = {{'files': ['{name}-1.txt'], 'dirs': []}}
+{deps}moduleclass = 'tools'
 """
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -124,17 +125,51 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(module))
         return prefix, src, ec, live, module
 
-    def _retarget(self, src, ec, payload):
+    def _install_with_deps(self, work):
+        """stagedemo/1 needs stagedep/1, which was built with stagebuilddep/1.
+
+        stagebuilddep/1 is then removed, as a stack can leave out the build
+        dependencies of what it ships.
+        """
+        src = os.path.join(work, "src")
+        os.makedirs(src)
+        payload = "payload-v1\n"
+        for name, deps in (
+            ("stagebuilddep", ""),
+            ("stagedep", "builddependencies = [('stagebuilddep', '1')]\n"),
+            ("stagedemo", "dependencies = [('stagedep', '1')]\n"),
+        ):
+            with open(os.path.join(src, f"{name}-1.txt"), "w", encoding="utf-8") as handle:
+                handle.write(payload)
+            _easyconfig(os.path.join(work, f"{name}-1.eb"), _sha256(payload), name, deps)
+        ec = os.path.join(work, "stagedemo-1.eb")
+        prefix = os.path.join(work, "prefix")
+        completed = subprocess.run(
+            ["eb", ec, f"--robot={work}:", f"--sourcepath={src}", f"--prefix={prefix}", "--module-syntax=Lua"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            self.fail(completed.stdout + "\n" + completed.stderr)
+        shutil.rmtree(os.path.join(prefix, "software", "stagebuilddep"))
+        shutil.rmtree(os.path.join(prefix, "modules", "all", "stagebuilddep"))
+        live = os.path.join(prefix, "software", "stagedemo", "1")
+        module = os.path.join(prefix, "modules", "all", "stagedemo", "1.lua")
+        self.assertTrue(os.path.isfile(os.path.join(prefix, "modules", "all", "stagedep", "1.lua")))
+        return prefix, src, ec, live, module
+
+    def _retarget(self, src, ec, payload, deps=""):
         with open(os.path.join(src, "stagedemo-1.txt"), "w", encoding="utf-8") as handle:
             handle.write(payload)
-        _easyconfig(ec, _sha256(payload))
+        _easyconfig(ec, _sha256(payload), deps=deps)
 
-    def _rebuild(self, prefix, ec, src, backend):
+    def _rebuild(self, prefix, ec, src, backend, *eb_args):
         spec = Spec(
             software=os.path.join(prefix, "software"),
             modules=os.path.join(prefix, "modules"),
             state_root=os.path.join(prefix, ".eb-staged-rebuild"),
-            eb_args=[ec, f"--sourcepath={src}", "--module-syntax=Lua"],
+            eb_args=[ec, f"--sourcepath={src}", "--module-syntax=Lua", *eb_args],
             backend=backend,
             module_rels=["stagedemo/1"],
             eb_executable="eb",
@@ -227,6 +262,37 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.message)
             self._assert_switched(live, module, inode, watcher, "payload-v2\n")
             self.assertEqual(os.stat(os.path.join(live, "stagedemo-1.txt")).st_uid, os.getuid())
+
+    def _rebuild_with_robot(self, backend):
+        with tempfile.TemporaryDirectory() as work:
+            prefix, src, ec, live, module = self._install_with_deps(work)
+            inode = os.lstat(live).st_ino
+            self._retarget(src, ec, "payload-v2\n", "dependencies = [('stagedep', '1')]\n")
+            watcher = Watcher(
+                os.path.join(live, "stagedemo-1.txt"),
+                {"payload-v1\n", "payload-v2\n"},
+            )
+            watcher.start()
+            try:
+                with patch.dict(os.environ, {"MODULEPATH": os.path.join(prefix, "modules", "all")}):
+                    result = self._rebuild(prefix, ec, src, backend, f"--robot={work}:")
+            finally:
+                self.stop_watcher(watcher)
+            self.assertEqual(result.returncode, 0, result.message)
+            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
+            self.assertFalse(os.path.exists(os.path.join(prefix, "software", "stagebuilddep")))
+            self.assertEqual(os.listdir(os.path.join(prefix, "software", ".locks")), [])
+
+    def test_robot_leaves_out_a_dependency_it_would_not_build(self):
+        self._rebuild_with_robot("installpath")
+
+    def test_bwrap_robot_leaves_no_mount_point_behind(self):
+        from eb_staged_rebuild.probe import probe_bwrap
+
+        probe = probe_bwrap()
+        if not probe.get("usable"):
+            self.skipTest(f"bwrap is not usable here: {probe.get('reason')}")
+        self._rebuild_with_robot("bwrap")
 
     def test_symlink_name_version_is_refused(self):
         with tempfile.TemporaryDirectory() as work:

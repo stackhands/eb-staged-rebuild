@@ -298,26 +298,11 @@ ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
 This is the case =userns= of =site.sh=.
 [[file:../explanation/isolation.org][How a build is kept off the live tree]] explains the namespaces.
 
-** If it fails
+** With =--robot=
 
-A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
-These messages come before or instead of a build:
-
-| Message                                                                                             | Cause                                                                                                                                                                                                                         | What to do                                                                          |
-|-----------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------|
-| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                 | No easyconfig after =--=.                                                                                                                                                                                                     | Put the easyconfig, and any option for EasyBuild, after =--=.                       |
-| =eb-staged-rebuild: /opt/site/software/M4/1.4.20 is a missing, not an existing rebuild directory=   | With =--robot=, the dry run lists =M4/1.4.20=, a build dependency of the installed =GCCcore/15.2.0=, as not installed, and the run refuses each module that is not installed, though =eb --robot= builds only =Example= here. | Rebuild without =--robot=, once any dependency the build itself needs is installed. |
-| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out.                                                                                                                                | Wait for it, or give =--lock-timeout= more seconds.                                 |
-
-The first two in full, as =site.sh= prints them in its cases =no-easyconfig= and =robot=:
-
-#+begin_src bash
-eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --dry-run
-#+end_src
-
-#+begin_example
-eb-staged-rebuild: pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb
-#+end_example
+With =--robot=, EasyBuild's dry run lists the dependencies too.
+It marks =[ ]= those that are not installed, which include the build dependencies of an installed module, here those of the stand-in =GCCcore/15.2.0=; EasyBuild would not build them.
+The run asks =eb --extended-dry-run= which modules the build would install, and leaves the others out:
 
 #+begin_src bash
 eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-robot \
@@ -326,7 +311,116 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 
 #+begin_example
 eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --robot --rebuild
-eb-staged-rebuild: /opt/site/software/M4/1.4.20 is a missing, not an existing rebuild directory
+eb-staged-rebuild: module preflight: eb --extended-dry-run Example-1.0-GCCcore-15.2.0.eb --robot --rebuild --stop=fetch --ignore-locks
+eb-staged-rebuild: module preflight: eb would not build 6 module(s) that the dry run marks [ ]: M4/1.4.20, zlib/1.3.1, M4/1.4.19, Bison/3.8.2, flex/2.6.4, binutils/2.45
+eb-staged-rebuild: run example-robot backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-robot
+eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-robot --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --robot --rebuild
+== Temporary log file in case of crash /tmp/eb-3q666pje/easybuild-po9z2tqs.log
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== resolving dependencies ...
+== Temporary log file(s) /tmp/eb-3q666pje/easybuild-po9z2tqs.log* have been removed.
+== Temporary directory /tmp/eb-3q666pje has been removed.
+== Building/installing in bwrap namespace
+  >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/Bison/3.8.2 /opt/site/software/Bison/3.8.2 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/M4/1.4.19 /opt/site/software/M4/1.4.19 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/M4/1.4.20 /opt/site/software/M4/1.4.20 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/binutils/2.45 /opt/site/software/binutils/2.45 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/flex/2.6.4 /opt/site/software/flex/2.6.4 --bind /opt/site/.eb-staged-rebuild/generations/example-robot/software/zlib/1.3.1 /opt/site/software/zlib/1.3.1
+  >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-robot/bwrap_info.json
+  >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-robot/modules']
+== Temporary log file in case of crash /tmp/eb-vwnrlfxt/easybuild-pml4kytf.log
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== resolving dependencies ...
+== processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+== building and installing Example/1.0-GCCcore-15.2.0...
+  >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+== fetching files and verifying checksums...
+  >> sources:
+  >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+== ... (took < 1 sec)
+== creating build dir, resetting environment...
+  >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+== ... (took < 1 sec)
+== unpacking...
+== ... (took < 1 sec)
+== patching...
+== ... (took < 1 sec)
+== preparing...
+  >> loading toolchain module: GCCcore/15.2.0
+  >> defining build environment for GCCcore/15.2.0 toolchain
+== ... (took < 1 sec)
+== configuring...
+== ... (took < 1 sec)
+== building...
+== ... (took < 1 sec)
+== testing...
+== ... (took < 1 sec)
+== installing...
+== ... (took 12 secs)
+== taking care of extensions...
+== ... (took < 1 sec)
+== restore after iterating...
+== ... (took < 1 sec)
+== postprocessing...
+== ... (took < 1 sec)
+== sanity checking...
+  >> file 'example-1.0.sh' found: OK
+  >> loading modules: Example/1.0-GCCcore-15.2.0...
+== ... (took < 1 sec)
+== cleaning up...
+== ... (took < 1 sec)
+== creating module...
+  >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-robot/modules/all/Example/1.0-GCCcore-15.2.0.lua
+== ... (took < 1 sec)
+== permissions...
+== ... (took < 1 sec)
+== packaging...
+== ... (took < 1 sec)
+== COMPLETED: Installation ended successfully (took 12 secs)
+== Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.061456.log
+== Build succeeded for 1 out of 1 (total: 12 secs)
+== Summary:
+   * [SUCCESS] Example/1.0-GCCcore-15.2.0
+== Temporary log file(s) /tmp/eb-vwnrlfxt/easybuild-pml4kytf.log* have been removed.
+== Temporary directory /tmp/eb-vwnrlfxt has been removed.
+eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run example-robot published 1 module(s)
+#+end_example
+
+With bubblewrap, EasyBuild creates the live directory of each module its dry run lists, as a mount point; the run removes those of the modules it left out, and the live tree keeps only what it had:
+
+#+begin_src bash
+ls -A /opt/site/software /opt/site/software/.locks
+#+end_src
+
+#+begin_example
+/opt/site/software:
+.locks
+Example
+
+/opt/site/software/.locks:
+#+end_example
+
+A =--robot= run that would install a dependency that is not installed is still refused before anything is built: install it with EasyBuild, then rebuild.
+This is the case =robot= of =site.sh=.
+
+** If it fails
+
+A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
+These messages come before or instead of a build:
+
+| Message                                                                                             | Cause                                                                                          | What to do                                                    |
+|-----------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------+---------------------------------------------------------------|
+| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                 | No easyconfig after =--=.                                                                      | Put the easyconfig, and any option for EasyBuild, after =--=. |
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out. | Wait for it, or give =--lock-timeout= more seconds.           |
+
+The first in full, as =site.sh= prints it in its case =no-easyconfig=:
+
+#+begin_src bash
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --dry-run
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb
 #+end_example
 
 ** Related
