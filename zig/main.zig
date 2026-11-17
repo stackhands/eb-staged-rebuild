@@ -62,12 +62,14 @@ const top_help = top_usage ++
     \\
 ;
 
-const probe_usage = "usage: eb-staged-rebuild probe [-h] [--path PATH] [--eb EB] [--json]\n";
+const probe_usage = "usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB] [--json]\n";
 const probe_help = probe_usage ++
     \\
     \\options:
     \\  -h, --help   show this help message and exit
     \\  --path PATH  directory on the filesystem to probe (default: .)
+    \\  --no-create  refuse when --path does not exist instead of creating it for
+    \\               the probe
     \\  --eb EB
     \\  --json
     \\
@@ -896,6 +898,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
 fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var opts = [_]Opt{
         .{ .name = "path", .takes_value = true },
+        .{ .name = "no-create", .takes_value = false },
         .{ .name = "eb", .takes_value = true },
         .{ .name = "json", .takes_value = false },
     };
@@ -905,14 +908,20 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const eb_default = env.get("EB_STAGED_REBUILD_EB") orelse "eb";
-    const eb = opts[1].value orelse eb_default;
+    const eb = opts[2].value orelse eb_default;
     const directory = blk: {
         if (opts[0].value) |p| if (p.len > 0) break :blk p;
         var rb: [sys.path_max]u8 = undefined;
         break :blk a.dupe(u8, fsx.realpath(fsx.cwd, ".", &rb) catch ".") catch ".";
     };
+    if (opts[1].seen) {
+        _ = fsx.statAt(fsx.cwd, directory, true) catch {
+            cli.err("probe path does not exist: {s}\n", .{directory});
+            return 1;
+        };
+    }
     const report = probe.probeAll(a, env, directory, eb) catch |err| refuse("{s}", .{osError(a, err, directory)});
-    if (opts[2].seen) {
+    if (opts[3].seen) {
         const out = json.dumps(a, report, 2, true) catch return 1;
         cli.put(1, out);
         cli.put(1, "\n");
@@ -1028,4 +1037,9 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\
     , StateRoot.bracketed(retire_usage));
     try expect(comptime StateRoot.bracketed(gc_usage) ++ gc_help[gc_usage.len..], StateRoot.bracketed(gc_help));
+}
+
+test "probe help includes --no-create" {
+    try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--no-create]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_help, "--no-create") != null);
 }
