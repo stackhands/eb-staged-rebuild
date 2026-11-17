@@ -263,7 +263,8 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             self._assert_switched(live, module, inode, watcher, "payload-v2\n")
             self.assertEqual(os.stat(os.path.join(live, "stagedemo-1.txt")).st_uid, os.getuid())
 
-    def _rebuild_with_robot(self, backend):
+    def _rebuild_with_deps(self, backend, robot=False):
+        """Rebuild the stagedemo/1 of _install_with_deps with no MODULEPATH, as a new login shell has."""
         with tempfile.TemporaryDirectory() as work:
             prefix, src, ec, live, module = self._install_with_deps(work)
             inode = os.lstat(live).st_ino
@@ -274,8 +275,9 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             )
             watcher.start()
             try:
-                with patch.dict(os.environ, {"MODULEPATH": os.path.join(prefix, "modules", "all")}):
-                    result = self._rebuild(prefix, ec, src, backend, f"--robot={work}:")
+                with patch.dict(os.environ):
+                    os.environ.pop("MODULEPATH", None)
+                    result = self._rebuild(prefix, ec, src, backend, *([f"--robot={work}:"] if robot else []))
             finally:
                 self.stop_watcher(watcher)
             self.assertEqual(result.returncode, 0, result.message)
@@ -283,8 +285,19 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(prefix, "software", "stagebuilddep")))
             self.assertEqual(os.listdir(os.path.join(prefix, "software", ".locks")), [])
 
+    def test_installpath_finds_a_dependency_in_the_live_tree(self):
+        self._rebuild_with_deps("installpath")
+
+    def test_userns_finds_a_dependency_in_the_live_tree(self):
+        from eb_staged_rebuild.probe import probe_userns_sandbox
+
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(f"the user-namespace sandbox is not usable here: {probe.get('reason')}")
+        self._rebuild_with_deps("userns")
+
     def test_robot_leaves_out_a_dependency_it_would_not_build(self):
-        self._rebuild_with_robot("installpath")
+        self._rebuild_with_deps("installpath", robot=True)
 
     def test_bwrap_robot_leaves_no_mount_point_behind(self):
         from eb_staged_rebuild.probe import probe_bwrap
@@ -292,7 +305,7 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         probe = probe_bwrap()
         if not probe.get("usable"):
             self.skipTest(f"bwrap is not usable here: {probe.get('reason')}")
-        self._rebuild_with_robot("bwrap")
+        self._rebuild_with_deps("bwrap", robot=True)
 
     def test_symlink_name_version_is_refused(self):
         with tempfile.TemporaryDirectory() as work:

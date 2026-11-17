@@ -12,11 +12,12 @@ The variables eb-staged-rebuild reads, and the environment of each program it st
 |----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=: the default of =--software=.                                                                                                                                                                                                                                    |
 | =EASYBUILD_INSTALLPATH_MODULES=  | =run=: the default of =--modules=.                                                                                                                                                                                                                                     |
+| =EASYBUILD_SUFFIX_MODULES_PATH=  | =run=: where the live tree's module files are under =--modules=, as EasyBuild reads it, when no =--suffix-modules-path= follows =--=; =all= when it is unset. Passed on to EasyBuild.                                                                                  |
 | =EB_STAGED_REBUILD_STATE_ROOT=   | =run=: the default of =--state-root=, before =.eb-staged-rebuild= beside the software tree. The other commands take =--state-root= only.                                                                                                                               |
 | =EB_STAGED_REBUILD_EB=           | =probe= and =run=: the default of =--eb=, before =eb=.                                                                                                                                                                                                                 |
 | =EB_STAGED_REBUILD_GRACE_HOURS=  | =run= and =gc=: the default of =--grace-hours=, before 144. A value that is not a number makes the binary refuse with =eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'VALUE'= and exit 2, and the Python package stop with a traceback and exit 1. |
 | =PATH=                           | Where =eb=, =bwrap= and =unshare= are found when they are not given as paths.                                                                                                                                                                                          |
-| =MODULEPATH=                     | Passed on to EasyBuild, with the live module tree in front.                                                                                                                                                                                                            |
+| =MODULEPATH=                     | Passed on to EasyBuild, with the directory of the live tree's module files in front.                                                                                                                                                                                   |
 
 ** What EasyBuild gets
 
@@ -24,8 +25,8 @@ Each EasyBuild command, the dry runs and the build alike, gets the caller's envi
 
 - =EASYBUILD_INSTALLPATH=, =EASYBUILD_PREFIX= and =EASYBUILD_REMOVE_GHOST_INSTALL_DIRS= are removed.
 - =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= name the generation's =software= and =modules= with the =installpath= and =userns= backends, and the live trees for the dry runs and for =bwrap=, where =--bwrap-installpath= moves the installation.
-- The live module tree, the directory =--modules= names, goes first on =MODULEPATH=, unless it is there already.
-  That is the directory, not its =all/=: [[file:../explanation/isolation.org][How a build is kept off the live tree]] says what that means for dependencies.
+- The directory of the live tree's module files goes first on =MODULEPATH=, unless it is there already, so that a build into the generation finds the dependencies installed in the live tree.
+  It is =all= under the directory =--modules= names, where EasyBuild writes them; the last =--suffix-modules-path= after =--=, or else =EASYBUILD_SUFFIX_MODULES_PATH=, gives EasyBuild another suffix than =all=, and an absolute one is the directory itself.
 
 The =--prepare= program, the command of =build-events= and =eb-stack= get the caller's environment unchanged.
 

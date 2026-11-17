@@ -298,6 +298,12 @@ compare_admin "run, --robot, wrapped extended dry-run lines" env FAKE_EB_UNBUILT
 compare_admin "rollback the wrapped --robot run" rollback --state-root @ROOT@/state d3
 compare_admin "run, --robot with a missing dependency eb would build" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d4 --skip-live-check -- demo-1.eb --robot
 compare_admin "run, --robot, the extended dry run fails" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_XFAIL=31 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d5 --skip-live-check -- demo-1.eb --robot
+# EasyBuild finds the dependencies installed in the live tree by their module
+# files: all/ under --modules, or the suffix EasyBuild reads.
+compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the MODULEPATH run" rollback --state-root @ROOT@/state m1
+compare_admin "run, MODULEPATH with the suffix EasyBuild reads" env MODULEPATH=/elsewhere/modules/all EASYBUILD_SUFFIX_MODULES_PATH=mods FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m2 --skip-live-check --module demo/1 -- demo-1.eb --suffix-modules-path one
+compare_admin "rollback the run with a modules suffix" rollback --state-root @ROOT@/state m2
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

@@ -232,6 +232,14 @@ def main(argv):
     if ids:
         with open(ids, "a", encoding="utf-8") as handle:
             handle.write(f"{os.getuid()} {os.getgid()}\n")
+    # FAKE_EB_MODULEPATH: a file to which each run adds the MODULEPATH it
+    # gets, or - to print it.
+    modulepath = os.environ.get("FAKE_EB_MODULEPATH")
+    if modulepath == "-":
+        print(f"MODULEPATH={os.environ.get('MODULEPATH', '')}", flush=True)
+    elif modulepath:
+        with open(modulepath, "a", encoding="utf-8") as handle:
+            handle.write(os.environ.get("MODULEPATH", "") + "\n")
     # FAKE_EB_VERSION: answer eb --version as that EasyBuild release does.
     version = os.environ.get("FAKE_EB_VERSION")
     if version and "--version" in argv:

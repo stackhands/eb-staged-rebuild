@@ -27,6 +27,7 @@ The arguments after =--= reach EasyBuild without the options that choose where i
 
 =--rebuild= is added unless =--rebuild=, =--force= or =-f= is there already.
 In EasyBuild's environment, =EASYBUILD_INSTALLPATH=, =EASYBUILD_PREFIX= and =EASYBUILD_REMOVE_GHOST_INSTALL_DIRS= are removed, and =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= are set by the backend; options on the command line also win over a configuration file.
+EasyBuild adds the module files of its install path in front of =MODULEPATH=, the generation's for a build into the generation; the run puts the live tree's, =modules/all=, first on the =MODULEPATH= EasyBuild gets, so the build also finds the dependencies installed in the live tree.
 [[py:eb_staged_rebuild.builders.filter_eb_args]] and [[zig:eb-staged-rebuild.engine.filterEbArgs]] make the cut.
 
 Before it takes the lock, the run asks EasyBuild what the build would install, with =eb --dry-run= and the same arguments against the live tree.
@@ -75,7 +76,7 @@ The paths it reads must be inside the run's generation.
 
 - With =installpath=, nothing keeps a hook or a build command off the live tree.
 - With =bwrap=, only the installation being rebuilt is redirected; the rest of the live tree is as writable as outside the sandbox.
-- With =installpath= and =userns=, the build finds the dependencies in the live tree only if =MODULEPATH= already names its =modules/all=: the tool adds the module root, one level up, where Lmod finds no module under its usual name.
+- The run takes the suffix of the module files, =all= unless EasyBuild is given another, from =--suffix-modules-path= after =--= and =EASYBUILD_SUFFIX_MODULES_PATH= only: with one set in an EasyBuild configuration file, put the live tree's module files on =MODULEPATH= yourself.
 - A =--robot= run does not install a missing dependency: install it with EasyBuild first.
 - The tests run EasyBuild 5.4.2; pin that version, or a later one the integration test has run.
 

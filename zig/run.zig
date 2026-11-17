@@ -214,25 +214,28 @@ fn runDir(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
 // ---- the environment eb runs with -------------------------------------------
 
 /// child_env: the install-path and ghost-removal variables replaced, and the
-/// live module tree first on MODULEPATH. Running eb without these would let
-/// it install into its default path, so an allocation failure is an error,
-/// never a fallback to the parent environment.
+/// module files of the live module tree, all/ under it unless the eb
+/// arguments or the environment give EasyBuild another suffix, first on
+/// MODULEPATH. Running eb without these would let it install into its
+/// default path, so an allocation failure is an error, never a fallback to
+/// the parent environment.
 fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.proc.Envp {
     const a = r.a;
     var b = try common.env.Builder.fromEnv(a, common.env.Env.fromEnvp(env.envp));
     for ([_][]const u8{ "EASYBUILD_INSTALLPATH", "EASYBUILD_PREFIX", "EASYBUILD_REMOVE_GHOST_INSTALL_DIRS", "EASYBUILD_INSTALLPATH_SOFTWARE", "EASYBUILD_INSTALLPATH_MODULES" }) |k| b.unset(k);
     try b.set("EASYBUILD_INSTALLPATH_SOFTWARE", software);
     try b.set("EASYBUILD_INSTALLPATH_MODULES", modules);
+    const live = try engine.modulePath(a, live_modules, engine.modulesSuffix(r.spec.eb_args, b.get("EASYBUILD_SUFFIX_MODULES_PATH")));
     const mp = b.get("MODULEPATH") orelse "";
     var parts: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, mp, ':');
     var present = false;
     while (it.next()) |x| if (x.len > 0) {
         try parts.append(a, x);
-        if (std.mem.eql(u8, x, live_modules)) present = true;
+        if (std.mem.eql(u8, x, live)) present = true;
     };
     if (!present) {
-        const joined = if (parts.items.len > 0) try a.print("{s}:{s}", .{ live_modules, try std.mem.join(a, ":", parts.items) }) else live_modules;
+        const joined = if (parts.items.len > 0) try a.print("{s}:{s}", .{ live, try std.mem.join(a, ":", parts.items) }) else live;
         try b.set("MODULEPATH", joined);
     }
     return b.envp() catch |err| switch (err) {
@@ -1746,6 +1749,36 @@ test "dryRunModules keeps the status of each entry" {
     try std.testing.expectEqual(@as(u8, ' '), modules[1].status);
     try std.testing.expectEqualStrings("zlib/1.3.1", modules[1].rel);
     try std.testing.expectEqual(@as(u8, 'R'), modules[2].status);
+}
+
+test "childEnv puts the live module files first on MODULEPATH" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const T = struct {
+        fn modulepath(alloc: Allocator, parent: common.proc.Envp, eb_args: []const []const u8) !?[]const u8 {
+            const env: probe.Env = .{ .envp = parent };
+            var ctx: admin.Ctx = .{ .a = alloc, .env = env, .pause = .{ .env = env } };
+            var r: R = .{ .a = alloc, .env = env, .ctx = &ctx, .spec = .{ .software = "/s", .modules = "/live/modules", .state_root = "/st", .eb_args = eb_args } };
+            const envp = try childEnv(&r, env, "/gen/software", "/gen/modules", "/live/modules");
+            var i: usize = 0;
+            while (envp[i]) |entry| : (i += 1) {
+                const line = std.mem.span(entry);
+                if (std.mem.startsWith(u8, line, "MODULEPATH=")) return line["MODULEPATH=".len..];
+            }
+            return null;
+        }
+    };
+    const expect = std.testing.expectEqualStrings;
+    try expect("/live/modules/all:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{"MODULEPATH=/m"}, &.{"demo-1.eb"})).?);
+    try expect("/live/modules/all", (try T.modulepath(a, &[_:null]?[*:0]const u8{"PATH=/bin"}, &.{})).?);
+    try expect("/live/modules/all:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{"MODULEPATH=/live/modules/all:/m"}, &.{})).?);
+    try expect("/live/modules/mods:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{ "MODULEPATH=/m", "EASYBUILD_SUFFIX_MODULES_PATH=mods" }, &.{})).?);
+    try expect("/live/modules:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{ "MODULEPATH=/m", "EASYBUILD_SUFFIX_MODULES_PATH=" }, &.{})).?);
+    try expect("/abs/two:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{ "MODULEPATH=/m", "EASYBUILD_SUFFIX_MODULES_PATH=mods" }, &.{ "demo-1.eb", "--suffix-modules-path", "one", "--suffix-modules-path=/abs/two" })).?);
+    try expect("/live/modules/one:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{"MODULEPATH=/m"}, &.{ "--suffix-modules-path", "one" })).?);
+    // EasyBuild never sees this one: filter_eb_args drops it as the value of --prefix.
+    try expect("/live/modules/all:/m", (try T.modulepath(a, &[_:null]?[*:0]const u8{"MODULEPATH=/m"}, &.{ "--prefix", "--suffix-modules-path=x" })).?);
 }
 
 test "childEnv fails rather than fall back to the parent environment" {

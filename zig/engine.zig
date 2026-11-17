@@ -55,30 +55,63 @@ fn inList(list: []const []const u8, s: []const u8) bool {
     return false;
 }
 
+/// The arguments filter_eb_args keeps, one at a time, without allocating.
+const Kept = struct {
+    args: []const []const u8,
+    i: usize = 0,
+
+    fn next(k: *Kept) ?[]const u8 {
+        while (k.i < k.args.len) {
+            const arg = k.args[k.i];
+            const eq = std.mem.findScalar(u8, arg, '=');
+            const name = arg[0 .. eq orelse arg.len];
+            if (std.mem.eql(u8, arg, "--") or inList(&drop_flags, name)) {
+                k.i += 1;
+                continue;
+            }
+            if (inList(&drop_with_value, name)) {
+                k.i += if (eq == null) 2 else 1;
+                continue;
+            }
+            k.i += 1;
+            return arg;
+        }
+        return null;
+    }
+};
+
 /// filter_eb_args: drop install-path and bubblewrap options.
 pub fn filterEbArgs(a: Allocator, args: []const []const u8) []const []const u8 {
     var kept: std.ArrayList([]const u8) = .empty;
-    var i: usize = 0;
-    while (i < args.len) {
-        const arg = args[i];
-        if (std.mem.eql(u8, arg, "--")) {
-            i += 1;
-            continue;
-        }
-        const eq = std.mem.findScalar(u8, arg, '=');
-        const name = arg[0 .. eq orelse arg.len];
-        if (inList(&drop_flags, name)) {
-            i += 1;
-            continue;
-        }
-        if (inList(&drop_with_value, name)) {
-            i += if (eq == null) 2 else 1;
-            continue;
-        }
-        kept.append(a, arg) catch oom();
-        i += 1;
-    }
+    var it: Kept = .{ .args = args };
+    while (it.next()) |arg| kept.append(a, arg) catch oom();
     return kept.items;
+}
+
+/// modules_suffix: the suffix EasyBuild adds to its module install path.
+/// The last --suffix-modules-path that filter_eb_args keeps, else
+/// EASYBUILD_SUFFIX_MODULES_PATH (env_value), else "all", as EasyBuild
+/// reads them. One set in a configuration file is not seen.
+pub fn modulesSuffix(args: []const []const u8, env_value: ?[]const u8) []const u8 {
+    const option = "--suffix-modules-path";
+    var suffix = env_value orelse "all";
+    var it: Kept = .{ .args = args };
+    while (it.next()) |arg| {
+        if (std.mem.startsWith(u8, arg, option ++ "=")) {
+            suffix = arg[option.len + 1 ..];
+        } else if (std.mem.eql(u8, arg, option)) {
+            if (it.next()) |value| suffix = value;
+        }
+    }
+    return suffix;
+}
+
+/// module_path: the directory of module files that EasyBuild puts on
+/// MODULEPATH for the module install path modules.
+pub fn modulePath(a: Allocator, modules: []const u8, suffix: []const u8) Allocator.Error![]const u8 {
+    if (std.mem.startsWith(u8, suffix, "/")) return suffix;
+    if (suffix.len == 0) return modules;
+    return std.fs.path.join(a, &.{ modules, suffix });
 }
 
 /// ensure_rebuild: add --rebuild unless --rebuild, --force or -f is there.

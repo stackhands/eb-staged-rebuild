@@ -275,7 +275,8 @@ tests cover the same bytes, mode, hard links and symbolic links.
 ### tests/test_backends.py
 
 A fake `bwrap` and `unshare` first on PATH answer the probes (`FAKE_BWRAP_FAIL`, `FAKE_UNSHARE_FAIL` make them
-refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
+refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION` and records the `MODULEPATH` it gets in
+`FAKE_EB_MODULEPATH`.
 
 | test | replacement |
 |---|---|
@@ -286,6 +287,7 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | FakeEbTests.test_userns_records_the_stable_prefix | differential "run, userns" |
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
 | FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| FakeEbTests.test_eb_finds_the_live_module_files_on_modulepath | differential "run, MODULEPATH names the live module files" |
 | FakeEbTests.test_easybuild_53_layout_without_stage_keys | differential "run, bwrap, 5.3 layout without stage keys" |
 | FakeEbTests.test_missing_stage_key_on_unknown_version_is_not_published | differential "run, bwrap, unknown release without stage keys" |
 | FakeEbTests.test_overlay_upper_is_not_published | differential "run, bwrap, overlay" |
@@ -293,6 +295,8 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | FakeEbTests.test_auto_prefers_bwrap | differential "run, auto prefers bwrap" |
 | FakeEbTests.test_auto_uses_installpath_when_no_sandbox_is_available | differential "run, auto with no sandbox uses installpath" |
 | FakeEbTests.test_userns_command_mounts_both_live_trees_read_only | differential "run, userns", "run --dry-run, userns" |
+| ChildEnvTests.test_the_live_module_files_go_first_on_modulepath | `zig/run.zig` test "childEnv puts the live module files first on MODULEPATH" |
+| ChildEnvTests.test_the_suffix_is_the_one_easybuild_reads | `zig/run.zig` test "childEnv puts the live module files first on MODULEPATH", differential "run, MODULEPATH with the suffix EasyBuild reads" |
 | BwrapInfoTests.test_legacy_versions_use_the_documented_layout | differential "run, bwrap, 5.3 layout without stage keys" |
 | BwrapInfoTests.test_present_keys_win | differential "run, bwrap" |
 | BwrapInfoTests.test_overlay_is_refused | differential "run, bwrap, overlay" |
@@ -354,6 +358,8 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree |
+| EasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree |
 | EasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build |
 | EasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |

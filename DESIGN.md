@@ -42,6 +42,14 @@ EasyBuild options that could redirect the build are removed:
 `--remove-ghost-install-dirs`. `--rebuild` is added unless `--rebuild`,
 `--force`, or `-f` is already present.
 
+EasyBuild puts the module files of its install path in front of `MODULEPATH`,
+which for a build into a generation are the generation's. Every EasyBuild
+command gets the live tree's module files first on `MODULEPATH`, so the build
+finds the dependencies installed in the live tree: `all` under the module
+root, or the suffix that the last `--suffix-modules-path` or else
+`EASYBUILD_SUFFIX_MODULES_PATH` gives, as EasyBuild reads them. A suffix set in
+an EasyBuild configuration file is not seen.
+
 The module preflight runs `eb --dry-run` against the live tree. With
 `--robot`, the dry run marks `[ ]` the missing dependencies of installed
 modules, such as the build dependencies of an installed toolchain, which the
