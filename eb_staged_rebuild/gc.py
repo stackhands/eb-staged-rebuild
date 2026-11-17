@@ -1,9 +1,9 @@
 """Remove hidden trees retired by successful swaps or explicit rollbacks.
 
-The clock starts at publish or rollback.  The default grace period is the
-unmeasured value the staged-rebuild notes carry; operators must replace it
-with the site's longest job plus a safety margin.  Cluster-wide ``lsof`` is
-not used.
+The clock starts at publish or rollback.  The default grace period, 144
+hours, assumes a longest job of 120 hours that nobody measured; operators
+must replace it with the site's longest job plus a safety margin.
+Cluster-wide ``lsof`` is not used.
 
 A module file moved aside by ``retire`` starts that same clock for the stable
 software directory the module named. gc reports that directory. It does not

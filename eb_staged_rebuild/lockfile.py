@@ -68,6 +68,11 @@ class FileLock:
             raise Refused(f"{label}: {os.path.join(self.state_root, name)}")
 
     def acquire(self, timeout=None):
+        """Take the state root's lock, waiting at most ``timeout`` seconds, or without limit.
+
+        A state root with a symbolic link in its path, or lock files that are not private regular
+        files, are refused, and so is a lock another process still holds when the time is up.
+        """
         if self.fd is not None:
             raise RuntimeError(f"lock at {self.path} is already held by this object")
         reason = assert_real_components(self.state_root)
@@ -118,6 +123,11 @@ class FileLock:
         self.fd, self.posix_fd, self._owner = gate, posix, os.getpid()
 
     def release(self):
+        """Let go of the lock.
+
+        A process that inherited it, such as a forked child, closes its descriptors without
+        unlocking.
+        """
         gate, posix = self.fd, self.posix_fd
         if gate is None:
             return

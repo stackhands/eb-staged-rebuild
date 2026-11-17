@@ -27,6 +27,7 @@ Metadata = namedtuple("Metadata", "info acls")
 
 
 def fsync_dir(path):
+    """Flush a directory's entries to disk, so that a rename in it is durable."""
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
@@ -102,6 +103,11 @@ def read_acls(fd):
 
 
 def read_metadata(path):
+    """Read a regular file's mode, owner and access-control lists through one descriptor.
+
+    The descriptor does not follow a symbolic link. A file that is not regular, or that changes
+    while it is read, is refused.
+    """
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
@@ -245,11 +251,13 @@ def atomic_write(path, data, faults, step, mode=None, metadata_from=None):
 
 
 def read_bytes(path):
+    """Return the whole content of a file."""
     with open(path, "rb") as handle:
         return handle.read()
 
 
 def sha256_bytes(data):
+    """Return the SHA-256 of ``data`` in hexadecimal."""
     import hashlib
 
     return hashlib.sha256(data).hexdigest()

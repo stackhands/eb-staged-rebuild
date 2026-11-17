@@ -47,6 +47,11 @@ def _empty(fd, device):
 
 
 def remove_generation_tree(path, boundary):
+    """Remove ``path``, which must be under ``boundary`` and not ``boundary`` itself.
+
+    Each directory is opened without following a symbolic link; one that another user owns, or
+    that is on another filesystem, is refused.
+    """
     path, boundary = abspath(path), abspath(boundary)
     if path == boundary or not is_within(path, boundary):
         raise Refused(f"cleanup path is outside its generation boundary: {path}")

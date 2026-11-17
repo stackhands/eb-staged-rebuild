@@ -34,6 +34,7 @@ UNSUPPORTED_EXCHANGE_ERRNOS = frozenset(
 
 @dataclass(frozen=True)
 class SwapResult:
+    """How a swap was made: ``renameat2-exchange`` or ``rename-fallback``."""
     method: str
 
 

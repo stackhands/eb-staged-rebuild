@@ -176,6 +176,7 @@ def check_config(config):
 
 
 def load_config(path):
+    """Read and check a ``--config`` file, as ``check_config`` checks it."""
     return check_config(_read_json(path, "build-event config"))
 
 
@@ -261,6 +262,7 @@ def check_metadata(metadata):
 
 
 def load_metadata(path):
+    """Read and check a ``--metadata`` file, as ``check_metadata`` checks it."""
     return check_metadata(_read_json(path, "build-event metadata"))
 
 
@@ -295,10 +297,16 @@ def _resolve_inputs(meta):
 
 
 def event_id(operation, stage):
+    """Return the event id of one stage of an operation: ``eb-build-events/OPERATION/STAGE``."""
     return f"eb-build-events/{operation}/{stage}"
 
 
 def target_of(meta):
+    """Return the target a record names.
+
+    It is the CPU target, followed by ``/accel/ACCELERATOR`` when the metadata names an
+    accelerator.
+    """
     target = meta["target"]
     if "accelerator" in target:
         return f"{target['cpu']}/accel/{target['accelerator']}"
@@ -336,6 +344,11 @@ def _record(meta, stage, now):
 
 
 def started_record(meta, now, previous_modulefile=None):
+    """Return the ``started`` record of an operation.
+
+    With a module file in the metadata, the record names its path and, when one was there
+    before, the SHA-256 of the module file it replaces.
+    """
     record = _record(meta, "started", now)
     if "modulefile" in meta:
         record["modulefile"] = {"path": meta["modulefile"]["path"]}
@@ -617,6 +630,11 @@ def _parser():
 
 
 def main(argv=None):
+    """Run ``python3 -m eb_staged_rebuild.build_events`` and return its exit status.
+
+    The command after ``--`` runs between its records; with ``--deliver``, only what an earlier
+    attempt left pending is sent.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
     command = []
     if "--" in argv:

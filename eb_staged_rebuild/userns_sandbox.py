@@ -72,6 +72,11 @@ def _parser():
 
 
 def main(argv=None):
+    """Run the user-namespace sandbox and return its exit status.
+
+    The mounts are made private, each ``--read-only`` path is mounted read-only, and the command
+    runs. With ``--probe``, the sandbox only checks that a read-only mount refuses a write.
+    """
     args = _parser().parse_args(argv)
     try:
         _make_mounts_private()

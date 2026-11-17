@@ -86,6 +86,7 @@ def publication_records(config, journal, stage, now, corrects=None):
     return records
 
 def load_config(path):
+    """Read and check a ``--ledger-config`` file, and fill in its defaults."""
     path = os.path.abspath(path)
     try:
         with open(path, encoding="utf-8") as handle:
@@ -203,11 +204,18 @@ def _logged_event(log, index):
     return None
 
 class EbStackLedger:
+    """Append records to the ledger a configuration names, through ``eb-stack ledger append``."""
+
     def __init__(self, config):
         self.config = config
         self.required = config["required"]
 
     def append(self, record_path):
+        """Append the record in ``record_path`` and return its receipt.
+
+        The head file and the log line must match what eb-stack reported, and with a public key
+        ``eb-stack ledger verify`` must accept the record; otherwise ``PublisherError`` is raised.
+        """
         config = self.config
         argv = [
             config["eb_stack"], "ledger", "append", record_path,

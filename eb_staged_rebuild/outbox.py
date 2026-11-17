@@ -20,9 +20,14 @@ class PublisherError(Exception):
     """The publisher gave no receipt. The record may or may not be published."""
 
 def outbox_path(run_dir):
+    """Return ``RUN_DIR/outbox.json``."""
     return os.path.join(run_dir, "outbox.json")
 
 def load(run_dir):
+    """Return the run's outbox, or an empty one when there is none.
+
+    An outbox that cannot be read, or whose schema is not 1, needs intervention.
+    """
     path = outbox_path(run_dir)
     if not os.path.lexists(path):
         return {"schema": SCHEMA, "events": []}
@@ -39,6 +44,7 @@ def _save(run_dir, data, faults, step):
     atomic_write(outbox_path(run_dir), raw, faults, step)
 
 def pending(data):
+    """Return the events not yet acknowledged, in order."""
     return [event for event in data["events"] if event["status"] != "acknowledged"]
 
 def enqueue(run_dir, records, faults, step):

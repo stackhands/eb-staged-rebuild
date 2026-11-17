@@ -1,0 +1,1 @@
+Every public module, class, function and method of the Python package has a docstring, so the API pages describe each of them. The comment on `DEFAULT_GRACE_HOURS` and the `gc` module's docstring cited notes a reader does not have for the 144-hour grace period; they say what it assumes.

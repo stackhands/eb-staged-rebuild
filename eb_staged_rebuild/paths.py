@@ -5,10 +5,15 @@ import stat
 
 
 def abspath(path):
+    """Return ``path`` made absolute and normalized, without resolving symbolic links."""
     return os.path.abspath(os.path.normpath(os.fspath(path)))
 
 
 def is_within(child, parent):
+    """Return whether ``child`` is ``parent`` or a path under it.
+
+    Both are made absolute and normalized first; symbolic links are not followed.
+    """
     child = abspath(child)
     parent = abspath(parent)
     if child == parent:
@@ -32,6 +37,7 @@ def lstat_kind(path):
 
 
 def is_real_dir(path):
+    """Return whether ``path`` is a directory and not a symbolic link."""
     return lstat_kind(path) == "dir"
 
 

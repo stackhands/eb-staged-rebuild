@@ -822,6 +822,7 @@ def verify_anchors(eb_stack, log, public_key, anchors, timeout=DEFAULT_TIMEOUT):
 
 
 def package_of(module):
+    """Return the package of a module name: the part before the first ``/``."""
     return module.split("/", 1)[0]
 
 
@@ -996,6 +997,7 @@ def _head_lines(model):
 
 
 def render_package(model, package):
+    """Return the Markdown history page of one package of the model ``build_history`` makes."""
     lines = [f"# Package history: {md(package['name'])}", ""] + _head_lines(model)
     lines += ["## Modules", "", "| Module | State | Last change | Location |", "| --- | --- | --- | --- |"]
     for module in package["modules"]:
@@ -1140,6 +1142,11 @@ def _parser():
 
 
 def main(argv=None):
+    """Run ``python3 -m eb_staged_rebuild.ledger_maintenance`` and return its exit status.
+
+    The result is printed as JSON. The status is 2 for a refusal, and 75 when eb-stack
+    acknowledged nothing, so that the same command can be run again.
+    """
     args = _parser().parse_args(argv)
     if args.timeout <= 0:
         print("ledger-maintenance: --timeout must be positive", file=sys.stderr)

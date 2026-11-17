@@ -50,6 +50,10 @@ def _run(cmd, timeout, env=None):
 
 
 def probe_bwrap():
+    """Return whether ``bwrap`` is installed and usable, and its version.
+
+    It is usable when ``bwrap --dev-bind / / true`` succeeds.
+    """
     path = shutil.which("bwrap")
     if not path:
         return {
@@ -92,6 +96,10 @@ def probe_bwrap():
 
 
 def probe_user_namespaces():
+    """Return the user-namespace settings, read from ``/proc``.
+
+    They are ``user.max_user_namespaces`` and ``kernel.unprivileged_userns_clone``.
+    """
     path = "/proc/sys/user/max_user_namespaces"
     clone_path = "/proc/sys/kernel/unprivileged_userns_clone"
     out = {"max_user_namespaces": None, "unprivileged_userns_clone": None, "readable": False}
@@ -219,6 +227,10 @@ def probe_rename_exchange(directory):
 
 
 def parse_framework_version(text):
+    """Return the EasyBuild framework version in ``eb --version`` output.
+
+    The version is three integers, or ``None`` when the text names none.
+    """
     import re
 
     match = re.search(r"framework:\s*(\d+)\.(\d+)\.(\d+)", text or "")
@@ -253,6 +265,10 @@ def _import_bwrap_keys(eb_path):
 
 
 def probe_easybuild(eb="eb"):
+    """Return where ``eb`` is and which version it is.
+
+    The result also names the bubblewrap option keys this EasyBuild version has.
+    """
     path = shutil.which(eb) if os.sep not in eb else (eb if os.path.isfile(eb) else None)
     result = {
         "eb": eb,
@@ -299,6 +315,7 @@ def probe_easybuild(eb="eb"):
 
 
 def probe_all(directory, eb="eb"):
+    """Return every probe, under the keys ``probe --json`` prints."""
     directory = os.fspath(directory)
     return {
         "bwrap": probe_bwrap(),
