@@ -59,15 +59,20 @@ const top_help = top_usage ++
     \\
 ;
 
-const probe_usage = "usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB] [--json]\n";
+const probe_usage =
+    \\usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB]
+    \\                               [--require-eb] [--json]
+    \\
+;
 const probe_help = probe_usage ++
     \\
     \\options:
-    \\  -h, --help   show this help message and exit
-    \\  --path PATH  directory on the filesystem to probe (default: .)
-    \\  --no-create  refuse when --path does not exist instead of creating it for
-    \\               the probe
+    \\  -h, --help    show this help message and exit
+    \\  --path PATH   directory on the filesystem to probe (default: .)
+    \\  --no-create   refuse when --path does not exist instead of creating it for
+    \\                the probe
     \\  --eb EB
+    \\  --require-eb  refuse when the EasyBuild command is not available
     \\  --json
     \\
 ;
@@ -974,6 +979,7 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "path", .takes_value = true },
         .{ .name = "no-create", .takes_value = false },
         .{ .name = "eb", .takes_value = true },
+        .{ .name = "require-eb", .takes_value = false },
         .{ .name = "json", .takes_value = false },
     };
     var extra: std.ArrayList([]const u8) = .empty;
@@ -995,12 +1001,20 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         };
     }
     const report = probe.probeAll(a, env, directory, eb) catch |err| refuse("{s}", .{osError(a, err, directory)});
-    if (opts[3].seen) {
+    if (opts[4].seen) {
         const out = json.dumps(a, report, 2, true) catch return 1;
         cli.put(1, out);
         cli.put(1, "\n");
     } else {
         probe.printText(a, report);
+    }
+    if (opts[3].seen) {
+        const easybuild = pyfmt.get(report, "easybuild");
+        const found = if (easybuild) |eb_report| pyfmt.truthy(pyfmt.get(eb_report, "found")) else false;
+        if (!found) {
+            cli.err("probe requires EasyBuild, but it was not found: {s}\n", .{eb});
+            return 1;
+        }
     }
     return 0;
 }
@@ -1129,4 +1143,6 @@ test "parseBytes trims whitespace and accepts integers above u64::MAX" {
 test "probe help includes --no-create" {
     try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--no-create]") != null);
     try std.testing.expect(std.mem.indexOf(u8, probe_help, "--no-create") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--require-eb]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_help, "--require-eb") != null);
 }
