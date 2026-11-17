@@ -309,6 +309,23 @@ class TransactionTests(unittest.TestCase):
                 run(spec)
             self.assertIn("escapes", str(caught.exception))
 
+    def test_a_module_that_is_no_directory_is_refused_for_what_it_is(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            open(os.path.join(software, "demo", "file"), "w").close()
+            os.mkfifo(os.path.join(software, "demo", "fifo"))
+            for rel, what in (("demo/2", "missing"), ("demo/file", "a file"), ("demo/fifo", "a special file")):
+                with self.subTest(rel=rel):
+                    spec = _spec(software, modules, state, builder)
+                    spec.module_rels = [rel]
+                    with self.assertRaises(Refused) as caught:
+                        run(spec)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{os.path.join(software, rel)} is {what}, not an existing rebuild directory",
+                    )
+            self.assert_old_live(installed)
+
     def test_symlinked_state_root_is_refused(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, _state, installed, builder = _fixture(root)

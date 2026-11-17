@@ -197,6 +197,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
 | TransactionTests.test_symlink_rebuild_target_is_refused_before_build | differential "run, symlinked target" |
 | TransactionTests.test_module_path_cannot_escape_software_root | differential "run, module escapes" |
+| TransactionTests.test_a_module_that_is_no_directory_is_refused_for_what_it_is | differential "run, no installed target", "run, --module names a file"; `zig/run.zig` test "notADirectory says what the path is instead" |
 | TransactionTests.test_symlinked_state_root_is_refused | differential "run, symlinked state root" |
 | RollbackTests.test_rollback_restores_exact_old_directory | differential "rollback the run", "rollback the run again" |
 | RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback the earlier run after the later one" |

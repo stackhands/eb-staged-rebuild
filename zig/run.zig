@@ -512,7 +512,15 @@ fn checkInstallDir(r: *R, rel: []const u8) E!void {
         return r.refuse("{s} is a symlink. Name/version must stay a real directory: bubblewrap 0.12 and later refuse to mount on a symlink, and bubblewrap 0.6.3 follows one. This tool depends on neither.", .{path});
     if (symlinkComponent(a, path)) |c| return r.refuse("{s}: {s} is a symlink. Name/version must stay a real directory", .{ rel, c });
     const k = kind(path);
-    if (!std.mem.eql(u8, k, "dir")) return r.refuse("{s} is a {s}, not an existing rebuild directory", .{ path, k });
+    if (!std.mem.eql(u8, k, "dir")) return r.refuse("{s} is {s}, not an existing rebuild directory", .{ path, notADirectory(k) });
+}
+
+/// What a path of the kind `k`, not a directory, is, as a refusal says it.
+fn notADirectory(k: []const u8) []const u8 {
+    if (std.mem.eql(u8, k, "missing")) return "missing";
+    if (std.mem.eql(u8, k, "file")) return "a file";
+    if (std.mem.eql(u8, k, "symlink")) return "a symlink";
+    return "a special file";
 }
 
 // ---- build ------------------------------------------------------------
@@ -1833,4 +1841,11 @@ test "childEnv fails rather than fall back to the parent environment" {
         try std.testing.expect(saw);
         if (!failing.has_induced_failure) break;
     }
+}
+
+test "notADirectory says what the path is instead" {
+    try std.testing.expectEqualStrings("missing", notADirectory("missing"));
+    try std.testing.expectEqualStrings("a file", notADirectory("file"));
+    try std.testing.expectEqualStrings("a symlink", notADirectory("symlink"));
+    try std.testing.expectEqualStrings("a special file", notADirectory("other"));
 }

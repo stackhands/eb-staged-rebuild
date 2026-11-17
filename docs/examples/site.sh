@@ -33,8 +33,8 @@ ANCHORS=$SITE/ledger-anchors
 HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
-robot userns no-easyconfig ledger-setup backfill ledger-run ledger-rollback
-build-events anchor project"
+robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
+ledger-rollback build-events anchor project"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -162,6 +162,11 @@ case_userns() {
 
 case_no-easyconfig() {
     step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" --dry-run
+}
+
+case_not-installed() {
+    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --module Example/2.0-GCCcore-15.2.0 -- Example-1.0-GCCcore-15.2.0.eb
 }
 
 case_ledger-setup() {

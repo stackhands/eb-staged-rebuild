@@ -1,0 +1,1 @@
+`run` refused a module to rebuild that does not exist with "PATH is a missing, not an existing rebuild directory", and one that is a FIFO, socket or device with "PATH is a other, ...". The refusal now says "PATH is missing", "PATH is a file" or "PATH is a special file", and the rebuild guide shows it. Both the Python tool and the binary.

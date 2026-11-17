@@ -155,6 +155,9 @@ def _check_roots(spec):
         raise Refused(f"unknown backend {spec.backend}")
 
 
+_NOT_A_DIRECTORY = {"missing": "missing", "file": "a file", "symlink": "a symlink", "other": "a special file"}
+
+
 def _check_install_dir(software, rel):
     path = abspath(os.path.join(software, rel))
     if path == abspath(software) or not is_within(path, software):
@@ -170,7 +173,7 @@ def _check_install_dir(software, rel):
         raise Refused(f"{rel}: {reason}. Name/version must stay a real directory")
     kind = lstat_kind(path)
     if kind != "dir":
-        raise Refused(f"{path} is a {kind}, not an existing rebuild directory")
+        raise Refused(f"{path} is {_NOT_A_DIRECTORY[kind]}, not an existing rebuild directory")
 
 
 def _dry_run_entries(text):

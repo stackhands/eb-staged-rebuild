@@ -408,10 +408,11 @@ This is the case =robot= of =site.sh=.
 A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
 These messages come before or instead of a build:
 
-| Message                                                                                             | Cause                                                                                          | What to do                                                    |
-|-----------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------+---------------------------------------------------------------|
-| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                 | No easyconfig after =--=.                                                                      | Put the easyconfig, and any option for EasyBuild, after =--=. |
-| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out. | Wait for it, or give =--lock-timeout= more seconds.           |
+| Message                                                                                                          | Cause                                                                                                                                                                          | What to do                                                              |
+|------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------|
+| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                              | No easyconfig after =--=.                                                                                                                                                      | Put the easyconfig, and any option for EasyBuild, after =--=.           |
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock=              | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out.                                                                                 | Wait for it, or give =--lock-timeout= more seconds.                     |
+| =eb-staged-rebuild: /opt/site/software/Example/2.0-GCCcore-15.2.0 is missing, not an existing rebuild directory= | =--module=, or a dependency that a =--robot= run would install, names a module that is not installed. A file there is =a file=, and a FIFO, socket or device =a special file=. | Install the module with EasyBuild first, or name one that is installed. |
 
 The first in full, as =site.sh= prints it in its case =no-easyconfig=:
 
@@ -421,6 +422,18 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 
 #+begin_example
 eb-staged-rebuild: pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb
+#+end_example
+
+The last in full, as =site.sh= prints it in its case =not-installed=:
+
+#+begin_src bash
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+  --module Example/2.0-GCCcore-15.2.0 -- Example-1.0-GCCcore-15.2.0.eb
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+eb-staged-rebuild: /opt/site/software/Example/2.0-GCCcore-15.2.0 is missing, not an existing rebuild directory
 #+end_example
 
 ** Related
