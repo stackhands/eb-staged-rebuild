@@ -11,6 +11,10 @@ eb-staged-rebuild rebuilds an existing EasyBuild installation in a versioned gen
 
 EasyBuild `--rebuild` and `--force` empty an existing install before the new install has passed its sanity checks. This program sends EasyBuild at `<state-root>/generations/<run-id>` and exchanges the live directory only after that generation is complete.
 
+On EESSI's CernVM-FS repositories you do not need it: the publish transaction is the atomic swap, and EESSI's own rebuild hook removes the old install early ([`eb_hooks.py`](https://github.com/EESSI/software-layer-scripts/blob/main/eb_hooks.py), `pre_fetch_hook_remove_install_dir_for_rebuilds`, citing [easybuild-framework#5362](https://github.com/easybuilders/easybuild-framework/issues/5362)).
+It is for a stack on NFS, Lustre or GPFS that jobs read while it is rebuilt, where neither of those exists.
+With `--backend bwrap`, the first one `auto` tries, EasyBuild sees the stable path inside the sandbox and nothing in the tree is rewritten; `installpath` and `userns` are for hosts without bubblewrap and rewrite the generation path in each file before the exchange.
+
 Documentation: <https://stackhands.github.io/eb-staged-rebuild/>, built from the Org pages in `docs/orgmode/`: a tutorial, how-to guides, explanation, and a reference, including the API generated from the Python and Zig code.
 
 ```console
