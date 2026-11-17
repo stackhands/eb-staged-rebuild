@@ -23,3 +23,4 @@ zig-pkg/
 /docs/**/__pycache__/
 /.pixi/
 /.lycheecache
+/.asv/

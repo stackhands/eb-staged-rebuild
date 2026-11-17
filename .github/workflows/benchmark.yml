@@ -1,0 +1,70 @@
+name: benchmark
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Install ASV
+        run: python -m pip install --disable-pip-version-check asv virtualenv build
+
+      - name: Configure ASV machine
+        run: asv machine --yes
+
+      - name: Build and benchmark base and head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/_asv_preserve
+          cp -r benchmarks /tmp/_asv_preserve/benchmarks
+          cp asv.conf.json /tmp/_asv_preserve/asv.conf.json
+
+          for sha in "$BASE_SHA" "$PR_SHA"; do
+            git checkout -f "$sha"
+            git clean -fd
+            rm -rf benchmarks
+            cp -r /tmp/_asv_preserve/benchmarks benchmarks
+            cp /tmp/_asv_preserve/asv.conf.json asv.conf.json
+            python -m pip install --disable-pip-version-check --no-deps --force-reinstall .
+            asv run -E "existing:$(command -v python)" --set-commit-hash "$sha" --record-samples --quick
+          done
+
+          mkdir -p results
+          cp -r .asv/results/* results/
+          {
+            echo "main_sha=$BASE_SHA"
+            echo "pr_sha=$PR_SHA"
+          } > results/metadata.txt
+
+      - name: Post benchmark comparison
+        uses: HaoZeke/asv-perch@3910616093eb463672fec90a2011ff71bfdff071 # v1.2.2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          results-path: results/
+          metadata-file: results/metadata.txt

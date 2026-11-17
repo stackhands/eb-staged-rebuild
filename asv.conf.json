@@ -1,0 +1,21 @@
+{
+    "version": 1,
+    "project": "eb-staged-rebuild",
+    "project_url": "https://github.com/stackhands/eb-staged-rebuild",
+    "repo": ".",
+    "branches": ["main"],
+    "dvcs": "git",
+    "environment_type": "virtualenv",
+    "install_timeout": 600,
+    "show_commit_url": "https://github.com/stackhands/eb-staged-rebuild/commit/",
+    "build_command": [
+        "python -m pip wheel --no-deps --no-build-isolation -w {build_cache_dir} {build_dir}"
+    ],
+    "install_command": [
+        "in-dir={env_dir} python -m pip install {wheel_file} --force-reinstall"
+    ],
+    "benchmark_dir": "benchmarks",
+    "env_dir": ".asv/env",
+    "results_dir": ".asv/results",
+    "html_dir": ".asv/html"
+}

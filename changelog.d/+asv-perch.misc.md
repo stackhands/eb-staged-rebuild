@@ -1,0 +1,1 @@
+`benchmarks/` and `asv.conf.json` add an ASV benchmark suite covering module tree scanning and dependency ordering, EasyBuild dry-run log parsing, prefix and module-root rewriting, and staged rebuild planning and rollback, and `.github/workflows/benchmark.yml` compares base and head on pull requests with `HaoZeke/asv-perch`.
