@@ -30,8 +30,8 @@ In EasyBuild's environment, =EASYBUILD_INSTALLPATH=, =EASYBUILD_PREFIX= and =EAS
 [[py:eb_staged_rebuild.builders.filter_eb_args]] and [[zig:eb-staged-rebuild.engine.filterEbArgs]] make the cut.
 
 Before it takes the lock, the run asks EasyBuild what the build would install, with =eb --dry-run= and the same arguments against the live tree.
-Each module EasyBuild would build has to be installed already, as a real directory under =--software=; a module that is installed and only a dependency, marked =[x]=, is left alone.
-That is how a =--robot= that would also build a missing dependency is refused before anything is built.
+Each module the dry run lists has to be installed already, as a real directory under =--software=; a module that is installed and only a dependency, marked =[x]=, is left alone.
+That refuses a =--robot= run before anything is built when the dry run lists a dependency that is not installed, marked =[ ]=.
 
 *** The backends
 
@@ -65,6 +65,7 @@ The paths it reads must be inside the run's generation.
 - With =bwrap=, only the installation being rebuilt is redirected; the rest of the live tree is as writable as outside the sandbox.
 - The =userns= backend runs EasyBuild as root inside its namespace, and EasyBuild refuses to run as root unless =EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES= is set; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
 - With =installpath= and =userns=, the build finds the dependencies in the live tree only if =MODULEPATH= already names its =modules/all=: the tool adds the module root, one level up, where Lmod finds no module under its usual name.
+- With =--robot=, EasyBuild's dry run lists the dependencies of installed modules too, such as the build dependencies of an installed toolchain, and a run is refused for one of those that is not installed, though =eb --robot= would not build it; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
 - The tests run EasyBuild 5.4.2; pin that version, or a later one the integration test has run.
 
 ** Further reading
