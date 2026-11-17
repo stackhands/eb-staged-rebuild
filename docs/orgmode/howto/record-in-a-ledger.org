@@ -136,7 +136,7 @@ The run records =started= before it exchanges the directories and =finished= aft
 
 ** Check that it worked
 
-The run appended a =started= and a =finished= record, after the =finding= that [[file:backfill.org][Record software installed before the ledger]] added for this site:
+The run appended a =started= and a =finished= record:
 
 #+begin_src bash
 /opt/site/bin/eb-stack ledger show --log /opt/site/ledger/stack.jsonl --package Example
@@ -199,8 +199,5 @@ A rollback goes on in the same way, and its records wait for =rollback= to be ru
 
 ** Related
 
-- [[file:build-events.org][Record any build command in the ledger]]
-- [[file:anchor.org][Anchor the ledger once a day]]
-- [[file:package-history.org][Write the history of each package]]
 - [[file:../explanation/ledger.org][What the ledger records]]
 - [[file:../reference/configuration.org][Configuration files]]

@@ -20,9 +20,5 @@ The title names the task.
    remove-old-trees
    retire
    record-in-a-ledger
-   build-events
-   backfill
-   anchor
-   package-history
    add-a-site-hook
 #+end_export

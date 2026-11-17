@@ -27,11 +27,8 @@ eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--
                          [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
 eb-staged-rebuild resolve MODULE_FILE
-eb-staged-rebuild build-events --config FILE --metadata FILE (--deliver | -- COMMAND...)
-eb-staged-rebuild ledger-maintenance {backfill,anchor,verify-anchors,project} OPTION...
 #+end_example
 
-The Python package runs the last two as =python3 -m eb_staged_rebuild.build_events= and =python3 -m eb_staged_rebuild.ledger_maintenance=, and =--help= does not list them.
 The binary's help, from =eb-staged-rebuild --help=; the Python package's can wrap its lines at other places, as [[file:compatibility.org][Compatibility]] lists:
 
 #+begin_example
@@ -234,45 +231,6 @@ Print as JSON the installation directory that the =root= assignment of the modul
 
 When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printed.
 
-*** build-events
-
-Record =started=, =finished= and =aborted= events in an eb-stack ledger around one command, which runs with the caller's environment, stdin, stdout and stderr.
-
-| Option       | Meaning                                                                                   |
-|--------------+-------------------------------------------------------------------------------------------|
-| =--config=   | The build-events configuration, JSON; required.                                           |
-| =--metadata= | What this operation builds, JSON; required.                                               |
-| =--deliver=  | Deliver the events the outbox holds, and run no command; instead of a command after =--=. |
-
-At the end one line, =build-events: MESSAGE=, goes to stderr.
-
-*** ledger-maintenance
-
-Append observed history to an eb-stack ledger, sign and check daily anchors of it, and write a package history from it.
-
-| Command          | Options                                                                                                  |
-|------------------+----------------------------------------------------------------------------------------------------------|
-| =backfill=       | =--eb-stack=, =--log=, =--public-key=, =--key=, =--head=, =--manifest=, =--manifest-sha256=, =--timeout= |
-| =anchor=         | =--eb-stack=, =--log=, =--public-key=, =--key=, =--anchors=, =--timeout=                                 |
-| =verify-anchors= | =--eb-stack=, =--log=, =--public-key=, =--anchors=, =--timeout=                                          |
-| =project=        | =--eb-stack=, =--log=, =--public-key=, =--head=, =--out=, =--timeout=                                    |
-
-| Option              | Meaning                                                                                           |
-|---------------------+---------------------------------------------------------------------------------------------------|
-| =--eb-stack=        | The eb-stack executable.                                                                          |
-| =--log=             | The ledger, a JSON Lines file.                                                                    |
-| =--public-key=      | The Ed25519 public key that signs the heads.                                                      |
-| =--key=             | The Ed25519 PKCS#8 PEM signing key, outside the directories of the log, the head and the anchors. |
-| =--head=            | The signed head file.                                                                             |
-| =--manifest=        | The backfill manifest.                                                                            |
-| =--manifest-sha256= | The SHA-256 the manifest has to have.                                                             |
-| =--anchors=         | The directory of daily anchors.                                                                   |
-| =--out=             | The directory to write the package history to: missing, or holding an earlier history only.       |
-| =--timeout=         | Seconds each eb-stack call may take; the default is 120.                                          |
-
-Every option but =--timeout= is required, and every path has to be absolute, normalized and free of symbolic links.
-On success the command prints one JSON object on stdout.
-
 ** Environment
 
 | Variable                         | Used by                                               | Meaning                                                                                          |
@@ -295,7 +253,7 @@ On success the command prints one JSON object on stdout.
 |     75 | A ledger did not acknowledge a record; the message ends with the command that delivers it, =run resume= or =run rollback again=. |
 |      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.                   |
 
-[[file:exit-status.org][Exit status]] gives the statuses of each command, =build-events= and =ledger-maintenance= included.
+[[file:exit-status.org][Exit status]] gives the statuses of each command.
 
 ** Files
 
@@ -314,5 +272,5 @@ On success the command prints one JSON object on stdout.
 - [[file:../tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]]
 - [[file:../howto/rebuild.org][Rebuild an installed module]]
 - [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]]
-- [[file:configuration.org][Configuration files]], for =--ledger-config=, =build-events= and the backfill manifest
+- [[file:configuration.org][Configuration files]], for =--ledger-config=
 - [[py:eb_staged_rebuild.cli.main]] and the rest of the [[file:api.org][API]]

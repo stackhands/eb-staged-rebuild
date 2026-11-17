@@ -29,8 +29,6 @@ The files stay after a run: a lock file on its own holds nothing, since the kern
 A command that finds the lock taken waits for it, or for =--lock-timeout= seconds and then stops with =another eb-staged-rebuild holds the lock at PATH= and exit status 2; =retire= waits only when =--lock-timeout= says so.
 [[file:../howto/remove-old-trees.org][Remove the trees a rebuild left behind]] shows that message.
 
-=build-events= and =ledger-maintenance anchor= use the same kind of lock on their own directories: one per operation in the outbox, one for the directory of anchors.
-
 ** What was considered and turned down
 
 - /The =flock= alone./
