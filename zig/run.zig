@@ -1217,15 +1217,18 @@ fn required(config: Py) bool {
     return pyfmt.truthy(pyfmt.get(config, "required"));
 }
 
+/// _record_finished: deliver the finished records, then print the message
+/// once, with what is left.
 fn recordFinished(r: *R, config: ?Py, message: []const u8) E!Result {
     if (config) |c| {
         const left = try record(r, c, try records(r, c, "finished", null), "outbox.finished");
         if (left.len > 0) {
-            const m = try r.a.print("{s}; {s}", .{ message, publish_mod.pendingMessage(r.a, left) });
+            const m = try r.a.print("{s}; {s}", .{ message, publish_mod.pendingMessage(r.a, left, "run resume") });
             log("{s}", .{m});
             return .{ .code = publish_mod.pending_exit, .message = m };
         }
     }
+    log("{s}", .{message});
     return .{ .code = 0, .message = message };
 }
 
@@ -1239,7 +1242,7 @@ fn publishRecorded(r: *R) E!Result {
         try validatePublicationSet(r);
         const left = try record(r, c, try records(r, c, "started", null), "outbox.started");
         if (left.len > 0 and required(c)) {
-            const m = try r.a.print("the live directory was not swapped: {s}", .{publish_mod.pendingMessage(r.a, left)});
+            const m = try r.a.print("the live directory was not swapped: {s}", .{publish_mod.pendingMessage(r.a, left, "run resume")});
             r.set("message", Py.s(m));
             try r.save("journal.ledger_pending");
             log("{s}", .{m});
@@ -1248,7 +1251,6 @@ fn publishRecorded(r: *R) E!Result {
     }
     try publish(r);
     const message = try r.a.print("run {s} published {d} module(s)", .{ r.str("run_id"), r.list("modules_plan").len });
-    log("{s}", .{message});
     return recordFinished(r, config, message);
 }
 
@@ -1425,7 +1427,6 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
     };
     if (std.mem.eql(u8, state_name, "complete")) {
         const m = try a.print("run {s} is already complete", .{run_id});
-        log("{s}", .{m});
         return recordFinished(&r, try publisher(&r), m);
     }
     if (std.mem.eql(u8, state_name, "rolled_back")) return r.refuse("run {s} was rolled back; start a new run", .{run_id});
@@ -1451,7 +1452,7 @@ pub fn rollbackRun(r: *R) E!Result {
     if (config) |c| {
         const left = try record(r, c, &.{}, null);
         if (left.len > 0 and required(c)) {
-            const m = try a.print("run {s} was not rolled back: {s}", .{ run_id, publish_mod.pendingMessage(a, left) });
+            const m = try a.print("run {s} was not rolled back: {s}", .{ run_id, publish_mod.pendingMessage(a, left, "run rollback again") });
             log("{s}", .{m});
             return .{ .code = publish_mod.pending_exit, .message = m };
         }
@@ -1479,7 +1480,6 @@ pub fn rollbackRun(r: *R) E!Result {
         };
         if (all) {
             const m = try a.print("run {s} is already rolled back", .{run_id});
-            log("{s}", .{m});
             return recordRollback(r, config, &finished, started, m);
         }
     }
@@ -1488,7 +1488,7 @@ pub fn rollbackRun(r: *R) E!Result {
     if (config) |c| if (finished.count() > 0) {
         const left = try record(r, c, try records(r, c, "started", &finished), "outbox.rollback_started");
         if (left.len > 0 and required(c)) {
-            const m = try a.print("run {s} was not rolled back: {s}", .{ run_id, publish_mod.pendingMessage(a, left) });
+            const m = try a.print("run {s} was not rolled back: {s}", .{ run_id, publish_mod.pendingMessage(a, left, "run rollback again") });
             log("{s}", .{m});
             return .{ .code = publish_mod.pending_exit, .message = m };
         }
@@ -1504,7 +1504,6 @@ pub fn rollbackRun(r: *R) E!Result {
         return err;
     };
     const m = try a.print("run {s} rolled back; replacement kept at its retired path", .{run_id});
-    log("{s}", .{m});
     return recordRollback(r, config, &finished, started, m);
 }
 
@@ -1530,9 +1529,12 @@ fn checkLiveTrees(r: *R) E!void {
 }
 
 /// _record_rollback: finish the correction, or abort a publication that
-/// never finished.
+/// never finished. Then print the message once, with what is left.
 fn recordRollback(r: *R, config: ?Py, finished: *const publish_mod.Corrects, started: bool, message: []const u8) E!Result {
-    const c = config orelse return .{ .code = 0, .message = message };
+    const c = config orelse {
+        log("{s}", .{message});
+        return .{ .code = 0, .message = message };
+    };
     var recs: []const Py = &.{};
     if (finished.count() > 0) {
         recs = try records(r, c, "finished", finished);
@@ -1541,10 +1543,11 @@ fn recordRollback(r: *R, config: ?Py, finished: *const publish_mod.Corrects, sta
     }
     const left = try record(r, c, recs, "outbox.rollback_finished");
     if (left.len > 0) {
-        const m = try r.a.print("{s}; {s}", .{ message, publish_mod.pendingMessage(r.a, left) });
+        const m = try r.a.print("{s}; {s}", .{ message, publish_mod.pendingMessage(r.a, left, "run rollback again") });
         log("{s}", .{m});
         return .{ .code = publish_mod.pending_exit, .message = m };
     }
+    log("{s}", .{message});
     return .{ .code = 0, .message = message };
 }
 

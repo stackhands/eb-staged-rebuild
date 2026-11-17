@@ -343,6 +343,26 @@ ledger_restore
 compare_admin "run, the build changes the ledger policy" env FAKE_EB_LEDGER_EDIT=@ROOT@/ledger.json @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r15 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
 ledger_restore
 compare_admin "ledger records after the policy cases" env cat @ROOT@/ledger.jsonl
+# A correction the ledger did not acknowledge is delivered by rollback, not
+# resume: refused before anything changes when the ledger is required, rolled
+# back with its records waiting when it is not. The line is printed once.
+for impl in py zig; do
+    echo fail-before > "${work}/${impl}/plan4"
+    printf 'fail-before\nfail-before\n' > "${work}/${impl}/plan5"
+    printf 'ok\nfail-before\n' > "${work}/${impl}/plan6"
+done
+compare_admin "run, a ledger run to roll back" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r16 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the ledger refuses the correction" env FAKE_LEDGER_PLAN=@ROOT@/plan4 @CMD@ rollback --state-root @ROOT@/state r16
+compare_admin "rollback again delivers the correction" rollback --state-root @ROOT@/state r16
+ledger_edit required false
+compare_admin "run, an optional ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r17 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the correction records wait" env FAKE_LEDGER_PLAN=@ROOT@/plan5 @CMD@ rollback --state-root @ROOT@/state r17
+compare_admin "rollback again delivers the waiting records" rollback --state-root @ROOT@/state r17
+ledger_restore
+compare_admin "run, the finished record waits" env FAKE_LEDGER_PLAN=@ROOT@/plan6 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r18 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume delivers the finished record" resume --state-root @ROOT@/state r18
+compare_admin "rollback the run whose finished record waited" rollback --state-root @ROOT@/state r18
+compare_admin "ledger records after the rollback cases" env cat @ROOT@/ledger.jsonl
 # A generation-pointer record (schema 3) is not applied as a directory swap.
 for impl in py zig; do
     mkdir -p "${work}/${impl}/state/runs/foreign"

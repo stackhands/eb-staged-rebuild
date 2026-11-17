@@ -38,7 +38,8 @@ A rollback adds a =correction= of each =finished= record, again as =started= and
 The records go into the run's outbox, =runs/RUN_ID/outbox.json=, before they are delivered, and are delivered one at a time, in order.
 A delivery without a receipt leaves the record pending, with the same bytes and the same =event_id=, and eb-stack answers a second append of a known =event_id= with =already recorded=, so a retry adds nothing.
 With the ledger required, the default, a run does not exchange anything until its =started= records are acknowledged, and stops with exit status 75; =resume= delivers them and goes on.
-With ="required": false=, the run goes on, and the records wait in the outbox for =resume=.
+A rollback waits for the =started= records of its correction in the same way, and =rollback= run again delivers them and goes on.
+With ="required": false=, the run or the rollback goes on, and the records wait in the outbox for the next =resume= or =rollback=, whichever the message names.
 
 *** Other sources of records
 

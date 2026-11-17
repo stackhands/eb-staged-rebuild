@@ -269,13 +269,13 @@ On success the command prints one JSON object on stdout.
 
 ** Exit status
 
-| Status | Meaning                                                                                                                |
-|--------+------------------------------------------------------------------------------------------------------------------------|
-|      0 | Done, or nothing to do.                                                                                                |
-|      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                   |
-|      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.         |
-|     75 | A required ledger did not acknowledge a record, and the command stopped before its next change; run it again to go on. |
-|      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.         |
+| Status | Meaning                                                                                                                          |
+|--------+----------------------------------------------------------------------------------------------------------------------------------|
+|      0 | Done, or nothing to do.                                                                                                          |
+|      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                             |
+|      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.                   |
+|     75 | A ledger did not acknowledge a record; the message ends with the command that delivers it, =run resume= or =run rollback again=. |
+|      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.                   |
 
 [[file:exit-status.org][Exit status]] gives the statuses of each command, =build-events= and =ledger-maintenance= included.
 

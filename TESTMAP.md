@@ -456,6 +456,9 @@ it writes, with ids, times and the state root's scope normalized.
 | DirectorySwapLedgerTests.test_required_ledger_failure_does_not_swap | differential "run, ledger append fails", "resume delivers the record" |
 | DirectorySwapLedgerTests.test_policy_change_is_refused_and_the_stable_tree_stays | differential "resume after the ledger actor changed" |
 | DirectorySwapLedgerTests.test_rollback_correction_is_idempotent | differential "rollback a ledger run", "rollback a ledger run again", "ledger records so far" (one correction pair naming the finished record) |
+| DirectorySwapLedgerTests.test_a_run_whose_finished_record_waits_says_so_once | differential "run, the finished record waits", "resume delivers the finished record" |
+| DirectorySwapLedgerTests.test_a_correction_the_ledger_refused_says_to_roll_back_again | differential "rollback, the ledger refuses the correction", "rollback again delivers the correction" |
+| DirectorySwapLedgerTests.test_a_rollback_whose_records_wait_says_to_roll_back_again_once | differential "run, an optional ledger", "rollback, the correction records wait", "rollback again delivers the waiting records", "ledger records after the rollback cases" |
 | DirectorySwapLedgerTests.test_generation_pointer_schema_is_not_applied | differential "resume a generation-pointer record", "status of a generation-pointer record" |
 
 ## tests/test_ledger_policy.py

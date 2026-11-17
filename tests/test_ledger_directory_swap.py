@@ -4,6 +4,8 @@ The checker mirrors ``check_fields`` in stackhands/eb-stack ``src/ledger.rs`` at
 ``79f7f8a4``. eb-stack itself is not modified or executed here.
 """
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -47,7 +49,7 @@ def assert_ledger_fields(testcase, record):
 
 
 class Fixture:
-    def __init__(self, root):
+    def __init__(self, root, required=True):
         self.root = root
         self.software = os.path.join(root, "software")
         self.modules = os.path.join(root, "modules")
@@ -79,7 +81,7 @@ class Fixture:
             "stack": "2026.06",
             "target": "x86_64/generic",
             "action": "rebuild-inplace",
-            "required": True,
+            "required": required,
             "timeout": 5,
         }
         self.config = os.path.join(root, "ledger.json")
@@ -184,6 +186,68 @@ class DirectorySwapLedgerTests(unittest.TestCase):
                 self.assertEqual(entry["location"], fixture.install)
             finished = [entry for entry in fixture.entries() if entry["stage"] == "finished" and entry["action"] != "correction"]
             self.assertEqual(corrections[0]["corrects"], finished[0]["id"])
+
+    def test_a_run_whose_finished_record_waits_says_so_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Fixture(root)
+            fixture.plan_modes("ok", "fail-before")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                result = run(fixture.spec())
+            self.assertEqual(result.returncode, 75, result.message)
+            self.assertRegex(
+                result.message,
+                r"^run run1 published 1 module\(s\); 1 ledger event\(s\) not acknowledged \(.+\); run resume$",
+            )
+            self.assertEqual(out.getvalue().count("run run1 published"), 1, out.getvalue())
+            self.assertTrue(out.getvalue().endswith(f"eb-staged-rebuild: {result.message}\n"), out.getvalue())
+            self.assertEqual(resume(fixture.state, "run1", builder=fixture.builder).returncode, 0)
+            self.assertEqual([entry["stage"] for entry in fixture.entries()], ["started", "finished"])
+
+    def test_a_correction_the_ledger_refused_says_to_roll_back_again(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Fixture(root)
+            self.assertEqual(run(fixture.spec()).returncode, 0)
+            fixture.plan_modes("fail-before")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                refused = rollback(fixture.state, "run1", clock=lambda: 1_700_000_100)
+            self.assertEqual(refused.returncode, 75, refused.message)
+            self.assertRegex(
+                refused.message,
+                r"^run run1 was not rolled back: 1 ledger event\(s\) not acknowledged \(.+\); run rollback again$",
+            )
+            self.assertEqual(out.getvalue(), f"eb-staged-rebuild: {refused.message}\n")
+            self.assertEqual(fixture.payload(), "v1\n")
+            again = rollback(fixture.state, "run1", clock=lambda: 1_700_000_200)
+            self.assertEqual(again.returncode, 0, again.message)
+            self.assertEqual(fixture.payload(), "v0\n")
+            corrections = [entry["stage"] for entry in fixture.entries() if entry["action"] == "correction"]
+            self.assertEqual(corrections, ["started", "finished"])
+
+    def test_a_rollback_whose_records_wait_says_to_roll_back_again_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            fixture = Fixture(root, required=False)
+            self.assertEqual(run(fixture.spec()).returncode, 0)
+            fixture.plan_modes("fail-before", "fail-before")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                first = rollback(fixture.state, "run1", clock=lambda: 1_700_000_100)
+            self.assertEqual(first.returncode, 75, first.message)
+            self.assertRegex(
+                first.message,
+                r"^run run1 rolled back; replacement kept at its retired path; "
+                r"2 ledger event\(s\) not acknowledged \(.+\); run rollback again$",
+            )
+            self.assertEqual(
+                out.getvalue(),
+                f"eb-staged-rebuild: restored all/demo/1.lua\neb-staged-rebuild: {first.message}\n",
+            )
+            self.assertEqual(fixture.payload(), "v0\n")
+            again = rollback(fixture.state, "run1", clock=lambda: 1_700_000_200)
+            self.assertEqual(again.returncode, 0, again.message)
+            corrections = [entry["stage"] for entry in fixture.entries() if entry["action"] == "correction"]
+            self.assertEqual(corrections, ["started", "finished"])
 
     def test_generation_pointer_schema_is_not_applied(self):
         with tempfile.TemporaryDirectory() as root:
