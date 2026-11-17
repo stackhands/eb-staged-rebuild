@@ -63,6 +63,18 @@ def _grace(value):
     return hours
 
 
+class _NamesTheRuns(argparse.Action):
+    """An option of ``rollback`` that names the runs to undo, so the run id is not required."""
+
+    def __init__(self, option_strings, dest, run_id, **kwargs):
+        self.run_id = run_id
+        super().__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, True if self.nargs == 0 else values)
+        self.run_id.required = False
+
+
 def _add_state_root(parser):
     default = os.environ.get("EB_STAGED_REBUILD_STATE_ROOT") or None
     parser.add_argument("--state-root", default=default, required=default is None)
@@ -138,10 +150,29 @@ def _parser():
     verify_p.add_argument("--lock-timeout", type=float, default=None)
     verify_p.add_argument("run_id", metavar="STAGE", help="the run id that names the stage")
 
-    back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
+    back_p = sub.add_parser(
+        "rollback",
+        help="switch back to the previous generation or a named one, or put a retired module file back",
+    )
     _add_state_root(back_p)
     back_p.add_argument("--lock-timeout", type=float, default=None)
-    back_p.add_argument("run_id")
+    run_id = back_p.add_argument("run_id", help="the run to roll back, unless --latest or --to is given")
+    back_p.add_argument(
+        "--to",
+        metavar="GEN",
+        default=None,
+        action=_NamesTheRuns,
+        run_id=run_id,
+        help="roll back every run published over run GEN",
+    )
+    back_p.add_argument(
+        "--latest",
+        nargs=0,
+        default=False,
+        action=_NamesTheRuns,
+        run_id=run_id,
+        help="roll back the newest complete run",
+    )
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
     _add_state_root(gc_p)
@@ -257,7 +288,7 @@ def _dispatch(args):
     if args.command == "verify":
         return verify(args.state_root, args.run_id, lock_timeout=args.lock_timeout).returncode
     if args.command == "rollback":
-        result = rollback(args.state_root, args.run_id, lock_timeout=args.lock_timeout)
+        result = rollback(args.state_root, args.run_id, lock_timeout=args.lock_timeout, to=args.to, latest=args.latest)
         return result.returncode
     if args.command == "gc":
         actions = collect(

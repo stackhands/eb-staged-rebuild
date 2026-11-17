@@ -483,24 +483,43 @@ pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout:
 
 // ---- rollback -------------------------------------------------------------
 
-/// rollback: hand a run journal to run.zig's rollbackRun, or move a
-/// retired module file back. Returns the exit status.
-pub fn rollback(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
-    const a = c.a;
-    const path = journalPath(a, state_root, run_id);
+/// rollback: one run, the newest complete run with `latest`, or every run
+/// published over `to`, under one hold of the state root's lock. A run
+/// journal goes to run.zig's rollbackRun and `to` to its rollbackTo; a
+/// retire record's module file is moved back. Returns the exit status.
+pub fn rollback(c: *Ctx, state_root: []const u8, run_id: ?[]const u8, to: ?[]const u8, latest: bool, lock_timeout: ?f64) u8 {
+    if (@as(u8, @intFromBool(run_id != null)) + @intFromBool(to != null) + @intFromBool(latest) != 1)
+        refuse("give one of a run id, --latest and --to GEN", .{});
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
+    const run_mod = @import("run.zig");
+    var r: run_mod.R = .{ .a = c.a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} } };
+    if (to) |gen| return outcome(&r, run_mod.rollbackTo(&r, gen));
+    const id = run_id orelse run_mod.newestComplete(&r) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
+    return rollbackOne(c, &r, state_root, id);
+}
+
+fn outcome(r: anytype, result: anytype) u8 {
+    const res = result catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
+    return res.code;
+}
+
+fn rollbackOne(c: *Ctx, r: anytype, state_root: []const u8, run_id: []const u8) u8 {
+    const a = c.a;
+    const path = journalPath(a, state_root, run_id);
     const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
     if (!st.isReg()) refuse("no journal at {s}", .{path});
     var journal = main_mod.loadJournal(a, path);
     if (!eqlStr(pyfmt.get(journal, "kind"), "retire")) {
-        const run_mod = @import("run.zig");
-        var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
-        const res = run_mod.rollbackRun(&r) catch |err| switch (err) {
-            error.OutOfMemory => refuse("out of memory", .{}),
-            else => refuse("{s}", .{r.why}),
-        };
-        return res.code;
+        r.journal = journal;
+        r.path = path;
+        return outcome(r, @import("run.zig").rollbackRun(r));
     }
     if (eqlStr(pyfmt.get(journal, "state"), "rolled_back")) {
         log("run {s} is already rolled back", .{run_id});

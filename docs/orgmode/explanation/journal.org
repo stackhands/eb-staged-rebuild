@@ -26,7 +26,7 @@ A later =resume= that rebuilds the run recreates the generation and clears =gene
 *** The states
 
 #+CAPTION: The states of a run's journal, and the commands that move it on.
-#+ATTR_RST: :alt A run creates the journal, then builds. A build that failed, an incomplete tree or a changed live tree make the run failed, and resume builds again. A successful build makes it built, with the module files prepared; run or resume then publish. A failed step of the publication puts the old trees back and the run is built again; otherwise it is complete. rollback of a complete run makes it rolled_back
+#+ATTR_RST: :alt A run creates the journal, then builds. A build that failed, an incomplete tree or a changed live tree make the run failed, and resume builds again. A successful build makes it built, with the module files prepared; run or resume then publish. A failed step of the publication puts the old trees back and the run is built again; otherwise it is complete. rollback of a complete run makes it rolled_back; rollback --to marks each run it rolls back rolling_back first, and rolled_back once its pass is finished
 [[file:figures/states.svg]]
 
 What =resume= does follows from the state:
@@ -36,6 +36,7 @@ What =resume= does follows from the state:
 | =created=, =building=, =failed= | builds the generation again, as long as no module of the run is published              |
 | =built=, =publishing=           | puts every module back to the old tree, then publishes again                           |
 | =complete=                      | delivers ledger records that are still pending, and otherwise says the run is complete |
+| =rolling_back=                  | refuses: run the =rollback --to= that marked it again, to finish its pass              |
 | =rolled_back=                   | refuses: start a new run                                                               |
 
 A run that a preparation program, the checks of =--verify= or a pending ledger record stopped stays =built=, and =resume= runs that step again.

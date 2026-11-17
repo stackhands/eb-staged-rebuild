@@ -69,14 +69,15 @@ class Site:
         merged.update(env)
         return subprocess.run(self.tool + list(args), capture_output=True, text=True, env=merged, cwd=self.root, timeout=300)
 
-    def run(self, *options, extra=None, verify=True, run_id="r1", **env):
+    def run(self, *options, extra=None, verify=True, run_id="r1", modules=("demo/1",), **env):
         if extra is not None:
             env["FAKE_EB_EXTRA"] = json.dumps(extra)
         gate = ["--verify"] if verify else []
+        named = [arg for rel in modules for arg in ("--module", rel)]
         return self.cli(
             "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
             "--backend", "installpath", "--eb", self.eb, "--run-id", run_id, "--skip-live-check",
-            "--module", "demo/1", *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
+            *named, *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
         )
 
     def journal(self, run_id="r1"):

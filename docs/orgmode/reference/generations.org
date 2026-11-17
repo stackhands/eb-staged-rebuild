@@ -44,13 +44,14 @@ Only =example-6= ran with =--verify=, so the other runs have no result of the ch
 | Verify    | =verify= and the result of the checks before publication that the run recorded, from the second table below. |
 | Path      | Where the tree is, for a tree that is not live.                                                              |
 
-| State         | The tree                                                                             |
-|---------------+--------------------------------------------------------------------------------------|
-| =live=        | is at the stable path.                                                               |
-| =replaced=    | is one that a later publication replaced; its run is =complete=.                     |
-| =rolled back= | is one that its run's rollback took out; its run is =rolled_back=.                   |
-| =original=    | was there before the first run, and has no =.eb-staged-rebuild-complete=.            |
-| =unknown=     | names a run whose journal is gone, or whose journal does not name this installation. |
+| State          | The tree                                                                             |
+|----------------+--------------------------------------------------------------------------------------|
+| =live=         | is at the stable path.                                                               |
+| =replaced=     | is one that a later publication replaced; its run is =complete=.                     |
+| =rolled back=  | is one that its run's rollback took out; its run is =rolled_back=.                   |
+| =rolling back= | is one that an unfinished =rollback --to= is taking out; its run is =rolling_back=.  |
+| =original=     | was there before the first run, and has no =.eb-staged-rebuild-complete=.            |
+| =unknown=      | names a run whose journal is gone, or whose journal does not name this installation. |
 
 | Verify                | The run's journal records                                                       |
 |-----------------------+---------------------------------------------------------------------------------|

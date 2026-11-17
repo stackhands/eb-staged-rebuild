@@ -34,7 +34,7 @@ HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
-ledger-rollback build-events anchor project verify list"
+ledger-rollback build-events anchor project verify list rollback-to"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -306,6 +306,17 @@ case_verify() {
 
 case_list() {
     step 0 eb-staged-rebuild list --state-root "$STATE"
+}
+
+case_rollback-to() {
+    run_example example-7
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --latest
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-5
+    step 2 eb-staged-rebuild rollback --state-root "$STATE" --to example-7
 }
 
 clean() {
