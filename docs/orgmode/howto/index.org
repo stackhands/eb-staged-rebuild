@@ -11,4 +11,11 @@ The title names the task.
 .. toctree::
    :maxdepth: 1
 
+   install
+   rebuild
+   set-permissions
+   recover
+   roll-back
+   remove-old-trees
+   retire
 #+end_export

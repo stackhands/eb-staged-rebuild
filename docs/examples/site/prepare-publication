@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""The example site's --prepare program.
+
+eb-staged-rebuild runs it after the build and before the exchange, with the
+path of prepare-context.json. It lets every user read each staged tree and
+run its programs, and makes each module file readable by every user.
+"""
+
+import json
+import os
+import subprocess
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    context = json.load(handle)
+for module in context["modules"]:
+    subprocess.run(["chmod", "-R", "go+rX,go-w", module["staged"]], check=True)
+    os.chmod(module["prepared"], 0o644)
+    print(f"prepare-publication: {module['rel']}: go+rX,go-w on the tree, 0644 on the module file")

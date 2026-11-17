@@ -1,0 +1,313 @@
+#!/bin/bash
+# The example site of the how-to guides. EasyBuild installs
+# Example/1.0-GCCcore-15.2.0 under $SITE (default /opt/site), and each case
+# runs the commands of one guide with eb-staged-rebuild. Before each command
+# it prints a line "+ COMMAND"; a command that exits other than the guide
+# says stops the script.
+#
+#   docs/examples/site.sh setup     the site and the first install
+#   docs/examples/site.sh CASE      one case of the list in $cases below
+#   docs/examples/site.sh all       setup, every case in that order, clean
+#   docs/examples/site.sh clean     remove what setup made
+#
+# The cases change the site in turn, so run them in the order of $cases.
+# They need eb-staged-rebuild, EasyBuild 5.4.2 as eb, Lmod as LMOD_CMD,
+# bwrap, openssl, an eb-stack 0.7.0 binary as EB_STACK_BIN or on PATH, and
+# a $SITE that exists and that you can write. The guides show the output of
+# a run as alice on login1.
+set -euo pipefail
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+. "$here/steps.sh"
+SITE=${SITE:-/opt/site}
+EASYCONFIGS=$HOME/easyconfigs
+STATE=$SITE/.eb-staged-rebuild
+MODULE=$SITE/modules/all/Example/1.0-GCCcore-15.2.0.lua
+EB_STACK=$SITE/bin/eb-stack
+KEY=$SITE/keys/ledger.pem
+PUB=$SITE/keys/ledger.pub
+LOG=$SITE/ledger/stack.jsonl
+HEAD=$SITE/ledger-heads/head.json
+ANCHORS=$SITE/ledger-anchors
+HISTORY=$SITE/ledger-history
+
+cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
+robot userns no-easyconfig ledger-setup backfill ledger-run ledger-rollback
+build-events anchor project"
+
+export EASYBUILD_SOURCEPATH=$SITE/sources
+export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
+export EASYBUILD_INSTALLPATH_MODULES=$SITE/modules
+export EASYBUILD_MODULE_SYNTAX=Lua
+export MODULEPATH=$SITE/modules/all:$SITE/standin/modules/all
+# EasyBuild's output in the order a terminal shows it, not as a pipe buffers it.
+export PYTHONUNBUFFERED=1
+
+run_example() {
+    local id=$1
+    shift
+    step "${STATUS:-0}" eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --run-id "$id" "$@" -- Example-1.0-GCCcore-15.2.0.eb
+}
+
+sha256() {
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+setup() {
+    install -d "$SITE/software" "$SITE/modules" "$SITE/sources/e/Example" "$SITE/bin" \
+        "$SITE/standin/modules/all/GCCcore" "$EASYCONFIGS" "$HOME/sources"
+    install -m 644 "$here/site/GCCcore-15.2.0.lua" "$SITE/standin/modules/all/GCCcore/15.2.0.lua"
+    install -m 644 "$here/site/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
+    install -m 644 "$here/site/example-1.0.sh" "$HOME/sources/example-1.0.sh"
+    install -m 644 "$here/site/Example-1.0-GCCcore-15.2.0.eb" "$EASYCONFIGS/"
+    install -m 755 "$here/site/prepare-publication" "$SITE/bin/prepare-publication"
+    cd "$EASYCONFIGS"
+    step 0 eb Example-1.0-GCCcore-15.2.0.eb
+}
+
+case_probe() {
+    step 0 eb-staged-rebuild probe --path "$SITE/software"
+}
+
+case_dry-run() {
+    step 0 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --dry-run -- Example-1.0-GCCcore-15.2.0.eb
+}
+
+case_rebuild() {
+    run_example example-1
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-1
+    step 0 ls -A "$SITE/software/Example"
+    step 0 eb-staged-rebuild resolve "$MODULE"
+    step 0 "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_prepare() {
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh" "$MODULE"
+    run_example example-2 --prepare "$SITE/bin/prepare-publication"
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh" "$MODULE"
+    step 0 cat "$STATE/runs/example-2/prepare-context.json"
+}
+
+case_files() {
+    step 0 ls -A "$STATE" "$STATE/runs/example-2" "$STATE/generations/example-2"
+    step 0 cat "$SITE/software/Example/1.0-GCCcore-15.2.0/.eb-staged-rebuild-complete"
+}
+
+case_fail() {
+    # The source file in the source path is no longer the one the
+    # easyconfig's checksum was taken from.
+    printf 'echo changed\n' >>"$SITE/sources/e/Example/example-1.0.sh"
+    STATUS=42 run_example example-3
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-3
+    step 0 "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_resume() {
+    step 0 cp "$HOME/sources/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
+    step 0 eb-staged-rebuild resume --state-root "$STATE" example-3
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-3
+}
+
+case_rollback() {
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" example-3
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-3
+    step 0 ls -A "$SITE/software/Example"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" example-3
+}
+
+case_gc() {
+    step 0 eb-staged-rebuild status --state-root "$STATE"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --dry-run
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --grace-hours 0 --dry-run
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --grace-hours 0
+    step 0 ls -A "$SITE/software/Example"
+}
+
+case_retire() {
+    step 0 eb-staged-rebuild retire --state-root "$STATE" --module-file "$MODULE" \
+        --reason 'provided by EESSI 2026.06' --dry-run
+    step 0 eb-staged-rebuild retire --state-root "$STATE" --module-file "$MODULE" \
+        --reason 'provided by EESSI 2026.06'
+    local id
+    id=$(eb-staged-rebuild status --state-root "$STATE" | awk '$3 == "retire" { id = $1 } END { print id }')
+    step 0 eb-staged-rebuild status --state-root "$STATE" "$id"
+    step 0 ls -lA "$SITE/modules/all/Example"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --grace-hours 0 --dry-run
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" "$id"
+    step 0 ls -lA "$SITE/modules/all/Example"
+}
+
+case_lock() {
+    # Another process holds the state root's lock for three seconds.
+    flock "$STATE/.lock" sleep 3 &
+    sleep 0.5
+    step 2 eb-staged-rebuild gc --state-root "$STATE" --dry-run --lock-timeout 0.2
+    wait
+}
+
+case_robot() {
+    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --run-id example-robot -- Example-1.0-GCCcore-15.2.0.eb --robot
+}
+
+case_userns() {
+    STATUS=1 run_example example-userns --backend userns
+}
+
+case_no-easyconfig() {
+    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" --dry-run
+}
+
+case_ledger-setup() {
+    install -d "$SITE/etc" "$SITE/keys" "$SITE/ledger" "$SITE/ledger-heads"
+    install -m 755 "${EB_STACK_BIN:-$(command -v eb-stack)}" "$EB_STACK"
+    step 0 "$EB_STACK" --version
+    step 0 openssl genpkey -algorithm ed25519 -out "$KEY"
+    step 0 chmod 400 "$KEY"
+    step 0 openssl pkey -in "$KEY" -pubout -out "$PUB"
+    cat >"$SITE/etc/ledger.json" <<EOF
+{
+  "eb_stack": "$EB_STACK",
+  "log": "$LOG",
+  "key": "$KEY",
+  "public_key": "$PUB",
+  "head": "$HEAD",
+  "actor": "alice",
+  "stack": "2026.06",
+  "target": "x86_64/amd/zen4"
+}
+EOF
+    step 0 cat "$SITE/etc/ledger.json"
+}
+
+case_backfill() {
+    local log manifest=$HOME/backfill/audit-1.json
+    log=$(ls "$SITE/software/Example/1.0-GCCcore-15.2.0/easybuild/"easybuild-Example-1.0-*.log | head -n 1)
+    install -d "$HOME/backfill"
+    cat >"$manifest" <<EOF
+{
+  "schema": "eb-staged-rebuild/observed-backfill/1",
+  "manifest_id": "audit-1",
+  "observed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "observer": "alice",
+  "stack": "2026.06",
+  "target": "x86_64/amd/zen4",
+  "observations": [
+    {
+      "module": "Example/1.0-GCCcore-15.2.0",
+      "location": "$SITE/software/Example/1.0-GCCcore-15.2.0",
+      "modulefile": {"path": "$MODULE", "sha256": "$(sha256 "$MODULE")"},
+      "provenance": [
+        {"ref": "$log", "kind": "easybuild-log", "sha256": "$(sha256 "$log")"}
+      ],
+      "note": "installed before the site kept a ledger"
+    }
+  ]
+}
+EOF
+    chmod 444 "$manifest"
+    step 0 cat "$manifest"
+    step 0 sha256sum "$manifest"
+    step 0 eb-staged-rebuild ledger-maintenance backfill --eb-stack "$EB_STACK" --log "$LOG" \
+        --public-key "$PUB" --key "$KEY" --head "$HEAD" \
+        --manifest "$manifest" --manifest-sha256 "$(sha256 "$manifest")"
+    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
+}
+
+case_ledger-run() {
+    run_example example-4 --ledger-config "$SITE/etc/ledger.json"
+    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
+    step 0 "$EB_STACK" ledger verify --log "$LOG" --public-key "$PUB" --record 2 --head "$HEAD"
+}
+
+case_ledger-rollback() {
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" example-4
+    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
+}
+
+case_build-events() {
+    install -d "$SITE/build-events"
+    cat >"$SITE/etc/build-events.json" <<EOF
+{
+  "eb_stack": "$EB_STACK",
+  "log": "$LOG",
+  "key": "$KEY",
+  "public_key": "$PUB",
+  "outbox": "$SITE/build-events"
+}
+EOF
+    cat >"$HOME/example-5.json" <<EOF
+{
+  "operation": "example-1.0-zen4-5",
+  "actor": "alice",
+  "stack": "2026.06",
+  "target": {"cpu": "x86_64/amd/zen4"},
+  "module": "Example/1.0-GCCcore-15.2.0",
+  "location": "$SITE/software/Example/1.0-GCCcore-15.2.0",
+  "action": "rebuild-inplace",
+  "easyconfig": {"path": "$EASYCONFIGS/Example-1.0-GCCcore-15.2.0.eb"},
+  "modulefile": {"path": "$MODULE"},
+  "tool": {"name": "EasyBuild", "version": "5.4.2"}
+}
+EOF
+    step 0 cat "$SITE/etc/build-events.json" "$HOME/example-5.json"
+    step 0 eb-staged-rebuild build-events --config "$SITE/etc/build-events.json" \
+        --metadata "$HOME/example-5.json" -- \
+        eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --run-id example-5 -- Example-1.0-GCCcore-15.2.0.eb
+    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
+    step 0 ls -A "$SITE/build-events/example-1.0-zen4-5"
+}
+
+case_anchor() {
+    install -d "$ANCHORS"
+    step 0 eb-staged-rebuild ledger-maintenance anchor --eb-stack "$EB_STACK" --log "$LOG" \
+        --public-key "$PUB" --key "$KEY" --anchors "$ANCHORS"
+    step 0 eb-staged-rebuild ledger-maintenance verify-anchors --eb-stack "$EB_STACK" --log "$LOG" \
+        --public-key "$PUB" --anchors "$ANCHORS"
+    step 0 ls -A "$ANCHORS"
+}
+
+case_project() {
+    step 2 eb-staged-rebuild ledger-maintenance project --eb-stack "$EB_STACK" --log "$LOG" \
+        --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
+    step 0 "$EB_STACK" ledger head --log "$LOG" --key "$KEY" --out "$HEAD"
+    step 0 eb-staged-rebuild ledger-maintenance project --eb-stack "$EB_STACK" --log "$LOG" \
+        --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
+    step 0 ls -A "$HISTORY" "$HISTORY/packages"
+    step 0 cat "$HISTORY/packages/Example.md"
+}
+
+clean() {
+    rm -rf "${SITE:?}/software" "${SITE:?}/modules" "${SITE:?}/sources" "${SITE:?}/bin" "${SITE:?}/standin" \
+        "$STATE" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" "${SITE:?}/build-events" \
+        "$ANCHORS" "$HISTORY" "$EASYCONFIGS" "$HOME/sources" "$HOME/backfill" "$HOME/example-5.json"
+    if [ -d "$SITE/keys" ]; then
+        chmod -R u+w "$SITE/keys"
+        rm -rf "$SITE/keys"
+    fi
+}
+
+command=${1:?usage: site.sh setup|CASE|all|clean}
+cd "$EASYCONFIGS" 2>/dev/null || true
+case $command in
+    setup) setup ;;
+    clean) clean ;;
+    all)
+        setup
+        for name in $cases; do
+            echo "case: $name"
+            "case_$name"
+        done
+        clean
+        ;;
+    *)
+        if [[ " $(echo $cases) " != *" $command "* ]]; then
+            echo "site.sh: unknown case $command" >&2
+            exit 2
+        fi
+        "case_$command"
+        ;;
+esac

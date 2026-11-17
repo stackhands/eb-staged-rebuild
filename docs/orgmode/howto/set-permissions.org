@@ -1,0 +1,201 @@
+#+TITLE: Set the permissions of a rebuild before it goes live
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Set the permissions of a rebuild before it goes live
+
+Give a rebuilt installation and its module file the ownership, modes or access-control lists the site wants, after the build and before the exchange, so that the installation is never live with other permissions.
+
+** Before you start
+
+- A rebuild that works without this, as in [[file:rebuild.org][Rebuild an installed module]].
+- A program that sets the permissions, run as the account that runs the rebuild.
+  It gets one argument, the path of a JSON file, =prepare-context.json=, that names each staged tree and each prepared module file; Files lists its keys.
+  It must leave each tree complete and exit 0, and it must not move or remove anything.
+
+** Steps
+
+1. Write the program.
+   The example site's, =docs/examples/site/prepare-publication= in the repository, lets every user read each staged tree and run its programs, and makes each module file readable by every user:
+
+   #+begin_src python
+   #!/usr/bin/env python3
+   """The example site's --prepare program.
+
+   eb-staged-rebuild runs it after the build and before the exchange, with the
+   path of prepare-context.json. It lets every user read each staged tree and
+   run its programs, and makes each module file readable by every user.
+   """
+
+   import json
+   import os
+   import subprocess
+   import sys
+
+   with open(sys.argv[1], encoding="utf-8") as handle:
+       context = json.load(handle)
+   for module in context["modules"]:
+       subprocess.run(["chmod", "-R", "go+rX,go-w", module["staged"]], check=True)
+       os.chmod(module["prepared"], 0o644)
+       print(f"prepare-publication: {module['rel']}: go+rX,go-w on the tree, 0644 on the module file")
+   #+end_src
+
+   Install it where the account that rebuilds can run it, and others cannot change it:
+
+   #+begin_src bash
+   install -m 755 docs/examples/site/prepare-publication /opt/site/bin/prepare-publication
+   #+end_src
+
+2. Look at the permissions the installation has now, from the run before:
+
+   #+begin_src bash
+   ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   #+end_src
+
+   #+begin_example
+   -rw-r--r-- 1 alice alice 717 Nov 17 01:48 /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   -rwxr--r-- 1 alice alice  29 Nov 17 01:48 /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+   #+end_example
+
+3. Rebuild with =--prepare= and the absolute path of the program:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-2 \
+     --prepare /opt/site/bin/prepare-publication -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+   eb-staged-rebuild: run example-2 backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-2
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-2 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
+   == Temporary log file in case of crash /tmp/eb-wh_uruwv/easybuild-ydjbf705.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == Temporary log file(s) /tmp/eb-wh_uruwv/easybuild-ydjbf705.log* have been removed.
+   == Temporary directory /tmp/eb-wh_uruwv has been removed.
+   == Building/installing in bwrap namespace
+     >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-2/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
+     >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-2/bwrap_info.json
+     >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-2/modules']
+   == Temporary log file in case of crash /tmp/eb-1p7ceu92/easybuild-ug0txl9x.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+   == building and installing Example/1.0-GCCcore-15.2.0...
+     >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+   == fetching files and verifying checksums...
+     >> sources:
+     >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+   == ... (took < 1 sec)
+   == creating build dir, resetting environment...
+     >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+   == ... (took < 1 sec)
+   == unpacking...
+   == ... (took < 1 sec)
+   == patching...
+   == ... (took < 1 sec)
+   == preparing...
+     >> loading toolchain module: GCCcore/15.2.0
+     >> defining build environment for GCCcore/15.2.0 toolchain
+   == ... (took < 1 sec)
+   == configuring...
+   == ... (took < 1 sec)
+   == building...
+   == ... (took < 1 sec)
+   == testing...
+   == ... (took < 1 sec)
+   == installing...
+   == ... (took 12 secs)
+   == taking care of extensions...
+   == ... (took < 1 sec)
+   == restore after iterating...
+   == ... (took < 1 sec)
+   == postprocessing...
+   == ... (took < 1 sec)
+   == sanity checking...
+     >> file 'example-1.0.sh' found: OK
+     >> loading modules: Example/1.0-GCCcore-15.2.0...
+   == ... (took < 1 sec)
+   == cleaning up...
+   == ... (took < 1 sec)
+   == creating module...
+     >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-2/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   == ... (took < 1 sec)
+   == permissions...
+   == ... (took < 1 sec)
+   == packaging...
+   == ... (took < 1 sec)
+   == COMPLETED: Installation ended successfully (took 12 secs)
+   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.014923.log
+   == Build succeeded for 1 out of 1 (total: 12 secs)
+   == Summary:
+      * [SUCCESS] Example/1.0-GCCcore-15.2.0
+   == Temporary log file(s) /tmp/eb-1p7ceu92/easybuild-ug0txl9x.log* have been removed.
+   == Temporary directory /tmp/eb-1p7ceu92 has been removed.
+   eb-staged-rebuild: preparing publication permissions: /opt/site/bin/prepare-publication /opt/site/.eb-staged-rebuild/runs/example-2/prepare-context.json
+   prepare-publication: all/Example/1.0-GCCcore-15.2.0.lua: go+rX,go-w on the tree, 0644 on the module file
+   eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+   eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-2 published 1 module(s)
+   #+end_example
+
+   The program ran after EasyBuild had finished, and the exchange came after it.
+
+** Check that it worked
+
+The installed program can now be read and run by every user:
+
+#+begin_src bash
+ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+#+end_src
+
+#+begin_example
+-rw-r--r-- 1 alice alice 717 Nov 17 01:48 /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+-rwxr-xr-x 1 alice alice  29 Nov 17 01:48 /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_example
+
+The file the program read stays in the run's directory:
+
+#+begin_src bash
+cat /opt/site/.eb-staged-rebuild/runs/example-2/prepare-context.json
+#+end_src
+
+#+begin_example
+{
+  "generation_root": "/opt/site/.eb-staged-rebuild/generations/example-2",
+  "live_modules": "/opt/site/modules",
+  "live_software": "/opt/site/software",
+  "modules": [
+    {
+      "generation": "/opt/site/.eb-staged-rebuild/generations/example-2/software/Example/1.0-GCCcore-15.2.0",
+      "live_module": "/opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua",
+      "live_software": "/opt/site/software/Example/1.0-GCCcore-15.2.0",
+      "prepared": "/opt/site/.eb-staged-rebuild/runs/example-2/prepared/all/Example/1.0-GCCcore-15.2.0.lua",
+      "rel": "all/Example/1.0-GCCcore-15.2.0.lua",
+      "retired": "/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2",
+      "staged": "/opt/site/.eb-staged-rebuild/generations/example-2/software/Example/1.0-GCCcore-15.2.0"
+    }
+  ],
+  "publication": "directory-swap",
+  "run_id": "example-2",
+  "stage_modules": "/opt/site/.eb-staged-rebuild/generations/example-2/modules",
+  "stage_software": "/opt/site/.eb-staged-rebuild/generations/example-2/software",
+  "state_root": "/opt/site/.eb-staged-rebuild"
+}
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =prepare=.
+
+** If it fails
+
+| Message                                                                                                      | Cause                                                               | What to do                                                                                                                                 |
+|--------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: --prepare must name a program; it is empty=                                              | =--prepare= was given an empty value.                               | Give it the program's path.                                                                                                                |
+| =eb-staged-rebuild: publication preparation executable must be an absolute path=                             | The path given is relative.                                         | Give the absolute path.                                                                                                                    |
+| =eb-staged-rebuild: publication preparation exited N; the live directory was not swapped=                    | The program exited with the status N, which is also the run's.      | Correct the program where it is, and =resume= the run, which runs it again before the exchange, as in [[file:recover.org][Finish a run that failed or stopped]]. |
+| =eb-staged-rebuild: publication preparation left REL incomplete at PATH; the live directory was not swapped= | The program removed what marks the tree as a complete installation. | Correct the program, and start a new run.                                                                                                  |
+
+** Related
+
+- [[file:rebuild.org][Rebuild an installed module]]
+- [[file:recover.org][Finish a run that failed or stopped]]

@@ -1,0 +1,202 @@
+#+TITLE: Finish a run that failed or stopped
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Finish a run that failed or stopped
+
+Finish a rebuild whose build failed, or that stopped part way because the command was killed or the machine went down, without starting it over.
+The run's journal in the state root records how far it got, and =resume= goes on from there.
+
+** Before you start
+
+- The run's name, and its state root: =/opt/site/.eb-staged-rebuild= for the site of [[file:rebuild.org][Rebuild an installed module]].
+- No other command using the run: =resume= waits for the state root's lock, which a run, a rollback, =gc= or =retire= holds while it works.
+- For a build that failed, what made it fail, from EasyBuild's output or log.
+
+** Steps
+
+1. Find the run and its state.
+   Here a rebuild, =example-3=, failed because the source in the source path no longer had the checksum of the easyconfig:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-3 \
+     -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+   eb-staged-rebuild: run example-3 backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-3
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-3 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
+   == Temporary log file in case of crash /tmp/eb-tko1u7c6/easybuild-3oagk_tn.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == Temporary log file(s) /tmp/eb-tko1u7c6/easybuild-3oagk_tn.log* have been removed.
+   == Temporary directory /tmp/eb-tko1u7c6 has been removed.
+   == Building/installing in bwrap namespace
+     >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-3/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
+     >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-3/bwrap_info.json
+     >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-3/modules']
+   == Temporary log file in case of crash /tmp/eb-gkpt8nal/easybuild-5wdptjnm.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+   == building and installing Example/1.0-GCCcore-15.2.0...
+     >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+   == fetching files and verifying checksums...
+     >> sources:
+     >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 273caeda23b8b0b895ae771f25f140d26023d18ffd186f5cdfbc0e2bfaa9919a]
+   == ... (took < 1 sec)
+   == FAILED: Installation ended unsuccessfully: Checksum verification for /opt/site/sources/e/Example/example-1.0.sh using 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4 failed. (took 0 secs)
+   == Results of the build can be found in the log file(s) /tmp/eb-gkpt8nal/easybuild-Example-1.0-20261117.014926.idAqv.log
+   == Summary:
+      * [FAILED]  Example/1.0-GCCcore-15.2.0
+
+
+   ERROR: Installation of Example-1.0-GCCcore-15.2.0.eb failed: Checksum verification for /opt/site/sources/e/Example/example-1.0.sh using 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4 failed.
+
+   eb-staged-rebuild: eb exited 42; live modules were not changed
+   #+end_example
+
+   The run exited with EasyBuild's status, 42, and its journal says why:
+
+   #+begin_src bash
+   eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-3
+   #+end_src
+
+   #+begin_example
+   example-3  failed  backend=bwrap  modules=0/0
+     eb exited 42; live modules were not changed
+   #+end_example
+
+   Without a name, =status= lists every run of the state root.
+   A run that stopped part way shows the state it stopped in: =created= or =building= while the build ran, =built= or =publishing= once it had finished.
+2. Correct what made the build fail.
+   Here, put the source back:
+
+   #+begin_src bash
+   cp /home/alice/sources/example-1.0.sh /opt/site/sources/e/Example/example-1.0.sh
+   #+end_src
+
+   A run that stopped without an error needs nothing corrected.
+3. Resume the run:
+
+   #+begin_src bash
+   eb-staged-rebuild resume --state-root /opt/site/.eb-staged-rebuild example-3
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: resume example-3 from failed: rebuilding the unpublished generation
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-3 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
+   == Temporary log file in case of crash /tmp/eb-vd0exmop/easybuild-51nanhn1.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == Temporary log file(s) /tmp/eb-vd0exmop/easybuild-51nanhn1.log* have been removed.
+   == Temporary directory /tmp/eb-vd0exmop has been removed.
+   == Building/installing in bwrap namespace
+     >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-3/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
+     >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-3/bwrap_info.json
+     >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-3/modules']
+   == Temporary log file in case of crash /tmp/eb-ys9eb7bq/easybuild-h_nzzvrq.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+   == building and installing Example/1.0-GCCcore-15.2.0...
+     >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+   == fetching files and verifying checksums...
+     >> sources:
+     >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+   == ... (took < 1 sec)
+   == creating build dir, resetting environment...
+     >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+   == ... (took < 1 sec)
+   == unpacking...
+   == ... (took < 1 sec)
+   == patching...
+   == ... (took < 1 sec)
+   == preparing...
+     >> loading toolchain module: GCCcore/15.2.0
+     >> defining build environment for GCCcore/15.2.0 toolchain
+   == ... (took < 1 sec)
+   == configuring...
+   == ... (took < 1 sec)
+   == building...
+   == ... (took < 1 sec)
+   == testing...
+   == ... (took < 1 sec)
+   == installing...
+   == ... (took 12 secs)
+   == taking care of extensions...
+   == ... (took < 1 sec)
+   == restore after iterating...
+   == ... (took < 1 sec)
+   == postprocessing...
+   == ... (took < 1 sec)
+   == sanity checking...
+     >> file 'example-1.0.sh' found: OK
+     >> loading modules: Example/1.0-GCCcore-15.2.0...
+   == ... (took < 1 sec)
+   == cleaning up...
+   == ... (took < 1 sec)
+   == creating module...
+     >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-3/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   == ... (took < 1 sec)
+   == permissions...
+   == ... (took < 1 sec)
+   == packaging...
+   == ... (took < 1 sec)
+   == COMPLETED: Installation ended successfully (took 12 secs)
+   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.014940.log
+   == Build succeeded for 1 out of 1 (total: 12 secs)
+   == Summary:
+      * [SUCCESS] Example/1.0-GCCcore-15.2.0
+   == Temporary log file(s) /tmp/eb-ys9eb7bq/easybuild-h_nzzvrq.log* have been removed.
+   == Temporary directory /tmp/eb-ys9eb7bq has been removed.
+   eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+   eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-3 published 1 module(s)
+   #+end_example
+
+   A run that is =created=, =building= or =failed= builds its generation again, with the arguments it was started with.
+   One that is =built= or =publishing= has its generation already, and only publishes it.
+
+** Check that it worked
+
+The run is complete, and its module is published:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-3
+#+end_src
+
+#+begin_example
+example-3  complete  backend=bwrap  modules=1/1
+  published
+  published  all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3
+#+end_example
+
+While the run was =failed=, the installation was the one from before it:
+
+#+begin_src bash
+/opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_src
+
+#+begin_example
+Example 1.0
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its cases =fail= and =resume=.
+
+** If it fails
+
+| Message                                                                                   | Cause                                                                                                                  | What to do                                                                                                                      |
+|-------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: eb exited N; live modules were not changed=                           | The build failed again, with EasyBuild's status N.                                                                     | Correct what EasyBuild's output names, and resume again.                                                                        |
+| =eb-staged-rebuild: live software directory changed during the build; not published: REL= | Something other than this run changed the installation while the run was building; the run compares it with its start. | Find what changed it. A new run records the installation as it is now; =--skip-live-check= turns the comparison off.            |
+| =eb-staged-rebuild: no journal at PATH=                                                   | No run of that name in that state root.                                                                                | Check the name with =status=, and the state root.                                                                               |
+| =eb-staged-rebuild: run RUN_ID was rolled back; start a new run=                          | The run was rolled back, and a rolled-back run is not resumed.                                                         | Start a new run with another =--run-id=.                                                                                        |
+| =eb-staged-rebuild: run RUN_ID is a retire record; rollback restores the module file=     | The name is a retire record's.                                                                                         | See [[file:retire.org][Retire a module file that another stack provides]].                                                                           |
+| =eb-staged-rebuild: run RUN_ID is STATE but a module was already published=               | The journal contradicts itself, as no run of this program leaves it.                                                   | Compare =status= with the trees and module files it names, and restore them by hand; the journal is =runs/RUN_ID/journal.json=. |
+
+** Related
+
+- [[file:rebuild.org][Rebuild an installed module]]
+- [[file:roll-back.org][Put the previous installation back]]

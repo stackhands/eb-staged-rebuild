@@ -286,4 +286,5 @@ On success the command prints one JSON object on stdout.
 ** See also
 
 - [[file:../tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]]
+- [[file:../howto/rebuild.org][Rebuild an installed module]]
 - [[py:eb_staged_rebuild.cli.main]] and the rest of the [[file:api.org][API]]

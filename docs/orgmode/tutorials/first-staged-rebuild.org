@@ -257,6 +257,8 @@ rm -rf ~/rebuild-tutorial ~/eb-staged-rebuild ~/eb-staged-rebuild-venv
 
 ** Next steps
 
+- [[file:../howto/rebuild.org][Rebuild an installed module]] with EasyBuild, on a site's software tree.
+- [[file:../howto/recover.org][Finish a run that failed or stopped]].
 - [[file:../reference/cli.org][The eb-staged-rebuild command]], for every command and option.
 
 =docs/examples/tutorial.sh= in the repository runs the commands of this tutorial from "Make an installation to rebuild" on, and stops at the first one that does not do what the tutorial says.
