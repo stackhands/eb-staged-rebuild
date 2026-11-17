@@ -1,0 +1,29 @@
+name: docs-preview
+
+on:
+  workflow_run:  # zizmor: ignore[dangerous-triggers] -- API-only commenter; never checks out PR code
+    workflows: [docs]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Post documentation preview link
+        uses: HaoZeke/doc-previewer@0e1094735b4f7ee9a2c60a18a34d7a7e5bc6bb63 # v0.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          head_sha: ${{ github.event.workflow_run.head_sha }}
+          artifact_name: documentation
+          zip_display_name: documentation.zip
+          comment_header: "### Documentation Preview"

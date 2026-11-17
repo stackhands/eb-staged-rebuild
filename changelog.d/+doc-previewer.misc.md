@@ -1,0 +1,1 @@
+Pull request runs of `.github/workflows/docs.yml` upload `docs/build/html` as the `documentation` artifact, and `.github/workflows/doc-preview.yml` runs `HaoZeke/doc-previewer` via `workflow_run` to comment a download link on the pull request.
