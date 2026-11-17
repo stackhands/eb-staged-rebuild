@@ -84,6 +84,20 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(report["flock"]["cross_node"], "unmeasured")
         self.assertFalse(report["easybuild"]["found"])
 
+    def test_probe_require_eb_fails_when_eb_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            probe = subprocess.run(
+                [*CLI, "probe", "--path", root, "--require-eb", "--eb", "missing-eb"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
+            self.assertIn("EasyBuild:", probe.stdout)
+            self.assertIn("probe requires EasyBuild, but it was not found: missing-eb", probe.stderr)
+
 
 class LockTests(unittest.TestCase):
     def test_second_lock_does_not_wait_forever(self):
