@@ -1,0 +1,1 @@
+With `--ledger-config`, a run that `--force` published past the failed checks of `--verify` says so in its ledger records: its `started`, `finished` and `aborted` records carry `build.verify`, the result, `forced` and the problem count of each check. The records of a run that was not checked or that passed, and the corrections a rollback appends, are unchanged.

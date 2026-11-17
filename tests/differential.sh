@@ -522,6 +522,13 @@ compare_admin "run, the finished record waits" env FAKE_LEDGER_PLAN=@ROOT@/plan6
 compare_admin "resume delivers the finished record" resume --state-root @ROOT@/state r18
 compare_admin "rollback the run whose finished record waited" rollback --state-root @ROOT@/state r18
 compare_admin "ledger records after the rollback cases" env cat @ROOT@/ledger.jsonl
+# A stage that run --verify refuses, then published with --force: its
+# started and finished records carry build.verify, the rollback's
+# corrections do not.
+compare_admin "run --verify, ledger, a stage that fails verify" env 'FAKE_EB_EXTRA={"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}' @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --verify --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume it with --force, ledger" resume --state-root @ROOT@/state --force f1
+compare_admin "rollback the forced ledger run" rollback --state-root @ROOT@/state f1
+compare_admin "ledger records after the forced run" env cat @ROOT@/ledger.jsonl
 # A generation-pointer record (schema 3) is not applied as a directory swap.
 for impl in py zig; do
     mkdir -p "${work}/${impl}/state/runs/foreign"
