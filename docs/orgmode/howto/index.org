@@ -18,4 +18,9 @@ The title names the task.
    roll-back
    remove-old-trees
    retire
+   record-in-a-ledger
+   build-events
+   backfill
+   anchor
+   package-history
 #+end_export

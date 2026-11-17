@@ -85,3 +85,4 @@ Roll back only the latest run of an installation.
 
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], for what a rollback records

@@ -1,0 +1,73 @@
+#+TITLE: Anchor the ledger once a day
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Anchor the ledger once a day
+
+Keep one signed head of the ledger for each day, in a directory of files that are never replaced, so that a log rewritten later no longer matches what was signed before.
+Each anchor has to extend the one before it, and =verify-anchors= proves the whole chain against the log.
+
+** Before you start
+
+- The eb-stack 0.7.0, the key and the log of [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]].
+- A directory for the anchors outside the log's directory, here =/opt/site/ledger-anchors=, and a copy of it off the machine if you can: the anchors only help where the log's writer cannot change them.
+- A clock that is right: the anchor is for the day, in UTC, on which its head is signed.
+- With the Python package, run =python3 -m eb_staged_rebuild.ledger_maintenance= where this guide runs =eb-staged-rebuild ledger-maintenance=.
+
+** Steps
+
+1. Sign today's head and add it to the anchors:
+
+   #+begin_src bash
+   eb-staged-rebuild ledger-maintenance anchor --eb-stack /opt/site/bin/eb-stack --log /opt/site/ledger/stack.jsonl \
+     --public-key /opt/site/keys/ledger.pub --key /opt/site/keys/ledger.pem --anchors /opt/site/ledger-anchors
+   #+end_src
+
+   #+begin_example
+   {"day": "2026-11-17", "path": "/opt/site/ledger-anchors/2026-11-17.head.json", "root": "ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63", "size": 7, "status": "published"}
+   #+end_example
+
+   A second call on the same day adds nothing: it proves that the day's anchor still extends into the log, and reports it with ="status": "exists"=.
+2. Run it once a day, from cron or a systemd timer, with the same arguments.
+
+** Check that it worked
+
+Prove the chain of anchors against the log:
+
+#+begin_src bash
+eb-staged-rebuild ledger-maintenance verify-anchors --eb-stack /opt/site/bin/eb-stack --log /opt/site/ledger/stack.jsonl \
+  --public-key /opt/site/keys/ledger.pub --anchors /opt/site/ledger-anchors
+#+end_src
+
+#+begin_example
+{"anchors": 1, "latest": "/opt/site/ledger-anchors/2026-11-17.head.json", "root": "ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63", "size": 7}
+#+end_example
+
+The directory holds one file for the day, and the lock files of the command:
+
+#+begin_src bash
+ls -A /opt/site/ledger-anchors
+#+end_src
+
+#+begin_example
+.lock
+.lock.posix
+2026-11-17.head.json
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =anchor=.
+
+** If it fails
+
+| Message                                                                   | Cause                                                                             | What to do                                                                                 |
+|---------------------------------------------------------------------------+-----------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------|
+| =ledger-maintenance: anchor PATH is for a day after DAY; check the clock= | The newest anchor is dated after today.                                           | Correct the clock; never remove the anchor to make room.                                   |
+| =ledger-maintenance: anchor PATH does not extend PATH=                    | Two anchors disagree about the log: it was rewritten between the days they cover. | Stop appending, and compare the log with the copies of the anchors kept elsewhere.         |
+| =ledger-maintenance: anchors PATH and PATH are signed by different keys=  | The signing key changed between two days.                                         | Find out why before you anchor again: each anchor must have the key of the ones before it. |
+| =ledger-maintenance: anchor directory DIR must not hold the ledger LOG=   | The anchors are inside the log's directory.                                       | Give =--anchors= a directory outside it.                                                   |
+
+** Related
+
+- [[file:package-history.org][Write the history of each package]]
+- [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]]
+- [[file:../reference/cli.org][The eb-staged-rebuild command]], for the options of =ledger-maintenance=
