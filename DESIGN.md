@@ -145,7 +145,10 @@ refuses, so a later run of the same installation is rolled back first.
 `gc` only removes the hidden retired sibling recorded in a journal. It never
 removes the stable path. The default grace, 144 hours, is an assumed longest
 job of 120 hours plus a 24-hour margin. The 120 hours were not measured at a
-site; an operator sets the grace to the site's longest job plus a margin.
+site; an operator sets the grace to the site's longest job plus a margin. Each
+run records its grace in the journal, and `gc` keeps the run's trees that
+long; `gc --grace-hours` gives every tree the same grace instead, and the
+directory of a retired module file gets `gc`'s own.
 
 ## Dry run
 

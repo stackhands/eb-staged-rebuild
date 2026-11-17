@@ -200,6 +200,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
+| GarbageCollectionTests.test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded | differential "run, a grace period of 0 hours", "gc, the run's grace period", "gc, --grace-hours instead of the run's", "gc, the environment does not replace the run's" |
+| GarbageCollectionTests.test_a_longer_grace_period_of_the_run_outlasts_the_default | differential "gc, the environment does not replace the run's" (a run's own grace period against `EB_STAGED_REBUILD_GRACE_HOURS`) |
+| GarbageCollectionTests.test_a_recorded_grace_period_that_is_not_hours_is_not_used | differential "record a grace period below 0", "gc, a recorded grace period below 0"; `zig/admin.zig` test "runGrace uses the hours a run recorded, when they are a number at least 0" |
 
 ### tests/test_retire.py
 

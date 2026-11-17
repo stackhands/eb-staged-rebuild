@@ -313,6 +313,16 @@ compare_admin "move the marker of the earlier run away" env mv @ROOT@/software/d
 compare_admin "rollback, the live tree has no marker of the run" rollback --state-root @ROOT@/state o1
 compare_admin "put the marker back" env mv @ROOT@/marker @ROOT@/software/demo/1/.eb-staged-rebuild-complete
 compare_admin "rollback the earlier run after the later one" rollback --state-root @ROOT@/state o1
+# gc keeps a tree for the grace period its run recorded. --grace-hours
+# replaces it, EB_STAGED_REBUILD_GRACE_HOURS does not, and a recorded value
+# that is not a number of hours, at least 0, is not used.
+compare_admin "run, a grace period of 0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g1 --skip-live-check --grace-hours 0 --module demo/1 -- demo-1.eb
+compare_admin "gc, the run's grace period" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of the run's" gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, the environment does not replace the run's" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "record a grace period below 0" env python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["grace_hours"] = -5; json.dump(d, open(p, "w"))' @ROOT@/state/runs/g1/journal.json
+compare_admin "gc, a recorded grace period below 0" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

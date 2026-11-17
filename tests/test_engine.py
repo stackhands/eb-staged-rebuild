@@ -1,10 +1,14 @@
 """End-to-end transaction tests, including every recorded fault point."""
 
+import contextlib
+import io
 import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
+from eb_staged_rebuild import cli
 from eb_staged_rebuild.engine import Spec, resume, rollback, run
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
@@ -380,6 +384,58 @@ class GarbageCollectionTests(unittest.TestCase):
             self.assertEqual(later[0]["action"], "remove")
             self.assertFalse(os.path.exists(retired))
             TransactionTests().assert_new_live(installed)
+
+    @staticmethod
+    def _gc(state, *args, env=None):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ), contextlib.redirect_stdout(out):
+            os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+            os.environ.update(env or {})
+            code = cli.main(["gc", "--state-root", state, "--dry-run", *args])
+        return code, out.getvalue()
+
+    def _published(self, root, grace_hours):
+        software, modules, state, installed, builder = _fixture(root)
+        spec = _spec(software, modules, state, builder)
+        spec.grace_hours = grace_hours
+        self.assertEqual(run(spec).returncode, 0)
+        return state, load_journal(journal_path(state, "run1"))["modules_plan"][0]["retired"]
+
+    def test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            remove = (0, f"remove: {retired} (previous live tree)\n")
+            keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
+            self.assertEqual(self._gc(state), remove)
+            self.assertEqual(self._gc(state, "--grace-hours", "1"), keep)
+            self.assertEqual(self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "1"}), remove)
+
+    def test_a_longer_grace_period_of_the_run_outlasts_the_default(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 2)
+            keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
+            self.assertEqual(self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}), keep)
+            self.assertEqual(self._gc(state, "--grace-hours", "0"), (0, f"remove: {retired} (previous live tree)\n"))
+
+    def test_a_recorded_grace_period_that_is_not_hours_is_not_used(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            path = journal_path(state, "run1")
+            for value in (-5, float("nan"), "0", True, None):
+                with self.subTest(value=value):
+                    with open(path, encoding="utf-8") as handle:
+                        journal = json.load(handle)
+                    journal["grace_hours"] = value
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(journal, handle)
+                    self.assertEqual(
+                        self._gc(state),
+                        (0, f"keep: {retired} (within grace (previous live tree))\n"),
+                    )
+                    self.assertEqual(
+                        self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}),
+                        (0, f"remove: {retired} (previous live tree)\n"),
+                    )
 
 
 if __name__ == "__main__":

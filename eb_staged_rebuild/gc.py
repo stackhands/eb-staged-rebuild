@@ -2,8 +2,9 @@
 
 The clock starts at publish or rollback.  The default grace period, 144
 hours, assumes a longest job of 120 hours that nobody measured; operators
-must replace it with the site's longest job plus a safety margin.
-Cluster-wide ``lsof`` is not used.
+must replace it with the site's longest job plus a safety margin.  Each run
+records its grace period, and its trees are kept that long unless gc is given
+one for every tree.  Cluster-wide ``lsof`` is not used.
 
 A module file moved aside by ``retire`` starts that same clock for the stable
 software directory the module named. gc reports that directory. It does not
@@ -35,6 +36,17 @@ def _retirement(journal, mod, include_failed):
     if include_failed and state == "failed" and mod.get("status") == "pending":
         return journal.get("updated_at") or journal.get("created_at"), "failed candidate"
     return None, f"state {state} is kept"
+
+
+def _run_grace(journal, default):
+    """Return the grace period in hours that the run recorded, or ``default``.
+
+    A recorded value is used only when it is a number of hours, at least 0.
+    """
+    value = journal.get("grace_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
+        return default
+    return value
 
 
 def _safe_retired_path(mod):
@@ -160,7 +172,7 @@ def _retired_software(journals, roots, grace_hours, now):
     return actions
 
 
-def _collect_locked(state_root, grace_hours, now, dry_run, include_failed):
+def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace):
     state_root = abspath(state_root)
     journals = list_journals(state_root)
     roots = _live_roots(journals)
@@ -168,6 +180,7 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed):
     for journal in journals:
         if is_retire(journal):
             continue
+        hours = _run_grace(journal, grace_hours) if run_grace else grace_hours
         changed = False
         for mod in journal.get("modules_plan") or []:
             if mod.get("retired_removed_at"):
@@ -189,7 +202,7 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed):
                     }
                 )
                 continue
-            if age < grace_hours * SECONDS_PER_HOUR:
+            if age < hours * SECONDS_PER_HOUR:
                 actions.append(
                     {
                         "path": retired,
@@ -231,8 +244,13 @@ def collect(
     dry_run=False,
     include_failed=False,
     lock_timeout=None,
+    run_grace=False,
 ):
-    """Collect retired trees while holding the same lock as publish/rollback."""
+    """Collect retired trees while holding the same lock as publish/rollback.
+
+    ``grace_hours`` applies to every tree, or with ``run_grace`` only to the
+    trees whose run recorded no grace period and to retired module files.
+    """
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
@@ -242,6 +260,7 @@ def collect(
             now,
             dry_run,
             include_failed,
+            run_grace,
         )
     finally:
         lock.release()

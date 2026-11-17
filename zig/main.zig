@@ -583,7 +583,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     };
     const timeout: ?f64 = if (opts[3].value) |v| floatArg(gc_usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, opts[0].value.?, grace, opts[2].seen, opts[4].seen, timeout);
+    return admin.gc(&ctx, opts[0].value.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
 }
 
 const run_usage = @embedFile("run_usage.txt");

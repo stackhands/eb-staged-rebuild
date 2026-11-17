@@ -117,7 +117,7 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--state-root=      | Where journals and generations go; the default is =EB_STAGED_REBUILD_STATE_ROOT=, or =.eb-staged-rebuild= beside the software tree. It has to be on the software tree's filesystem.                    |
 | =--eb=              | The EasyBuild command; the default is =EB_STAGED_REBUILD_EB=, or =eb=.                                                                                                                                 |
 | =--backend=         | How the build is kept off the live tree: =bwrap=, =userns=, =installpath=, or =auto=, the default, which takes the first of those that works here. =bwrap= and =userns= refuse when their probe fails. |
-| =--grace-hours=     | Hours to keep the previous tree, written into the journal; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144. =gc= does not read this value, but its own =--grace-hours=.                         |
+| =--grace-hours=     | Hours to keep the previous tree, written into the journal, where =gc= reads it; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144.                                                                |
 | =--dry-run=         | Print the backend, the roots, the probes and the command EasyBuild would get, with =<run-id>= in the generation path, and stop: no journal, no lock, no build, no file.                                |
 | =--module=          | A =NAME/VERSION= directory of the software tree to replace, besides those EasyBuild lists; may be given more than once.                                                                                |
 | =--run-id=          | The run's name; the default is the UTC time and the process id, =YYYYMMDD-HHMMSS-PID=. A name that has a journal is refused.                                                                           |
@@ -163,13 +163,13 @@ So is a run whose tree is no longer the one at the stable path, such as one a la
 
 Remove the hidden trees, =software/NAME/.VERSION.RUN_ID=, whose grace period has passed.
 
-| Option             | Meaning                                                                                                              |
-|--------------------+----------------------------------------------------------------------------------------------------------------------|
-| =--state-root=     | The state root whose journals name the trees; required.                                                              |
-| =--grace-hours=    | Hours to keep a tree after its run published or rolled back; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144. |
-| =--dry-run=        | Print what would be removed, and remove nothing.                                                                     |
-| =--include-failed= | Also remove the staged tree of a failed run that published nothing, once it is older than the grace period.          |
-| =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                         |
+| Option             | Meaning                                                                                                                                                                                                                                                                                |
+|--------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--state-root=     | The state root whose journals name the trees; required.                                                                                                                                                                                                                                |
+| =--grace-hours=    | Hours to keep every tree after its run published or rolled back. Without it, a tree is kept for the hours its run recorded, and the directory of a retired module file for =EB_STAGED_REBUILD_GRACE_HOURS=, or 144; so is a tree whose journal records no number of hours, at least 0. |
+| =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                       |
+| =--include-failed= | Also remove the staged tree of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                            |
+| =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                           |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
@@ -257,13 +257,13 @@ On success the command prints one JSON object on stdout.
 
 ** Environment
 
-| Variable                         | Used by        | Meaning                         |
-|----------------------------------+----------------+---------------------------------|
-| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=          | The default of =--software=.    |
-| =EASYBUILD_INSTALLPATH_MODULES=  | =run=          | The default of =--modules=.     |
-| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=          | The default of =--state-root=.  |
-| =EB_STAGED_REBUILD_EB=           | =probe=, =run= | The default of =--eb=.          |
-| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=    | The default of =--grace-hours=. |
+| Variable                         | Used by        | Meaning                                                                      |
+|----------------------------------+----------------+------------------------------------------------------------------------------|
+| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=          | The default of =--software=.                                                 |
+| =EASYBUILD_INSTALLPATH_MODULES=  | =run=          | The default of =--modules=.                                                  |
+| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=          | The default of =--state-root=.                                               |
+| =EB_STAGED_REBUILD_EB=           | =probe=, =run= | The default of =--eb=.                                                       |
+| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=    | The default of =--grace-hours=; =gc= uses it only where no run recorded one. |
 
 [[file:environment.org][Environment variables]] also lists what reaches EasyBuild.
 

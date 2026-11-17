@@ -217,6 +217,7 @@ def _dispatch(args):
             dry_run=args.dry_run,
             include_failed=args.include_failed,
             lock_timeout=args.lock_timeout,
+            run_grace=args.grace_hours is None,
         )
         for action in actions:
             print(f"{action['action']}: {action['path']} ({action['reason']})")
