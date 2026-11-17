@@ -185,3 +185,4 @@ With the ledger required, which is the default, a =started= record that was not 
 
 - [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], which =run --ledger-config= does without a wrapper
 - [[file:package-history.org][Write the history of each package]]
+- [[file:../explanation/ledger.org][What the ledger records]]

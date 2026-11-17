@@ -115,3 +115,4 @@ Verified head: size 7, root ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d6
 
 - [[file:anchor.org][Anchor the ledger once a day]]
 - [[file:backfill.org][Record software installed before the ledger]]
+- [[file:../explanation/ledger.org][What the ledger records]]

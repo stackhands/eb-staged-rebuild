@@ -199,3 +199,4 @@ cat /opt/site/.eb-staged-rebuild/runs/example-2/prepare-context.json
 
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:recover.org][Finish a run that failed or stopped]]
+- [[file:../explanation/publication.org][How a rebuild is published]], for what the program's changes reach

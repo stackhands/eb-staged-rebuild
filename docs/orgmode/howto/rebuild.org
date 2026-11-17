@@ -266,4 +266,6 @@ eb-staged-rebuild: eb exited 1; live modules were not changed
 - [[file:recover.org][Finish a run that failed or stopped]]
 - [[file:roll-back.org][Put the previous installation back]]
 - [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]]
+- [[file:../explanation/isolation.org][How a build is kept off the live tree]]
 - [[file:../reference/cli.org][The eb-staged-rebuild command]]

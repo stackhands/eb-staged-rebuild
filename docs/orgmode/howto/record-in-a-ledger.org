@@ -201,3 +201,4 @@ With ="required": false= in the configuration, a run whose =started= record was 
 - [[file:build-events.org][Record any build command in the ledger]]
 - [[file:anchor.org][Anchor the ledger once a day]]
 - [[file:package-history.org][Write the history of each package]]
+- [[file:../explanation/ledger.org][What the ledger records]]

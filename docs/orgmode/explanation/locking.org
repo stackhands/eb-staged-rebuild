@@ -1,0 +1,52 @@
+#+TITLE: How runs keep out of each other's way
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* How runs keep out of each other's way
+
+What stops two runs, or a run and a =gc=, from changing the same installation at the same time, and where does that protection end?
+
+** The problem
+
+Two rebuilds of one installation would exchange the same directory twice and keep each other's tree as the old one; a =gc= during a rollback could remove the tree the rollback is about to put back.
+Build nodes of a cluster often share the software tree, so the second run may start on another machine.
+
+** How eb-staged-rebuild handles it
+
+Every command that changes something takes the lock of its state root first and keeps it until it is done: =run= for its build and its publication, =resume=, =rollback=, =retire= and =gc=.
+=status=, =probe= and =resolve= only read, and take no lock.
+A run asks EasyBuild for its list of modules, with =eb --dry-run=, before it takes the lock, and builds after: EasyBuild runs twice for each run.
+
+The lock is two locks, taken in this order:
+
+1. an =flock= on =<state-root>/.lock=, which keeps out every process on the same machine;
+2. a POSIX record lock on =<state-root>/.lock.posix=, which keeps out processes on other machines as well, where the filesystem makes record locks hold across machines.
+
+The second file is opened only while the first lock is held, and closed before it is released, because closing any descriptor of that file drops the process's record locks.
+Both files are made with mode =0600=, so that another user who can enter the directory cannot take the lock; a lock file that is a hard link, a FIFO or anything but a regular file is refused before it is opened, and so is a state root with a symbolic link in its path.
+The files stay after a run: a lock file on its own holds nothing, since the kernel drops the locks when the process ends.
+
+A command that finds the lock taken waits for it, or for =--lock-timeout= seconds and then stops with =another eb-staged-rebuild holds the lock at PATH= and exit status 2; =retire= waits only when =--lock-timeout= says so.
+[[file:../howto/remove-old-trees.org][Remove the trees a rebuild left behind]] shows that message.
+
+=build-events= and =ledger-maintenance anchor= use the same kind of lock on their own directories: one per operation in the outbox, one for the directory of anchors.
+
+** What was considered and turned down
+
+- /The =flock= alone./
+  eb-staged-rebuild 0.2.0 took only that, which keeps out processes on the same machine and no others.
+- /A =gc= that lets go of the lock between trees./
+  A run or a rollback could then change a tree that =gc= has already judged; =gc= keeps the lock until it is done.
+
+** Limits
+
+- Two state roots are two locks, even for the same software tree: give each software tree one state root.
+- Whether record locks hold across machines is up to the filesystem, and has not been measured for any shared filesystem; [[file:../howto/install.org][Install eb-staged-rebuild]] shows the =probe= line that says so.
+  Before relying on them, take the lock from two build nodes at once: if both get it, keep runs apart some other way, such as a scheduler job of which only one runs at a time.
+- A process of eb-staged-rebuild 0.2.0 on another machine takes only the =flock=, so it does not keep out this version there, nor this version it; stop such processes before relying on the record lock.
+- The lock keeps out eb-staged-rebuild, not EasyBuild or a person: a plain =eb= or =rm= in the tree does not ask for it.
+
+** Further reading
+
+- [[file:journal.org][What the journal records]] covers what each command writes under the lock.
+- [[file:publication.org][How a rebuild is published]] covers the steps a run takes while it holds the lock.

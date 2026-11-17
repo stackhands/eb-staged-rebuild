@@ -1,0 +1,73 @@
+#+TITLE: What the ledger records
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* What the ledger records
+
+What does an eb-stack ledger say about a software tree, and why can a reader trust it years later?
+
+** The problem
+
+After years of rebuilds and rollbacks, someone asks what was installed at a path on a given day, from which module file, and who put it there.
+A log that can be edited afterwards cannot answer that, nor can one that missed a publication because it was down that day, or holds one twice because a run retried.
+And a record must not claim more than happened: that a build started is not that it finished, and software found on disk is not software seen being built.
+
+** How eb-staged-rebuild handles it
+
+*** The log and its signatures
+
+The ledger belongs to eb-stack: =eb-stack ledger append= adds a record to a JSON Lines log and signs a new /head/, the size of the log and the root of a Merkle tree over its records, with an Ed25519 key.
+=eb-stack ledger verify= proves that a record is in a signed head, and that a later head extends an earlier one, so a log rewritten after a head was signed no longer matches it.
+eb-staged-rebuild signs and proves nothing itself: it runs those commands, with a time limit, and reads their first line.
+It takes a record as delivered only when =append= exited 0, its receipt names the record's index, the head file it wrote has the size and root of the receipt, the log holds this record at that index, and, with a public key, =verify= proves it.
+
+*** The records of a run
+
+A run with =--ledger-config= adds two records for each module file it publishes:
+
+- =started=, before the directories are exchanged;
+- =finished=, after the run is =complete=.
+
+Each names the module and the stable directory, =location=, which is the path the installation is used under; the generation and the hidden name are not the published place.
+Each also carries the SHA-256 of the new module file and of the one it replaced, the run id, and an =event_id= made of the state root, the run, the module file and the stage.
+A rollback adds a =correction= of each =finished= record, again as =started= and =finished=, with =corrects= set to the id of the record it corrects; a rollback of a run that recorded =started= and never =finished= adds an =aborted= record instead.
+=retire= and =gc= add no records.
+
+*** Once, and in order
+
+The records go into the run's outbox, =runs/RUN_ID/outbox.json=, before they are delivered, and are delivered one at a time, in order.
+A delivery without a receipt leaves the record pending, with the same bytes and the same =event_id=, and eb-stack answers a second append of a known =event_id= with =already recorded=, so a retry adds nothing.
+With the ledger required, the default, a run does not exchange anything until its =started= records are acknowledged, and stops with exit status 75; =resume= delivers them and goes on.
+With ="required": false=, the run goes on, and the records wait in the outbox for =resume=.
+
+*** Other sources of records
+
+=build-events= records =started= before any build command, and =finished= or =aborted= after it, from metadata that the operator writes for the operation.
+Only the fields of that metadata go into the records: never the command, its arguments or its environment.
+
+=ledger-maintenance backfill= adds a =finding= for each installation in a manifest of observations, dated when the observation was made, and says in the record that no history before it is recorded.
+=ledger-maintenance anchor= keeps one signed head per day, in files that are never replaced, and =verify-anchors= proves that each extends the one before.
+=ledger-maintenance project= writes a page of history for each package from a log that =verify= accepted against a head that covers every record, with each correction applied to the record it corrects.
+
+** What was considered and turned down
+
+- /Recording a publication after the exchange only./
+  A crash between the exchange and the record would leave a published installation that the ledger never heard of; =started= comes first, so every publication has at least that record.
+- /Signing and proving in eb-staged-rebuild./
+  It would tie this program to the ledger's format; it depends only on eb-stack's command line and the first line that prints.
+- /Recording the build command and its environment./
+  They can hold credentials, so only the allowlisted metadata is written.
+- /A finding that looks like an install./
+  A backfill cannot know how the software got there, so its record is a =finding=, at the time of the observation.
+
+** Limits
+
+- The ledger records what eb-staged-rebuild and =build-events= did, not every change to the tree: a plain =eb=, a copy or a removal by hand leaves no record.
+- Whoever holds the signing key can sign any log; the daily anchors protect the history only where the key's holder cannot change them.
+- A head signed by =build-events= is in its outbox, not in the head file of =--ledger-config=; sign a current head before =project= reads the log.
+
+** Further reading
+
+- [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]] sets up a ledger and records a run and its rollback.
+- [[file:../howto/build-events.org][Record any build command in the ledger]], [[file:../howto/backfill.org][Record software installed before the ledger]], [[file:../howto/anchor.org][Anchor the ledger once a day]] and [[file:../howto/package-history.org][Write the history of each package]] cover the other sources and readers.
+- [[https://github.com/stackhands/eb-stack][stackhands/eb-stack]] is the ledger's own project.

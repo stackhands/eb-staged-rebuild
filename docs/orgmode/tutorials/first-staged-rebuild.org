@@ -255,10 +255,13 @@ rm -rf ~/rebuild-tutorial ~/eb-staged-rebuild ~/eb-staged-rebuild-venv
 3. The old tree stayed at =software/demo/.1.first=, and =rollback= exchanged the two again.
 4. Each step was written to the run's journal, which is what =status= read.
 
+[[file:../explanation/staging.org][Why a rebuild is staged and swapped in]] gives the reasons for each step.
+
 ** Next steps
 
 - [[file:../howto/rebuild.org][Rebuild an installed module]] with EasyBuild, on a site's software tree.
 - [[file:../howto/recover.org][Finish a run that failed or stopped]].
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]].
 - [[file:../reference/cli.org][The eb-staged-rebuild command]], for every command and option.
 
 =docs/examples/tutorial.sh= in the repository runs the commands of this tutorial from "Make an installation to rebuild" on, and stops at the first one that does not do what the tutorial says.

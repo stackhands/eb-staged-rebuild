@@ -99,3 +99,4 @@ Running the same command again appends nothing: each observation is acknowledged
 
 - [[file:package-history.org][Write the history of each package]], where the =finding= starts each package
 - [[file:anchor.org][Anchor the ledger once a day]]
+- [[file:../explanation/ledger.org][What the ledger records]]

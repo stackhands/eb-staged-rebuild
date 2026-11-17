@@ -1,0 +1,21 @@
+// One run, from the easyconfig to the old tree's removal.
+digraph staging {
+    graph [bgcolor="white", rankdir=TB, nodesep=0.5, ranksep=0.4, fontname="Helvetica"];
+    node [shape=box, style="rounded,filled", fillcolor="#f4f4f4", color="#555555", fontname="Helvetica", fontsize=11];
+    edge [color="#555555", fontname="Helvetica", fontsize=10];
+
+    before [label="Before the run: software/Example/1.0-GCCcore-15.2.0\nis the installation jobs use, and its module file names it"];
+    build [label="EasyBuild installs into the run's generation,\n<state-root>/generations/RUN_ID, not into the live tree"];
+    check [shape=diamond, label="Did the build succeed, is its tree complete,\nand is the live tree as it was?", fillcolor="#ffffff"];
+    failed [label="The run fails:\nthe live tree and the module file are untouched"];
+    plan [label="The new module file is prepared, with root set to the stable path;\nthe paths the build wrote into files are changed to it too"];
+    move [label="The new tree moves beside the live one:\nsoftware/Example/.1.0-GCCcore-15.2.0.RUN_ID"];
+    exchange [label="renameat2(RENAME_EXCHANGE) swaps the two names:\nthe stable path holds the new tree, the hidden name the old one"];
+    module [label="The new module file replaces the old one\nin the same directory, with one rename"];
+    grace [label="The old tree waits under the hidden name:\nrollback swaps it back, gc removes it after the grace period"];
+
+    before -> build -> check;
+    check -> failed [label=" no"];
+    check -> plan [label=" yes"];
+    plan -> move -> exchange -> module -> grace;
+}

@@ -70,4 +70,5 @@ ls -A /opt/site/ledger-anchors
 
 - [[file:package-history.org][Write the history of each package]]
 - [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]]
+- [[file:../explanation/ledger.org][What the ledger records]]
 - [[file:../reference/cli.org][The eb-staged-rebuild command]], for the options of =ledger-maintenance=

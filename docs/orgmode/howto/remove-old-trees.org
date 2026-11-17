@@ -102,4 +102,5 @@ eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-sta
 
 - [[file:roll-back.org][Put the previous installation back]], which needs the hidden tree
 - [[file:retire.org][Retire a module file that another stack provides]]
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]], for why the old tree is kept
 - [[file:../reference/cli.org][The eb-staged-rebuild command]]
