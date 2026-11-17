@@ -43,6 +43,21 @@ def _read(path):
         return handle.read()
 
 
+def _class_links(modules, module):
+    """EasyBuild's absolute class link, a relative one, and a default link
+    beside the module file; and a class link to another version."""
+    links = {
+        os.path.join(modules, "tools", "demo", "1.lua"): module,
+        os.path.join(modules, "lib", "demo", "1.lua"): "../../all/demo/1.lua",
+        os.path.join(modules, "all", "demo", "default"): "1.lua",
+    }
+    other = os.path.join(modules, "tools", "demo", "2.lua")
+    for path, target in [*links.items(), (other, os.path.join(modules, "all", "demo", "2.lua"))]:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.symlink(target, path)
+    return links, other
+
+
 def _journal(state, run_id):
     return [j for j in list_journals(state) if j["run_id"] == run_id][0]
 
@@ -116,6 +131,60 @@ class RetireTests(unittest.TestCase):
             with self.assertRaises(NeedsIntervention):
                 rollback(state, result.run_id)
             self.assertEqual(_read(module), 'local root = "/elsewhere"\n')
+
+    def test_links_to_the_module_file_move_with_it_and_come_back(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, mods, state, _install, module, text = _tree(root)
+            links, other = _class_links(mods, module)
+            result = retire(state, module, clock=Clock())
+            journal = _journal(state, result.run_id)
+            plan = {link["live_path"]: link for link in journal["links_plan"]}
+            self.assertEqual(sorted(plan), sorted(links))
+            for path, target in links.items():
+                self.assertFalse(os.path.lexists(path))
+                self.assertEqual(plan[path]["target"], target)
+                self.assertEqual(plan[path]["status"], "retired")
+                self.assertEqual(os.readlink(plan[path]["retired_path"]), target)
+            self.assertTrue(os.path.islink(other))
+            rollback(state, result.run_id, clock=Clock(T0 + 100))
+            self.assertEqual(_read(module), text)
+            for path, target in links.items():
+                self.assertEqual(os.readlink(path), target)
+                self.assertEqual(_read(path), text)
+            journal = _journal(state, result.run_id)
+            self.assertEqual({link["status"] for link in journal["links_plan"]}, {"restored"})
+
+    def test_crash_between_links_rolls_back_every_link(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, mods, state, _install, module, text = _tree(root)
+            links, _other = _class_links(mods, module)
+            with self.assertRaises(InjectedCrash):
+                retire(state, module, faults=FaultInjector("retire.link:2"), clock=Clock())
+            self.assertEqual(_read(module), text)
+            self.assertEqual(sum(os.path.lexists(path) for path in links), len(links) - 1)
+            journal = list_journals(state)[0]
+            self.assertEqual(journal["state"], "retiring")
+            rollback(state, journal["run_id"])
+            for path, target in links.items():
+                self.assertEqual(os.readlink(path), target)
+
+    def test_rollback_refuses_to_overwrite_a_new_link(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, mods, state, _install, module, text = _tree(root)
+            links, _other = _class_links(mods, module)
+            result = retire(state, module, clock=Clock())
+            again = os.path.join(mods, "tools", "demo", "1.lua")
+            os.symlink("/elsewhere/1.lua", again)
+            with self.assertRaises(NeedsIntervention) as ctx:
+                rollback(state, result.run_id)
+            self.assertIn("exists again", str(ctx.exception))
+            self.assertEqual(os.readlink(again), "/elsewhere/1.lua")
+            self.assertEqual(_journal(state, result.run_id)["state"], "retired")
+            os.unlink(again)
+            rollback(state, result.run_id)
+            self.assertEqual(_read(module), text)
+            for path, target in links.items():
+                self.assertEqual(os.readlink(path), target)
 
     def test_retire_again_after_rollback(self):
         with tempfile.TemporaryDirectory() as root:

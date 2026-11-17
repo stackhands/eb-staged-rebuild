@@ -164,6 +164,12 @@ fixture() {
     ln -s state "${root}/statelink"
     ln -s 1.lua "${root}/modules/all/demo/symlink.lua"
     printf 'whatis("no root")\n' > "${root}/modules/all/demo/noroot.lua"
+    # A module with module class links: absolute, as EasyBuild makes them,
+    # and relative.
+    mkdir -p "${root}/software/classy/1" "${root}/modules/all/classy" "${root}/modules/tools/classy" "${root}/modules/lib/classy"
+    printf 'local root = "software/classy/1"\n' > "${root}/modules/all/classy/1.lua"
+    ln -s "${root}/modules/all/classy/1.lua" "${root}/modules/tools/classy/1.lua"
+    ln -s ../../all/classy/1.lua "${root}/modules/lib/classy/1.lua"
     mkdir -p "${root}/software/kept/.3.0001" "${root}/software/kept/3" "${root}/modules/all/kept" "${root}/state/runs/r9"
     ln -s .3.0001 "${root}/software/kept/alias"
     printf 'local root = "%s/software/kept/alias"\n' "${root}" > "${root}/modules/all/kept/3.lua"
@@ -291,6 +297,12 @@ compare_admin "resume builds the removed generation again" env FAKE_EB_FAIL=1 @C
 for impl in py zig; do rm -rf "${work}/${impl}/fstate"; done
 compare_admin "rollback the retire" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "rollback again" rollback --state-root @ROOT@/state @RETIRE@
+compare_admin "retire --dry-run, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua --dry-run
+compare_admin "retire, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua
+for impl in py zig; do ln -s /elsewhere/1.lua "${work}/${impl}/modules/tools/classy/1.lua"; done
+compare_admin "rollback over a new class link" rollback --state-root @ROOT@/state @RETIRE@
+for impl in py zig; do rm "${work}/${impl}/modules/tools/classy/1.lua"; done
+compare_admin "rollback the retire with class links" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "run --dry-run, auto" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
 compare_admin "run --dry-run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --dry-run -- demo-1.eb -f

@@ -230,6 +230,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RetireTests.test_resume_refuses_a_retire_record | differential "resume a retire record" |
 | RetireTests.test_rollback_puts_module_back | differential "rollback the retire", "rollback again" |
 | RetireTests.test_rollback_refuses_to_overwrite_a_new_module_file | differential "rollback over a new module file", "rollback after the new file is gone" |
+| RetireTests.test_links_to_the_module_file_move_with_it_and_come_back | differential "retire --dry-run, class links", "retire, class links", "rollback the retire with class links"; `zig/admin.zig` test "linksTo finds the links that resolve to a module file beside it and in each class directory" |
+| RetireTests.test_crash_between_links_rolls_back_every_link | crash_matrix "retire killed at retire.link:1", "retire killed at retire.link:2" |
+| RetireTests.test_rollback_refuses_to_overwrite_a_new_link | differential "rollback over a new class link", "rollback the retire with class links" |
 | RetireTests.test_retire_again_after_rollback | differential "retire after a rollback" |
 | RetireTests.test_refuses_already_retired | differential "retire again" |
 | RetireTests.test_refuses_non_regular_files | differential "retire, a directory", "retire, a symlinked module file", "retire, no module file" |

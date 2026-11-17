@@ -240,6 +240,77 @@ fn plan(c: *Ctx, state_root: []const u8, module_in: []const u8) Plan {
     return .{ .module = module, .data = data, .software_dir = abspath(c.a, root.path) };
 }
 
+fn isRealDir(p: []const u8) bool {
+    return std.mem.eql(u8, main_mod.lstatKind(p), "dir");
+}
+
+/// The names in directory `dir`, or none when it cannot be listed.
+fn entryNames(a: Allocator, dir: []const u8) []const []const u8 {
+    const fd = fsx.openDir(fsx.cwd, dir, true) catch return &.{};
+    defer sys.close(fd);
+    var it = fsx.DirIter.init(a, fd) catch oom();
+    defer it.deinit(a);
+    var names: std.ArrayList([]const u8) = .empty;
+    while (it.next() catch null) |e| names.append(a, a.dupe(u8, e.name) catch oom()) catch oom();
+    return names.items;
+}
+
+fn readLink(c: *Ctx, path: []const u8) []const u8 {
+    var buf: [sys.path_max]u8 = undefined;
+    var zb: [sys.path_max:0]u8 = undefined;
+    const z = sys.z(&zb, path) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
+    const n = sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, &buf, buf.len }) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
+    return c.a.dupe(u8, buf[0..n]) catch oom();
+}
+
+/// Symbolic links that resolve to `module`, sorted: in the module file's
+/// directory and, for each `all` directory above it, in the same place under
+/// each sibling of that directory. EasyBuild puts a module class link at
+/// `<modules>/<class>/<name>/...` beside `<modules>/all/<name>/...`.
+fn linksTo(a: Allocator, module: []const u8) []const []const u8 {
+    var rb: [sys.path_max]u8 = undefined;
+    const real = a.dupe(u8, fsx.realpath(fsx.cwd, module, &rb) catch return &.{}) catch oom();
+    const dir = dirname(module);
+    var directories: std.ArrayList([]const u8) = .empty;
+    directories.append(a, dir) catch oom();
+    var parts: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, dir, '/');
+    while (it.next()) |seg| parts.append(a, seg) catch oom();
+    for (parts.items, 0..) |part, index| {
+        if (!std.mem.eql(u8, part, "all")) continue;
+        const joined = std.mem.join(a, "/", parts.items[0..index]) catch oom();
+        const top = if (joined.len > 0) joined else "/";
+        for (entryNames(a, top)) |name| {
+            if (std.mem.eql(u8, name, "all")) continue;
+            const sibling = std.fs.path.join(a, &.{ top, name }) catch oom();
+            var pieces: std.ArrayList([]const u8) = .empty;
+            pieces.append(a, sibling) catch oom();
+            pieces.appendSlice(a, parts.items[index + 1 ..]) catch oom();
+            const candidate = std.fs.path.join(a, pieces.items) catch oom();
+            if (isRealDir(sibling) and isRealDir(candidate)) directories.append(a, candidate) catch oom();
+        }
+    }
+    var links: std.ArrayList([]const u8) = .empty;
+    for (directories.items) |d| {
+        for (entryNames(a, d)) |name| {
+            const path = std.fs.path.join(a, &.{ d, name }) catch oom();
+            if (!std.mem.eql(u8, main_mod.lstatKind(path), "symlink")) continue;
+            var lb: [sys.path_max]u8 = undefined;
+            const target = fsx.realpath(fsx.cwd, path, &lb) catch continue;
+            if (!std.mem.eql(u8, target, real)) continue;
+            for (links.items) |seen| {
+                if (std.mem.eql(u8, seen, path)) break;
+            } else links.append(a, path) catch oom();
+        }
+    }
+    std.mem.sort([]const u8, links.items, {}, struct {
+        fn lt(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.order(u8, x, y) == .lt;
+        }
+    }.lt);
+    return links.items;
+}
+
 fn discardEmpty(a: Allocator, top: []const u8) void {
     // os.walk(top, topdown=False) then rmdir each: children first.
     const fd = fsx.openDir(fsx.cwd, top, false) catch {
@@ -275,8 +346,11 @@ fn move(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8) 
         defer sys.close(fd);
         sys.fsync(fd) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, source)});
     }
-    const rename_step = c.a.print("{s}.rename", .{step}) catch step;
-    if (f.fails(rename_step)) refuse("[Errno 5] injected failure at {s}", .{rename_step});
+    rename(c, source, destination, c.a.print("{s}.rename", .{step}) catch step);
+}
+
+fn rename(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8) void {
+    if (c.faults().fails(step)) refuse("[Errno 5] injected failure at {s}", .{step});
     sys.renameat(fsx.cwd, source, fsx.cwd, destination) catch |err| switch (err) {
         error.CrossDevice => refuse("{s} and {s} are on different filesystems", .{ source, destination }),
         else => refuse("{s}", .{main_mod.osError(c.a, err, source)}),
@@ -293,6 +367,7 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
     const state_root = abspath(a, state_root_in);
     if (dry_run) {
         const p = plan(c, state_root, module_file);
+        for (linksTo(a, p.module)) |link| log("would retire the link {s}", .{link});
         log("would retire {s} (software directory {s} is left in place)", .{ p.module, p.software_dir });
         return 0;
     }
@@ -311,11 +386,30 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
         name = a.print("{s}-{d}", .{ stamp, count }) catch name;
     }
     const run_id = a.print("retire-{s}", .{name}) catch name;
-    const destination = std.fs.path.join(a, &.{ retired_root, name, std.mem.trimStart(u8, p.module, "/") }) catch "";
+    const top = std.fs.path.join(a, &.{ retired_root, name }) catch oom();
+    const destination = std.fs.path.join(a, &.{ top, std.mem.trimStart(u8, p.module, "/") }) catch "";
+    const live_links = linksTo(a, p.module);
+    const links = a.alloc(Py, live_links.len) catch oom();
+    for (live_links, links) |live, *link| {
+        var entry: Py = .{ .dict = &.{} };
+        entry = dictSet(a, entry, "live_path", Py.s(live));
+        entry = dictSet(a, entry, "target", Py.s(readLink(c, live)));
+        entry = dictSet(a, entry, "retired_path", Py.s(std.fs.path.join(a, &.{ top, std.mem.trimStart(u8, live, "/") }) catch oom()));
+        link.* = dictSet(a, entry, "status", Py.s("pending"));
+    }
     atomic.makedirs(dirname(destination)) catch |err| refuse("{s}", .{main_mod.osError(a, err, dirname(destination))});
     if (statDev(c, dirname(p.module)) != statDev(c, dirname(destination))) {
-        discardEmpty(a, std.fs.path.join(a, &.{ retired_root, name }) catch "");
+        discardEmpty(a, top);
         refuse("{s} and the state root are on different filesystems; retire needs one atomic rename, so put --state-root on the same filesystem as the module tree", .{p.module});
+    }
+    for (links) |link| {
+        const live = str(pyfmt.get(link, "live_path")).?;
+        const kept = dirname(str(pyfmt.get(link, "retired_path")).?);
+        atomic.makedirs(kept) catch |err| refuse("{s}", .{main_mod.osError(a, err, kept)});
+        if (statDev(c, dirname(live)) != statDev(c, kept)) {
+            discardEmpty(a, top);
+            refuse("{s} and the state root are on different filesystems; retire needs one atomic rename, so put --state-root on the same filesystem as the module tree", .{live});
+        }
     }
     const path = journalPath(a, state_root, run_id);
     var journal: Py = .{ .dict = &.{} };
@@ -335,11 +429,19 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
         .{ .key = "retired_at", .value = .null },
         .{ .key = "rolled_back_at", .value = .null },
         .{ .key = "modules_plan", .value = .{ .list = &.{} } },
-        .{ .key = "links_plan", .value = .{ .list = &.{} } },
+        .{ .key = "links_plan", .value = .{ .list = links } },
         .{ .key = "message", .value = Py.s("") },
     };
     for (fields) |f| journal = dictSet(a, journal, f.key, f.value);
     journal = saveJournal(c, path, journal, "journal.retiring");
+    for (links, 1..) |*link, number| {
+        const live = str(pyfmt.get(link.*, "live_path")).?;
+        const kept = str(pyfmt.get(link.*, "retired_path")).?;
+        rename(c, live, kept, a.print("retire.link:{d}", .{number}) catch oom());
+        link.* = dictSet(a, link.*, "status", Py.s("retired"));
+        log("retired the link {s} -> {s}", .{ live, kept });
+    }
+    journal = dictSet(a, journal, "links_plan", .{ .list = links });
     move(c, p.module, destination, "retire");
     const t = nowSeconds();
     journal = dictSet(a, journal, "state", Py.s("retired"));
@@ -391,6 +493,25 @@ pub fn rollback(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeou
     } else {
         refuse("neither {s} nor {s} holds the retired module file", .{ module, retired });
     }
+    const recorded = pyfmt.get(journal, "links_plan");
+    const links = a.dupe(Py, if (recorded != null and recorded.? == .list) recorded.?.list else &.{}) catch oom();
+    var number = links.len;
+    while (number > 0) : (number -= 1) {
+        const link = &links[number - 1];
+        const live = str(pyfmt.get(link.*, "live_path")) orelse refuse("journal link has no live_path", .{});
+        const kept = str(pyfmt.get(link.*, "retired_path")) orelse refuse("journal link has no retired_path", .{});
+        const target = str(pyfmt.get(link.*, "target")) orelse refuse("journal link has no target", .{});
+        if (std.mem.eql(u8, main_mod.lstatKind(kept), "symlink")) {
+            if (!std.mem.eql(u8, readLink(c, kept), target)) refuse("{s} does not match the link recorded for {s}", .{ kept, run_id });
+            if (!std.mem.eql(u8, main_mod.lstatKind(live), "missing")) refuse("{s} exists again; refusing to overwrite it with the retired link", .{live});
+            rename(c, kept, live, a.print("rollback.retire.link:{d}", .{number}) catch oom());
+            log("restored the link {s}", .{live});
+        } else if (!(std.mem.eql(u8, main_mod.lstatKind(live), "symlink") and std.mem.eql(u8, readLink(c, live), target))) {
+            refuse("neither {s} nor {s} holds the link recorded for {s}", .{ live, kept, run_id });
+        }
+        link.* = dictSet(a, link.*, "status", Py.s("restored"));
+    }
+    journal = dictSet(a, journal, "links_plan", .{ .list = links });
     const t = nowSeconds();
     journal = dictSet(a, journal, "state", Py.s("rolled_back"));
     journal = dictSet(a, journal, "rolled_back_at", .{ .float = t });
@@ -721,4 +842,32 @@ test "finishedRun: a complete or rolled-back run, and a failed one only with inc
     try std.testing.expectEqualStrings("failed run", finishedRun(.{ .dict = &failed }, true).?);
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &building }, true));
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &.{} }, true));
+}
+
+test "linksTo finds the links that resolve to a module file beside it and in each class directory" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-links-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const module = try a.print("{s}/modules/all/demo/1.lua", .{root});
+    for ([_][]const u8{ "all/demo", "tools/demo", "lib/demo", "other" }) |d| try atomic.makedirs(try a.print("{s}/modules/{s}", .{ root, d }));
+    sys.close(try sys.openat(fsx.cwd, module, .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o644));
+    const links = [_][2][]const u8{
+        .{ module, "modules/tools/demo/1.lua" },
+        .{ "../../all/demo/1.lua", "modules/lib/demo/1.lua" },
+        .{ "1.lua", "modules/all/demo/default" },
+        .{ "../all/demo/2.lua", "modules/tools/demo/2.lua" },
+        .{ module, "modules/other/demo-1.lua" },
+    };
+    for (links) |l| {
+        var zt: [sys.path_max:0]u8 = undefined;
+        var zl: [sys.path_max:0]u8 = undefined;
+        _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, l[0])).ptr, linux.AT.FDCWD, (try sys.z(&zl, try a.print("{s}/{s}", .{ root, l[1] }))).ptr });
+    }
+    const found = linksTo(a, module);
+    try std.testing.expectEqual(@as(usize, 3), found.len);
+    for (found, [_][]const u8{ "modules/all/demo/default", "modules/lib/demo/1.lua", "modules/tools/demo/1.lua" }) |got, want| {
+        try std.testing.expectEqualStrings(try a.print("{s}/{s}", .{ root, want }), got);
+    }
 }
