@@ -1,0 +1,65 @@
+#+TITLE: Export garbage-collection metrics to node_exporter
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Export garbage-collection metrics to node_exporter
+
+Publish the state of an =eb-staged-rebuild gc= pass through the Prometheus node_exporter textfile collector.
+
+** Before you start
+
+- A node_exporter service with the textfile collector enabled.
+- The collector directory used by that service.
+- A state root that the account running =gc= can read.
+
+** Steps
+
+1. Enable the node_exporter textfile collector with a directory dedicated to its input files.
+   For a systemd service, add this argument to its existing command:
+
+   #+begin_src text
+   --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+   #+end_src
+
+   Reload the systemd configuration and restart node_exporter after changing its command.
+2. Run garbage collection with a file in that directory:
+
+   #+begin_src bash
+   eb-staged-rebuild gc \
+     --state-root /opt/software/.eb-staged-rebuild \
+     --metrics-file /var/lib/node_exporter/textfile_collector/eb-staged-rebuild.prom
+   #+end_src
+
+   The option is off by default. It cannot be combined with =--dry-run=, because a dry run does not change files.
+   The tool writes a temporary file in the collector directory and renames it over the destination, so node_exporter never reads a partial exposition.
+3. Schedule the same command at the interval at which old trees should be collected.
+
+** Check that it worked
+
+Ask node_exporter for the metric names:
+
+#+begin_src bash
+curl --fail --silent http://127.0.0.1:9100/metrics \
+  | grep '^eb_staged_rebuild_'
+#+end_src
+
+The output contains the number of real generation directories, the age of the newest generation that is still published at a stable software path, and the Unix timestamp taken when the =gc= pass completes.
+The tool identifies a published generation by a complete journal, a live module that still points to the stable software path, and the run stamp in that software tree.
+A newer failed or unfinished generation does not replace it.
+The age sample is absent when no live tree and complete journal identify a current generation with a valid creation time.
+
+There is no bytes-freed metric.
+Directory entries and file lengths do not tell this tool how many storage bytes a filesystem released after sparse files, hard links, snapshots, compression or deduplication are considered.
+
+** If it fails
+
+| Symptom                                             | Cause                                                | What to do                                                                    |
+|-----------------------------------------------------+------------------------------------------------------+-------------------------------------------------------------------------------|
+| node_exporter does not show the metrics             | It uses another textfile directory, or cannot read it. | Check its =--collector.textfile.directory= argument and the file permissions. |
+| =--metrics-file cannot be used with --dry-run=      | A dry run was asked to write a file.                 | Remove =--dry-run= after checking the garbage-collection plan separately.     |
+| The current-generation age sample is absent         | No complete journal matches both a live module and a stamped live tree. | Inspect the state root, its run journals, live module and live software tree. |
+
+** Related
+
+- [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:../reference/cli.org][The eb-staged-rebuild command]]

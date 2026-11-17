@@ -22,7 +22,7 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
-                     [--lock-timeout SECONDS]
+                     [--lock-timeout SECONDS] [--metrics-file PATH]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
                          [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
@@ -177,9 +177,13 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                                          |
 | =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
+| =--metrics-file=   | After a completed pass, atomically replace this file with Prometheus text exposition. It cannot be used with =--dry-run=. Without this option, no metrics file is written.                                                                                                                                   |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
+The metrics file reports generation directories present, the age of the newest generation whose complete journal, current live module and live-tree stamp show that it remains published, and the time captured after this =gc= pass completes.
+Failed and unfinished generations do not become current merely because their generation directories are newer.
+It does not report bytes freed, because the tool does not know how many storage bytes the filesystem released.
 
 *** retire
 

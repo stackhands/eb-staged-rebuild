@@ -279,6 +279,19 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
 
+### tests/test_metrics.py
+
+The Python and Zig renderers expose the same names and known generation values.
+The Python test also passes the generated text to `promtool check metrics` when CI's pinned promtool is present.
+
+| test | replacement |
+|---|---|
+| MetricsTests.test_metrics_report_only_known_values | `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_retired_publication_with_stamped_tree_is_not_current | `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_metrics_are_an_atomic_prometheus_file | zig-common `src/atomic_test.zig` atomic replacement tests; `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_gc_timestamp_is_taken_after_locked_work | `zig/admin.zig` test "gc records its completion time after its starting time" |
+| MetricsTests.test_dry_run_refuses_to_write_metrics | `zig/main.zig` dispatches the same refusal in `admin.gc` |
+
 ### tests/test_prefix.py
 
 The generation prefix is published by a same-directory replacement. The Zig

@@ -575,7 +575,8 @@ const rollback_help = rollback_usage ++
 const gc_usage =
     \\usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
     \\                            [--grace-hours GRACE_HOURS] [--dry-run]
-    \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+    \\                            [--lock-timeout LOCK_TIMEOUT]
+    \\                            [--metrics-file PATH] [--include-failed]
     \\
 ;
 const gc_help = gc_usage ++
@@ -586,6 +587,8 @@ const gc_help = gc_usage ++
     \\  --grace-hours GRACE_HOURS
     \\  --dry-run
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --metrics-file PATH   atomically write Prometheus metrics after garbage
+    \\                        collection
     \\  --include-failed      also remove the hidden trees and generation of a
     \\                        failed run that published nothing, after the grace
     \\                        period
@@ -685,6 +688,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "grace-hours", .takes_value = true },
         .{ .name = "dry-run", .takes_value = false },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "metrics-file", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
     };
     const who = prog ++ " gc";
@@ -700,7 +704,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const timeout: ?f64 = if (opts[3].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
+    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[5].seen, timeout, opts[1].value == null, opts[4].value);
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -1020,7 +1024,8 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
     try expect(
         \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
         \\                            [--grace-hours GRACE_HOURS] [--dry-run]
-        \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+        \\                            [--lock-timeout LOCK_TIMEOUT]
+        \\                            [--metrics-file PATH] [--include-failed]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(

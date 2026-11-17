@@ -22,6 +22,8 @@ jobs:
           python-version: "3.12"
       - name: ledger CLI
         uses: ./.github/actions/pinned-ledger
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
       - name: user namespaces for the userns backend
         # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
         run: |
@@ -67,6 +69,8 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
       - run: zig build -Drelease=true
       - name: rebuild stagedemo with the binary
         env:
@@ -173,3 +177,7 @@ jobs:
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
       - name: build events and the bounded ledger call against the binary
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_build_events tests.test_build_events_cli tests.test_build_events_state_cli tests.test_ledger_bounded_cli
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
+      - name: metrics output and atomic failures against both implementations
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli

@@ -27,6 +27,7 @@ from eb_staged_rebuild.constants import SECONDS_PER_HOUR
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.journal import generation_root, journal_path, list_journals, save_journal
 from eb_staged_rebuild.lockfile import FileLock
+from eb_staged_rebuild.metrics import write_metrics
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.paths import abspath, is_within, lstat_kind
 from eb_staged_rebuild.retire import is_retire
@@ -206,7 +207,7 @@ def _retired_software(journals, roots, grace_hours, now):
     return actions
 
 
-def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace):
+def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace, metrics_file, completion_clock):
     state_root = abspath(state_root)
     journals = list_journals(state_root)
     roots = _live_roots(journals)
@@ -295,6 +296,8 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                 "journal.gc",
             )
     actions.extend(_retired_software(journals, roots, grace_hours, now))
+    if metrics_file is not None:
+        write_metrics(metrics_file, state_root, journals, completion_clock())
     return actions
 
 
@@ -306,12 +309,16 @@ def collect(
     include_failed=False,
     lock_timeout=None,
     run_grace=False,
+    metrics_file=None,
+    completion_clock=time.time,
 ):
     """Collect retired trees while holding the same lock as publish/rollback.
 
     ``grace_hours`` applies to every tree, or with ``run_grace`` only to the
     trees whose run recorded no grace period and to retired module files.
     """
+    if dry_run and metrics_file is not None:
+        raise Refused("--metrics-file cannot be used with --dry-run")
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
@@ -322,6 +329,8 @@ def collect(
             dry_run,
             include_failed,
             run_grace,
+            metrics_file,
+            completion_clock,
         )
     finally:
         lock.release()

@@ -37,6 +37,7 @@ fn offendingComponent(path: []const u8) ?[]const u8 {
 
 fn privateFile(a: Allocator, root: []const u8, name: []const u8) !bool {
     const path = try std.fs.path.join(a, &.{ root, name });
+    defer a.free(path);
     const st = fsx.statAt(fsx.cwd, path, false) catch return true;
     return st.isReg() and st.nlink == 1;
 }
@@ -121,6 +122,6 @@ test "a hard-linked gate is not truncated and a symlink root is refused" {
     _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, fifo)).ptr, 0o755);
     const pipe = try std.fmt.allocPrint(a, "{s}/.lock", .{fifo});
     defer a.free(pipe);
-    try std.testing.expect(linux.errno(linux.mkfifoat(linux.AT.FDCWD, (try sys.z(&zb, pipe)).ptr, 0o644)) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.mknodat(linux.AT.FDCWD, (try sys.z(&zb, pipe)).ptr, linux.S.IFIFO | 0o644, 0)) == .SUCCESS);
     try std.testing.expectError(error.Gate, acquire(a, fifo, 0, &detail));
 }

@@ -139,6 +139,11 @@ def _parser():
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
     gc_p.add_argument(
+        "--metrics-file",
+        metavar="PATH",
+        help="atomically write Prometheus metrics after garbage collection",
+    )
+    gc_p.add_argument(
         "--include-failed",
         action="store_true",
         help="also remove the hidden trees and generation of a failed run that published nothing, after the grace period",
@@ -250,6 +255,7 @@ def _dispatch(args):
             include_failed=args.include_failed,
             lock_timeout=args.lock_timeout,
             run_grace=args.grace_hours is None,
+            metrics_file=args.metrics_file,
         )
         for action in actions:
             print(f"{action['action']}: {action['path']} ({action['reason']})")
