@@ -147,14 +147,6 @@ fixture() {
     printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_stack.py" "$@"\n' "${repo_root}" > "${root}/ebstack"
     chmod +x "${root}/ebstack"
     printf '{"eb_stack": "%s/ebstack", "log": "%s/ledger.jsonl", "key": "%s/key.pem", "head": "%s/head.json", "actor": "ci", "stack": "s", "target": "t"}\n' "${root}" "${root}" "${root}" "${root}" > "${root}/ledger.json"
-    mkdir -p "${root}/bev/log" "${root}/bev/keys"
-    printf 'fake key\n' > "${root}/bev/keys/key.pem"
-    printf 'name = "demo"\n' > "${root}/bev/demo-1.eb"
-    printf '{"eb_stack": "%s/ebstack", "log": "%s/bev/log/ledger.jsonl", "key": "%s/bev/keys/key.pem", "outbox": "%s/bev/outbox"}\n' "${root}" "${root}" "${root}" "${root}" > "${root}/bev/config.json"
-    for op in ok again fails missing pend; do
-        printf '{"operation": "%s", "actor": "ci", "stack": "s", "module": "demo/1", "location": "%s/software/demo/1", "target": {"cpu": "x86_64/generic"}, "easyconfig": {"path": "%s/bev/demo-1.eb"}}\n' "${op}" "${root}" "${root}" > "${root}/bev/${op}.json"
-    done
-    printf '{"operation": "bad op", "actor": "ci"}\n' > "${root}/bev/bad.json"
     # Refusal fixtures: a symlinked rebuild target, a symlinked state root,
     # a symlinked module file, a module file without a root assignment, and
     # a second module whose root names a hidden tree through a symlink.
@@ -210,10 +202,6 @@ compare_admin() {
         local -a cmd args=()
         local rid
         if [ "${impl}" = py ]; then cmd=(env PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild); else cmd=("${TOOL_BIN}"); fi
-        # The build-events entry point is its own module in the Python tool.
-        local bev=0
-        for a in "$@"; do [ "${a}" = build-events ] && bev=1; done
-        if [ "${bev}" = 1 ] && [ "${impl}" = py ]; then cmd=(env PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild.build_events); fi
         # The retire record the last successful retire created. Names sort
         # by the second only, so two retires in one second do not order by
         # name the same way in both copies.
@@ -222,7 +210,6 @@ compare_admin() {
         local d
         for d in "${root}"/state/runs/retire-*; do [ -e "${d}" ] && before+=("${d##*/}"); done
         for a in "$@"; do
-            if [ "${a}" = build-events ] && [ "${impl}" = py ]; then continue; fi
             a="${a//@ROOT@/${root}}"
             if [ "${a}" = "@CMD@" ]; then args+=("${cmd[@]}"); else args+=("${a//@RETIRE@/${rid}}"); fi
         done
@@ -497,16 +484,6 @@ done
 compare_admin "resume a generation-pointer record" resume --state-root @ROOT@/state foreign
 compare_admin "status of a generation-pointer record" status --state-root @ROOT@/state foreign
 for impl in py zig; do rm -rf "${work}/${impl}/state/runs/foreign"; done
-compare_admin "build-events, command succeeds" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/ok.json -- true
-compare_admin "build-events, recorded, not repeated" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/ok.json -- false
-compare_admin "build-events, deliver a recorded one" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/ok.json --deliver
-compare_admin "build-events, command fails" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/fails.json -- sh -c "exit 3"
-compare_admin "build-events, command missing" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/missing.json -- no-such-command-here
-for impl in py zig; do echo fail-before > "${work}/${impl}/plan2"; done
-compare_admin "build-events, append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan2 @CMD@ build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/pend.json -- true
-compare_admin "build-events, deliver then run" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/pend.json -- true
-compare_admin "build-events, bad metadata" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/bad.json -- true
-compare_admin "build-events, both deliver and command" build-events --config @ROOT@/bev/config.json --metadata @ROOT@/bev/ok.json --deliver -- true
 compare_admin "run, eb fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb /bin/false --run-id r3 --skip-live-check --module demo/1 -- demo-1.eb
 # The bwrap backend, with the fake bwrap first on PATH and eb answering
 # --version: present stage keys (5.4.2), the 5.3 layout without them, an

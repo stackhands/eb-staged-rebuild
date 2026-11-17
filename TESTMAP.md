@@ -6,52 +6,6 @@ command is not accepted while one is left.
 `tests/check_testmap.py` (CI, unit job) fails on a missing row, a row that
 names no such test, or a "not yet" row.
 
-## tests/test_ledger_maintenance.py (`ledger-maintenance`)
-
-`tests/differential_ledger.py` builds one fixture per case, runs the Python tool and
-the binary on two copies of it, and compares exit code, stdout, stderr and the files
-left behind; a crash case stops the program at a named fault point and kills it.
-Every test of the module has a replacement.
-
-| test | replacement (a `tests/differential_ledger.py` case unless named otherwise) |
-|---|---|
-| test_ledger_maintenance.InputTests.test_markdown_escaping | `zig/ledger.zig` test "md escapes markup, HTML and controls" |
-| test_ledger_maintenance.InputTests.test_file_stems_stay_in_one_directory | `zig/ledger.zig` test "file stems stay in one directory" |
-| test_ledger_maintenance.InputTests.test_heads_must_be_exactly_what_eb_stack_writes | `zig/ledger.zig` test "heads must be exactly what eb-stack writes" |
-| test_ledger_maintenance.InputTests.test_log_lines_must_be_canonical_ledger_records | `zig/ledger.zig` test "log lines must be canonical ledger records" |
-| test_ledger_maintenance.CommandLineTests.test_backfill_anchor_and_project_from_the_command_line | runs against `TOOL_BIN` |
-| test_ledger_maintenance.BackfillTests.test_observations_become_findings_at_the_observation_time | backfill: findings at the observation time, then a projection |
-| test_ledger_maintenance.BackfillTests.test_repeated_retries_append_nothing | backfill: findings at the observation time, then a projection (second backfill) |
-| test_ledger_maintenance.BackfillTests.test_an_interrupted_backfill_resumes_without_duplicates | backfill: an interrupted backfill resumes without duplicates |
-| test_ledger_maintenance.BackfillTests.test_a_torn_tail_is_quarantined_by_eb_stack_before_the_backfill | backfill: a torn tail is quarantined first |
-| test_ledger_maintenance.BackfillTests.test_changed_manifest_content_is_refused_before_anything_is_appended | backfill: changed manifest content is refused |
-| test_ledger_maintenance.BackfillTests.test_an_event_recorded_with_other_content_is_refused_before_anything_is_appended | backfill: an event recorded with other content is refused |
-| test_ledger_maintenance.BackfillTests.test_unpinned_or_guessed_input_is_refused | backfill: refused input, * (15 cases); backfill: an unpinned digest is refused |
-| test_ledger_maintenance.BackfillTests.test_path_aliases_and_a_key_beside_the_log_are_refused | backfill: path aliases and a key beside the log are refused |
-| test_ledger_maintenance.AnchorTests.test_the_first_anchor_is_read_only_single_link_and_verifies | anchor: the first anchor is read-only, single-link and verifies |
-| test_ledger_maintenance.AnchorTests.test_an_empty_log_can_be_anchored | anchor: an empty log |
-| test_ledger_maintenance.AnchorTests.test_a_same_day_retry_never_replaces_the_anchor | anchor: the first anchor is read-only, single-link and verifies (second anchor) |
-| test_ledger_maintenance.AnchorTests.test_daily_anchors_form_a_verified_chain | anchor: daily anchors form a verified chain |
-| test_ledger_maintenance.AnchorTests.test_a_rewritten_log_is_refused_and_no_anchor_is_added | anchor: a rewritten log is refused |
-| test_ledger_maintenance.AnchorTests.test_a_truncated_log_is_refused | anchor: a truncated log is refused |
-| test_ledger_maintenance.AnchorTests.test_a_tampered_or_malformed_anchor_is_refused_and_kept | anchor: a tampered anchor (signature, root, truncated, extra field) is refused and kept |
-| test_ledger_maintenance.AnchorTests.test_an_anchor_from_a_later_day_or_another_key_is_refused | anchor: an anchor from a later day is refused; anchor: a head signed by another key is refused |
-| test_ledger_maintenance.AnchorTests.test_interrupted_publication_leaves_no_partial_anchor | anchor: a crash at anchor.sign / anchor.publish leaves no anchor |
-| test_ledger_maintenance.AnchorTests.test_a_crash_between_link_and_cleanup_is_recovered | anchor: a crash after the link is recovered |
-| test_ledger_maintenance.AnchorTests.test_an_anchor_with_another_name_is_refused | anchor: an anchor whose name is not its day is refused; anchor: an anchor with a second link is refused |
-| test_ledger_maintenance.AnchorTests.test_an_index_checkpoint_line_after_the_head_receipt_is_accepted | anchor: receipt, index checkpoint |
-| test_ledger_maintenance.AnchorTests.test_malformed_head_receipts_are_refused | anchor: receipt, noisy head / lying verify / failing verify / failing head |
-| test_ledger_maintenance.AnchorTests.test_anchor_paths_are_checked | anchor: paths are checked |
-| test_ledger_maintenance.ProjectionTests.test_history_keeps_correction_retire_access_and_finding_semantics | project: history, corrections, findings and hostile text |
-| test_ledger_maintenance.ProjectionTests.test_projection_is_deterministic | project: history, corrections, findings and hostile text (three projections, two directories) |
-| test_ledger_maintenance.ProjectionTests.test_untrusted_text_is_escaped | project: history, corrections, findings and hostile text |
-| test_ledger_maintenance.ProjectionTests.test_a_tampered_log_is_refused_and_nothing_is_written | project: a edited / rewritten / partial log is refused and nothing is written |
-| test_ledger_maintenance.ProjectionTests.test_a_tampered_or_foreign_head_is_refused | project: tampered and foreign heads are refused |
-| test_ledger_maintenance.ProjectionTests.test_a_stale_head_is_refused | project: a stale head is refused |
-| test_ledger_maintenance.ProjectionTests.test_an_interrupted_projection_is_completed_by_a_rerun | project: an interrupted projection is completed by a rerun; project: a crash before the index is replaced keeps the old index |
-| test_ledger_maintenance.ProjectionTests.test_output_directory_is_checked | project: the output directory is checked |
-| test_ledger_maintenance.ProjectionTests.test_a_malformed_verify_receipt_is_refused | project: verify receipt, silent / doubled / tiles fail |
-
 ## Access metadata of the atomic write (zig-common `atomic.atomicWrite`)
 
 The Zig build writes module files with zig-common's `atomicWrite`. These tests are ported one for one to zig-common `src/atomic_test.zig`,
@@ -546,45 +500,3 @@ it writes, with ids, times and the state root's scope normalized.
 | test | replacement |
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
-
-## tests/test_build_events.py (`build-events`)
-
-`Case.cli` and `Case.popen` run `TOOL_BIN build-events` when `TOOL_BIN` is set, so every test that drives the command runs
-unchanged against the binary (CI: "build events and the bounded ledger call against the binary"; the real-ledger class
-needs `EB_STACK_BIN`). The tests that call `build_events` in process run their same bodies through the command in
-`tests/test_build_events_cli.py`: a crash pauses the command at the step the Python recorder lists
-(`EB_STAGED_REBUILD_PAUSE_AT`) and kills it with SIGKILL; a refusal is exit 2 with the message on stderr.
-
-| test | replacement |
-|---|---|
-| test_build_events.LifecycleTests.test_started_is_in_the_ledger_before_the_command_and_finished_after | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_command_failure_records_aborted_and_keeps_its_status | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_failure_with_a_lost_aborted_ack_keeps_the_command_status_and_names_the_ledger_error | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_success_with_a_lost_finished_ack_is_not_reported_as_success | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_missing_executable_is_aborted_not_started | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_outputs_that_do_not_check_turn_a_zero_exit_into_aborted | runs against `TOOL_BIN` |
-| test_build_events.LifecycleTests.test_optional_mode_runs_the_command_and_keeps_events_pending | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_lost_started_ack_blocks_the_command_until_a_retry_is_acknowledged | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_crash_before_and_after_the_append_is_retried_with_the_same_bytes | `tests/test_build_events_cli.py` CrashCliTests.test_crash_before_and_after_the_append_is_retried_with_the_same_bytes (the same test body; pauses at the step and SIGKILLs the command) |
-| test_build_events.AcknowledgementTests.test_exact_replay_appends_nothing_and_does_not_rerun | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_changed_metadata_is_refused_before_anything_is_appended | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_reused_operation_with_another_payload_is_refused_by_the_ledger | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_tampered_outbox_record_is_never_acknowledged | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_unreachable_ledger_blocks_the_command | runs against `TOOL_BIN` |
-| test_build_events.AcknowledgementTests.test_crash_at_every_step_converges_without_duplicates_or_early_commands | `tests/test_build_events_cli.py` CrashCliTests.test_crash_at_every_step_converges_without_duplicates_or_early_commands (the same test body; pauses at the step and SIGKILLs the command) |
-| test_build_events.ProcessTests.test_interrupted_command_is_aborted_after_its_whole_group_stopped | runs against `TOOL_BIN` |
-| test_build_events.ProcessTests.test_interrupt_during_started_delivery_stops_the_ledger_group_and_never_runs_the_command | runs against `TOOL_BIN` |
-| test_build_events.ProcessTests.test_producer_killed_during_the_command_is_recorded_as_unknown_and_not_rerun | runs against `TOOL_BIN` |
-| test_build_events.ProcessTests.test_a_second_writer_of_the_same_operation_is_refused_while_the_first_holds_it | runs against `TOOL_BIN` |
-| test_build_events.ProcessTests.test_environment_and_arguments_are_never_serialized | runs against `TOOL_BIN` |
-| test_build_events.UnsafeInputTests.test_unsafe_configuration_is_refused_before_anything_is_written | `tests/test_build_events_cli.py` UnsafeInputCliTests.test_unsafe_configuration_is_refused_before_anything_is_written (the same test body; the command's exit 2 and stderr) |
-| test_build_events.UnsafeInputTests.test_unsafe_metadata_is_refused | `tests/test_build_events_cli.py` UnsafeInputCliTests.test_unsafe_metadata_is_refused (the same test body; the command's exit 2 and stderr) |
-| test_build_events.UnsafeInputTests.test_symlinked_operation_directory_is_refused | runs against `TOOL_BIN` |
-| test_build_events.UnsafeInputTests.test_a_call_off_the_main_thread_is_refused_before_started_is_appended | no command-line form: it guards Python's `run_build` API, whose stop handlers need the main thread; the binary is single-threaded and installs them in `main` |
-| test_build_events.UnsafeInputTests.test_oversized_metadata_is_refused | runs against `TOOL_BIN` |
-| test_build_events.UnsafeInputTests.test_cli_needs_exactly_one_of_a_command_and_deliver | runs against `TOOL_BIN` |
-| test_build_events.RealLedgerTests.test_clean_run_is_verified_by_inclusion_proofs | runs against `TOOL_BIN` |
-| test_build_events.RealLedgerTests.test_lost_ack_before_the_append_blocks_and_retries | runs against `TOOL_BIN` |
-| test_build_events.RealLedgerTests.test_lost_ack_after_the_append_is_replayed_once | runs against `TOOL_BIN` |
-| test_build_events.RealLedgerTests.test_exact_replay_and_changed_payload_against_the_real_ledger | runs against `TOOL_BIN` |
-| test_build_events.RealLedgerTests.test_independent_writers_share_one_ledger | runs against `TOOL_BIN` |

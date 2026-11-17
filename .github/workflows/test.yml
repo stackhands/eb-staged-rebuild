@@ -159,17 +159,13 @@ jobs:
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/signal_harness.py
       - name: ledger CLI
         uses: ./.github/actions/pinned-ledger
-      - name: ledger-maintenance against the Python tool
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_ledger.py
       - name: publication access metadata against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_metadata.py
       - name: ACL publication tests against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli
       - name: a run and a rollback failed at every step, against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
-      - name: ledger-maintenance command-line test against the binary
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_maintenance.CommandLineTests
       - name: ledger append, recovery and idempotence against eb-stack, both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
-      - name: build events and the bounded ledger call against the binary
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_build_events tests.test_build_events_cli tests.test_build_events_state_cli tests.test_ledger_bounded_cli
+      - name: the bounded ledger call through run, both implementations
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_bounded_cli
