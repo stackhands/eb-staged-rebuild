@@ -69,13 +69,13 @@ class Site:
         merged.update(env)
         return subprocess.run(self.tool + list(args), capture_output=True, text=True, env=merged, cwd=self.root, timeout=300)
 
-    def run(self, *options, extra=None, verify=True, **env):
+    def run(self, *options, extra=None, verify=True, run_id="r1", **env):
         if extra is not None:
             env["FAKE_EB_EXTRA"] = json.dumps(extra)
         gate = ["--verify"] if verify else []
         return self.cli(
             "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
-            "--backend", "installpath", "--eb", self.eb, "--run-id", "r1", "--skip-live-check",
+            "--backend", "installpath", "--eb", self.eb, "--run-id", run_id, "--skip-live-check",
             "--module", "demo/1", *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
         )
 

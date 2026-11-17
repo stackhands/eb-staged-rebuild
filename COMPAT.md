@@ -1,9 +1,9 @@
 # The Zig build and the Python tool
 
 The Zig build in `zig/` carries every command of the Python tool: `probe`,
-`status`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
-with or without `--ledger-config`, and the ledger maintenance entry point as
-`ledger-maintenance`, and the `build_events` module's entry point
+`status`, `list`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and
+`rollback`, with or without `--ledger-config`, and the ledger maintenance entry
+point as `ledger-maintenance`, and the `build_events` module's entry point
 (`python3 -m eb_staged_rebuild.build_events`) as `build-events`. Either build
 can be used: releases carry the binary, and CI runs the command-line and
 real-EasyBuild tests against it through `TOOL_BIN`.

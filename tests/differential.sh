@@ -99,6 +99,23 @@ compare "status, other publication" status --state-root "${st}"
 echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
 compare "status, plan without a swap" status --state-root "${st}"
 rm -rf "${st}/runs/r4"
+# list skips entries without the paths it needs; these journals have no
+# software root.
+compare "list, journals without a software root" list --state-root "${st}"
+mkdir -p "${st}/runs/r5" "${work}/sw/demo/1" "${work}/sw/demo/.1.r5" "${work}/sw/demo/.1.r6"
+printf '{"run_id": "r5"}' > "${work}/sw/demo/.1.r5/.eb-staged-rebuild-complete"
+printf '{"run_id": 5}' > "${work}/sw/demo/.1.r6/.eb-staged-rebuild-complete"
+cat > "${st}/runs/r5/journal.json" <<JOURNAL
+{"schema": 2, "run_id": "r5", "state": "complete", "software": "${work}/sw", "verify": {"result": "fail", "forced": 1, "checks": {"elf": 2, "references": true, "modules": null, "access": "x"}},
+ "modules_plan": [{"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r5", "published_at": "soon"}, {"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r6"}, {"live_software": "", "retired": "x"}]}
+JOURNAL
+compare "list, odd values" list --state-root "${st}"
+sed -i 's/"published_at": "soon"/"published_at": 1.5e9/' "${st}/runs/r5/journal.json"
+compare "list, a published tree" list --state-root "${st}"
+rm -rf "${st}/runs/r5"
+compare "list, no runs dir" list --state-root "${work}/nostate"
+compare "list, no option" list
+compare "list, a positional" list --state-root "${st}" extra
 
 # Probe.
 compare "probe --json" probe --path "${work}/p" --json --eb missing-eb
@@ -113,7 +130,7 @@ if py_version=$(cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_r
 else
     echo "DIFF --version: '${py_version:-}' vs '${zig_version:-}'"; diffs=$((diffs + 1))
 fi
-for c in run resume verify rollback status gc retire; do compare "${c} -h" "${c}" -h; done
+for c in run resume verify rollback status list gc retire; do compare "${c} -h" "${c}" -h; done
 compare "verify, nothing" verify
 compare "verify, two stages" verify --state-root x a b
 # The version the binary reports is the one build.zig.zon declares.
@@ -435,6 +452,7 @@ compare_admin "run, for the state root from the environment" run --software @ROO
 compare_admin "status, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status s1
 compare_admin "resume, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume s1
 compare_admin "verify, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify s1
+compare_admin "list, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list
 compare_admin "gc, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --dry-run
 compare_admin "retire --dry-run, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire --module-file @ROOT@/modules/all/demo/1.lua --dry-run
 compare_admin "rollback, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback s1
@@ -444,6 +462,7 @@ compare_admin "status --help, the state root from the environment" env EB_STAGED
 compare_admin "status, an unknown option with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --nope
 compare_admin "resume --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume --help
 compare_admin "verify --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify --help
+compare_admin "list --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list --help
 compare_admin "rollback, no run id with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback
 compare_admin "gc, bad grace with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --grace-hours x
 compare_admin "retire, no module file with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire
@@ -632,6 +651,7 @@ compare_admin "run --verify, Lmod missing" env LMOD_CMD=@ROOT@/no-lmod @CMD@ run
 compare_admin "verify with Lmod" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ verify --state-root @ROOT@/state v2
 compare_admin "resume the verified stage" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ resume --state-root @ROOT@/state v2
 compare_admin "rollback the verified run" rollback --state-root @ROOT@/state v2
+compare_admin "list every generation" list --state-root @ROOT@/state
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.

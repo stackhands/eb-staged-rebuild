@@ -34,7 +34,7 @@ HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
-ledger-rollback build-events anchor project verify"
+ledger-rollback build-events anchor project verify list"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -302,6 +302,10 @@ case_verify() {
     step 0 eb-staged-rebuild verify --state-root "$STATE" example-6
     step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
     step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_list() {
+    step 0 eb-staged-rebuild list --state-root "$STATE"
 }
 
 clean() {
