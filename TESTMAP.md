@@ -279,6 +279,16 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
 
+### tests/test_inuse.py
+
+The scan itself runs against both builds in `tests/test_generations_cli.py` (`GcCliTests`) and in
+differential "gc --check-in-use keeps a tree and a generation in use".
+
+| test | replacement |
+|---|---|
+| ParsingTests.test_mountinfo_fields_are_unescaped_and_a_trees_path_follows_the_mount_that_holds_it | `zig/inuse.zig` test "mountinfo fields are unescaped and a tree's path on its device follows the mount that holds it" |
+| ParsingTests.test_a_maps_line_names_the_file_after_its_first_five_fields | `zig/inuse.zig` test "a maps line names the file after its first five fields" |
+
 ### tests/test_prefix.py
 
 The generation prefix is published by a same-directory replacement. The Zig

@@ -605,6 +605,7 @@ const gc_usage =
     \\usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
     \\                            [--grace-hours GRACE_HOURS] [--dry-run]
     \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+    \\                            [--keep N] [--check-in-use]
     \\
 ;
 const gc_help = gc_usage ++
@@ -618,6 +619,10 @@ const gc_help = gc_usage ++
     \\  --include-failed      also remove the hidden trees and generation of a
     \\                        failed run that published nothing, after the grace
     \\                        period
+    \\  --keep N              keep each install path's N newest generations that
+    \\                        rollback can switch back to
+    \\  --check-in-use        keep a tree or generation that a process or a mount on
+    \\                        this node uses
     \\
 ;
 
@@ -650,6 +655,19 @@ fn envGrace(a: Allocator, env: probe.Env) f64 {
     const hours = std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: {s}", .{repr(a, e)});
     if (!isHours(hours)) refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {s}", .{repr(a, e)});
     return hours;
+}
+
+/// cli.py's count type: ASCII digits only.
+fn countArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, v: []const u8) admin.Keep {
+    if (v.len == 0) usageError(usage, who, "argument --{s}: invalid count value: {s}", .{ name, repr(a, v) });
+    var value: u64 = 0;
+    for (v) |ch| {
+        if (!std.ascii.isDigit(ch)) usageError(usage, who, "argument --{s}: invalid count value: {s}", .{ name, repr(a, v) });
+        value = std.math.mul(u64, value, 10) catch std.math.maxInt(u64);
+        value = std.math.add(u64, value, ch - '0') catch std.math.maxInt(u64);
+    }
+    const trimmed = std.mem.trimStart(u8, v, "0");
+    return .{ .value = value, .text = if (trimmed.len == 0) "0" else trimmed };
 }
 
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
@@ -718,6 +736,8 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "dry-run", .takes_value = false },
         .{ .name = "lock-timeout", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
+        .{ .name = "keep", .takes_value = true },
+        .{ .name = "check-in-use", .takes_value = false },
     };
     const who = prog ++ " gc";
     const sr = StateRoot.of(env, gc_usage, gc_help);
@@ -730,9 +750,10 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
     const timeout: ?f64 = if (opts[3].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const keep: ?admin.Keep = if (opts[5].value) |v| countArg(a, sr.usage, who, "keep", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
+    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, keep, opts[6].seen, timeout, opts[1].value == null);
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -1069,6 +1090,7 @@ test {
     _ = @import("discover.zig");
     _ = @import("builders.zig");
     _ = @import("verify.zig");
+    _ = @import("inuse.zig");
     _ = admin;
     _ = engine;
     _ = ledger;
@@ -1112,6 +1134,7 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
         \\                            [--grace-hours GRACE_HOURS] [--dry-run]
         \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+        \\                            [--keep N] [--check-in-use]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(

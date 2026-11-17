@@ -93,6 +93,7 @@ A pass refuses runs that record to a ledger, since a =correction= names a single
 - Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames.
 - The copy of access-control lists has been tested on ext4 only.
 - =rollback --to= needs the hidden tree of every run it rolls back: once =gc= has removed one of them, it refuses.
+  =gc --keep N= keeps the trees that going back =N= runs needs.
 
 ** Further reading
 

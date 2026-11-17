@@ -681,6 +681,27 @@ compare_admin "run, a ledger generation" run ${vr} --run-id l2 --ledger-config @
 compare_admin "run, generation l3" run ${vr} --run-id l3 -- demo-1.eb
 compare_admin "rollback --to over a ledger run" rollback --state-root @ROOT@/state --to l1
 compare_admin "rollback --latest, no complete run" rollback --latest --state-root @ROOT@/empty
+# gc --keep, and with --check-in-use a tree and a generation kept because a
+# process on this node has them open: one holder opens the same paths in
+# both copies, so both name its pid. Without the option gc does not look.
+compare_admin "gc --keep within grace" gc --state-root @ROOT@/state --keep 2 --dry-run
+compare_admin "gc --keep past grace, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --keep, not a count" gc --state-root @ROOT@/state --keep x
+compare_admin "gc --keep, negative" gc --state-root @ROOT@/state --keep=-1
+compare_admin "gc --keep, a negative number as the next word" gc --state-root @ROOT@/state --keep -1
+compare_admin "gc --keep, a value with a quote" gc --state-root @ROOT@/state --keep "a'b"
+ready="${work}/holder-ready"
+python3 -c 'import os, sys, time; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[2:]]; open(sys.argv[1], "w").close(); time.sleep(600)' \
+    "${ready}" "${work}/py/software/demo/.1.l2" "${work}/zig/software/demo/.1.l2" \
+    "${work}/py/state/generations/l1" "${work}/zig/state/generations/l1" &
+holder=$!
+for _ in $(seq 600); do [ -e "${ready}" ] && break; sleep 0.1; done
+compare_admin "gc --keep, a tree in use without --check-in-use, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --check-in-use keeps a tree and a generation in use" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --check-in-use
+kill "${holder}"
+wait "${holder}" 2>/dev/null
+compare_admin "gc --keep once the tree is free" gc --state-root @ROOT@/state --keep 1 --grace-hours 0
+compare_admin "list after gc --keep" list --state-root @ROOT@/state
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.

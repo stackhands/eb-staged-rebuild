@@ -23,7 +23,7 @@ eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] [--verify] [-
 eb-staged-rebuild verify --state-root DIR [--lock-timeout SECONDS] STAGE
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] (RUN_ID | --latest | --to GEN)
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
-                     [--lock-timeout SECONDS]
+                     [--lock-timeout SECONDS] [--keep N] [--check-in-use]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
                          [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
@@ -206,11 +206,15 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--state-root=     | The state root whose journals name the trees; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required.                                                                                                                                                                              |
 | =--grace-hours=    | Hours to keep every tree after its run published or rolled back, a number 0 or more. Without it, a tree is kept for the hours its run recorded, and the directory of a retired module file for =EB_STAGED_REBUILD_GRACE_HOURS=, or 144; so is a tree whose journal records no number of hours, 0 or more. |
 | =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                                          |
-| =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
+| =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                               |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
+| =--keep N=         | Keep the =N= newest trees of each installation that =rollback --to= can return to, however old they are.                                                                                                                                                                                                  |
+| =--check-in-use=   | Keep a tree or a generation that a process or a mount of this machine uses.                                                                                                                                                                                                                               |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
+With =--check-in-use=, =gc= also keeps a tree or a generation that a process or a mount of its own machine uses; [[file:generations.org][The generations of an installation]] gives every reason, and what that check cannot see.
+A tree that =--keep= or that check keeps is not settled, so its run's generation stays too.
 
 *** retire
 
