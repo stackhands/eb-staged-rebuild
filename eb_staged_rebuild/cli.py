@@ -93,6 +93,11 @@ def _parser():
         help="refuse when --path does not exist instead of creating it for the probe",
     )
     probe.add_argument("--eb", default=os.environ.get("EB_STAGED_REBUILD_EB", "eb"))
+    probe.add_argument(
+        "--require-eb",
+        action="store_true",
+        help="refuse when the EasyBuild command is not available",
+    )
     probe.add_argument("--json", action="store_true")
 
     run_p = sub.add_parser("run", help="build and atomically swap a staged tree")
@@ -202,6 +207,9 @@ def _dispatch(args):
             print(json.dumps(report, indent=2, sort_keys=True))
         else:
             _print_probe(report)
+        if args.require_eb and not report["easybuild"].get("found"):
+            print(f"probe requires EasyBuild, but it was not found: {args.eb}", file=sys.stderr)
+            return 1
         return 0
     if args.command == "resolve":
         described = describe_module(args.module)

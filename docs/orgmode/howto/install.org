@@ -136,6 +136,7 @@ lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
 =bwrap: usable= and =bwrap stage-path keys: True= mean that =run= can build in EasyBuild's bubblewrap sandbox, and =RENAME_EXCHANGE: yes= that it can exchange the new installation with the old one in one call.
 [[file:../reference/cli.org][The eb-staged-rebuild command]] describes each line.
 When the software path is expected but not mounted yet, add =--no-create= to fail fast without creating that path: =eb-staged-rebuild probe --path /opt/site/software --no-create=.
+For a strict readiness check, add =--require-eb= so the probe exits 1 when the EasyBuild command is missing.
 
 ** If it fails
 
