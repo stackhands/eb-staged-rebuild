@@ -135,7 +135,7 @@ def _parser():
     gc_p.add_argument(
         "--include-failed",
         action="store_true",
-        help="also remove failed runs that published nothing and are older than the grace period",
+        help="also remove the hidden trees and generation of a failed run that published nothing, after the grace period",
     )
 
     retire_p = sub.add_parser(

@@ -468,6 +468,31 @@ fn num(v: ?Py) ?f64 {
 
 const Action = struct { path: []const u8, action: []const u8, reason: []const u8 };
 
+fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
+    const st = pyfmt.get(j, "state");
+    if (eqlStr(st, "complete")) return "complete run";
+    if (eqlStr(st, "rolled_back")) return "rolled-back run";
+    if (include_failed and eqlStr(st, "failed")) return "failed run";
+    return null;
+}
+
+/// Remove the generation of a run whose hidden trees are all settled.
+fn collectGeneration(c: *Ctx, state_root: []const u8, j: Py, roots: []const []const u8, include_failed: bool, dry_run: bool, actions: *std.ArrayList(Action)) bool {
+    const what = finishedRun(j, include_failed) orelse return false;
+    const rid = str(pyfmt.get(j, "run_id")) orelse "";
+    if (rid.len == 0 or std.mem.eql(u8, rid, ".") or std.mem.eql(u8, rid, "..") or std.mem.findScalar(u8, rid, '/') != null)
+        refuse("refusing a journal whose run id is not a plain name", .{});
+    const path = std.fs.path.join(c.a, &.{ state_root, "generations", rid }) catch oom();
+    if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
+    if (referenced(c, path, roots)) {
+        actions.append(c.a, .{ .path = path, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+        return false;
+    }
+    if (!dry_run) removeTree(c, path, dirname(path));
+    actions.append(c.a, .{ .path = path, .action = "remove", .reason = c.a.print("generation of a {s}", .{what}) catch oom() }) catch oom();
+    return !dry_run;
+}
+
 fn safeRetiredPath(c: *Ctx, m: Py) []const u8 {
     const live_raw = str(pyfmt.get(m, "live_software")) orelse "";
     const retired_raw = str(pyfmt.get(m, "retired")) orelse "";
@@ -566,12 +591,16 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
         const tree_grace = (if (run_grace) runGrace(j, grace_hours) else grace_hours) * seconds_per_hour;
         var changed = false;
         const plan_v = pyfmt.get(j, "modules_plan");
-        if (!pyfmt.truthy(plan_v)) continue;
-        var mods = a.dupe(Py, plan_v.?.list) catch continue;
+        var mods = a.dupe(Py, if (pyfmt.truthy(plan_v)) plan_v.?.list else &.{}) catch oom();
+        // A failed build records no plan; the run's own clock decides.
+        var settled = mods.len > 0 or blk: {
+            if (!include_failed or !eqlStr(pyfmt.get(j, "state"), "failed")) break :blk false;
+            const w = num(if (pyfmt.truthy(pyfmt.get(j, "updated_at"))) pyfmt.get(j, "updated_at") else pyfmt.get(j, "created_at")) orelse break :blk false;
+            break :blk now - w >= tree_grace;
+        };
         for (mods, 0..) |m, mi| {
             if (pyfmt.truthy(pyfmt.get(m, "retired_removed_at"))) continue;
             const retired = safeRetiredPath(c, m);
-            if (!std.mem.eql(u8, main_mod.lstatKind(retired), "dir")) continue;
             const st = str(pyfmt.get(j, "state"));
             var when: ?f64 = null;
             var why: []const u8 = "";
@@ -589,16 +618,23 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
                 pyfmt.str(&b, a, pyfmt.get(j, "state")) catch oom();
                 why = a.print("state {s} is kept", .{b.items}) catch "";
             }
+            if (!std.mem.eql(u8, main_mod.lstatKind(retired), "dir")) {
+                if (when == null or now - when.? < tree_grace) settled = false;
+                continue;
+            }
             const w = when orelse {
                 actions.append(a, .{ .path = retired, .action = "keep", .reason = why }) catch oom();
+                settled = false;
                 continue;
             };
             if (referenced(c, retired, roots)) {
                 actions.append(a, .{ .path = retired, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+                settled = false;
                 continue;
             }
             if (now - w < tree_grace) {
                 actions.append(a, .{ .path = retired, .action = "keep", .reason = a.print("within grace ({s})", .{why}) catch why }) catch oom();
+                settled = false;
                 continue;
             }
             actions.append(a, .{ .path = retired, .action = "remove", .reason = why }) catch oom();
@@ -607,9 +643,12 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
             mods[mi] = dictSet(a, m, "retired_removed_at", .{ .float = now });
             changed = true;
         }
-        if (changed) {
-            j = dictSet(a, j, "modules_plan", .{ .list = mods });
-            j = dictSet(a, j, "message", Py.s("retired tree removed"));
+        const generation_removed = settled and collectGeneration(c, state_root, j, roots, include_failed, dry_run, &actions);
+        if (generation_removed) j = dictSet(a, j, "generation_removed_at", .{ .float = now });
+        if (changed or generation_removed) {
+            if (changed) j = dictSet(a, j, "modules_plan", .{ .list = mods });
+            const message = if (changed and generation_removed) "retired tree and generation removed" else if (changed) "retired tree removed" else "generation removed";
+            j = dictSet(a, j, "message", Py.s(message));
             const rid = str(pyfmt.get(j, "run_id")) orelse "";
             j = saveJournal(c, journalPath(a, state_root, rid), j, "journal.gc");
             journals = blk: {
@@ -669,4 +708,17 @@ test "runGrace uses the hours a run recorded, when they are a number at least 0"
         const j: Py = if (case.value) |v| .{ .dict = &.{.{ .key = "grace_hours", .value = v }} } else .{ .dict = &.{} };
         try std.testing.expectEqual(case.want, runGrace(j, 144));
     }
+}
+
+test "finishedRun: a complete or rolled-back run, and a failed one only with include_failed" {
+    const complete = [_]Py.Entry{.{ .key = "state", .value = Py.s("complete") }};
+    const rolled_back = [_]Py.Entry{.{ .key = "state", .value = Py.s("rolled_back") }};
+    const failed = [_]Py.Entry{.{ .key = "state", .value = Py.s("failed") }};
+    const building = [_]Py.Entry{.{ .key = "state", .value = Py.s("building") }};
+    try std.testing.expectEqualStrings("complete run", finishedRun(.{ .dict = &complete }, false).?);
+    try std.testing.expectEqualStrings("rolled-back run", finishedRun(.{ .dict = &rolled_back }, false).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &failed }, false));
+    try std.testing.expectEqualStrings("failed run", finishedRun(.{ .dict = &failed }, true).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &building }, true));
+    try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &.{} }, true));
 }

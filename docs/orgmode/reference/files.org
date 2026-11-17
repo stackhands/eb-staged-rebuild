@@ -21,11 +21,11 @@ It has to be on the filesystem of the software tree, and its path must not pass 
 | =runs/RUN_ID/prepare-context.json= | With =--prepare=: the run id, the live and staged trees and, for each module file, its stable, staged and hidden paths and its prepared file, for the program.                                  |
 | =runs/RUN_ID/outbox.json=          | With =--ledger-config=: the run's ledger records, each with its state, the attempts, the last error and the receipt.                                                                            |
 | =runs/RUN_ID/events/NNNN.json=     | The bytes of each record, as =eb-stack ledger append= reads them.                                                                                                                               |
-| =generations/RUN_ID/=              | The generation: =software/= and =modules/=, as EasyBuild installed them, and =bwrap_info.json= with the =bwrap= backend. Each =software/NAME/VERSION= moves out when the run publishes.         |
+| =generations/RUN_ID/=              | The generation: =software/= and =modules/=, as EasyBuild installed them, and =bwrap_info.json= with the =bwrap= backend. Each =software/NAME/VERSION= moves out when the run publishes; =gc= removes what remains once the run's hidden trees are settled. |
 | =runs/retire-STAMP/journal.json=   | The record of a =retire=.                                                                                                                                                                       |
 | =retired/STAMP/PATH=               | The module file =retire= moved, under its absolute path, until a =rollback= puts it back.                                                                                                       |
 
-=gc= removes neither the journals nor the generations.
+=gc= never removes journals.
 
 The state root of the example site, after the run =example-2= with =--prepare=:
 

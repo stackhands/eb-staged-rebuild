@@ -164,13 +164,14 @@ So is a run whose tree is no longer the one at the stable path, such as one a la
 *** gc
 
 Remove the hidden trees, =software/NAME/.VERSION.RUN_ID=, whose grace period has passed.
+After all of a complete or rolled-back run's hidden trees are settled, also remove its generation, =<state-root>/generations/RUN_ID=.
 
 | Option             | Meaning                                                                                                                                                                                                                                                                                                   |
 |--------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =--state-root=     | The state root whose journals name the trees; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required.                                                                                                                                                                              |
 | =--grace-hours=    | Hours to keep every tree after its run published or rolled back, a number 0 or more. Without it, a tree is kept for the hours its run recorded, and the directory of a retired module file for =EB_STAGED_REBUILD_GRACE_HOURS=, or 144; so is a tree whose journal records no number of hours, 0 or more. |
 | =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                                          |
-| =--include-failed= | Also remove the staged tree of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                               |
+| =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
@@ -295,7 +296,7 @@ On success the command prints one JSON object on stdout.
 | File                                                | Use                                                                 |
 |-----------------------------------------------------+---------------------------------------------------------------------|
 | =<state-root>/runs/RUN_ID/journal.json=             | The journal of a run or retire record.                              |
-| =<state-root>/generations/RUN_ID/=                  | The generation: the tree EasyBuild built, and its module files.     |
+| =<state-root>/generations/RUN_ID/=                  | The generation: the tree EasyBuild built, and its module files. =gc= removes it once the run's hidden trees are settled. |
 | =<state-root>/.lock=, =<state-root>/.lock.posix=    | The lock of the state root.                                         |
 | =software/NAME/.VERSION.RUN_ID=                     | The previous tree after a run, or the replacement after a rollback. |
 | =software/NAME/VERSION/.eb-staged-rebuild-complete= | What the run published, written before the exchange.                |

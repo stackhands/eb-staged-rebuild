@@ -949,6 +949,8 @@ def _clear_stage_modules(generation_root):
 
 def _build(spec, journal, faults):
     journal["state"] = "building"
+    if journal.get("generation_removed_at") is not None:
+        journal["generation_removed_at"] = None
     save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.building")
     ctx = _Ctx(spec, journal["generation_root"], faults)
     os.makedirs(journal["generation_root"], exist_ok=True)
