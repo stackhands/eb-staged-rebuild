@@ -384,15 +384,17 @@ fn line(a: Allocator, buf: *std.ArrayList(u8)) void {
     buf.clearRetainingCapacity();
 }
 
-fn cmdStatus(a: Allocator, args: []const []const u8) u8 {
+fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+    const sr = StateRoot.of(env, status_usage, status_help);
     var opts = [_]Opt{.{ .name = "state-root", .takes_value = true }};
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, status_help, status_usage, prog ++ " status", &extra);
-    if (opts[0].value == null) usageError(status_usage, prog ++ " status", "the following arguments are required: --state-root", .{});
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " status", &extra);
+    const state_root = opts[0].value orelse sr.default orelse
+        usageError(sr.usage, prog ++ " status", "the following arguments are required: --state-root", .{});
     var all_extra = extra;
     if (pos.len > 1) for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    var journals = listJournals(a, opts[0].value.?);
+    var journals = listJournals(a, state_root);
     if (pos.len > 0) {
         const want = pos[0];
         var keep: std.ArrayList(Py) = .empty;
@@ -562,18 +564,20 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "lock-timeout", .takes_value = true },
     };
     const who = prog ++ " retire";
+    const sr = StateRoot.of(env, retire_usage, retire_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, retire_help, retire_usage, who, &extra);
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
-    if (opts[0].value == null) need.append(a, "--state-root") catch oom();
+    if (state_root == null) need.append(a, "--state-root") catch oom();
     if (opts[1].value == null) need.append(a, "--module-file") catch oom();
-    missing(a, retire_usage, who, need.items);
+    missing(a, sr.usage, who, need.items);
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[4].value) |v| floatArg(retire_usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[4].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
-    return admin.retire(&ctx, opts[0].value.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout);
+    return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout);
 }
 
 fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
@@ -582,18 +586,20 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "lock-timeout", .takes_value = true },
     };
     const who = prog ++ " rollback";
+    const sr = StateRoot.of(env, rollback_usage, rollback_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, rollback_help, rollback_usage, who, &extra);
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
-    if (opts[0].value == null) need.append(a, "--state-root") catch oom();
+    if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
-    missing(a, rollback_usage, who, need.items);
+    missing(a, sr.usage, who, need.items);
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(rollback_usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
-    return admin.rollback(&ctx, opts[0].value.?, pos[0], timeout);
+    return admin.rollback(&ctx, state_root.?, pos[0], timeout);
 }
 
 fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
@@ -605,17 +611,19 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "include-failed", .takes_value = false },
     };
     const who = prog ++ " gc";
+    const sr = StateRoot.of(env, gc_usage, gc_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, gc_help, gc_usage, who, &extra);
-    if (opts[0].value == null) missing(a, gc_usage, who, &.{"--state-root"});
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    const state_root = opts[0].value orelse sr.default;
+    if (state_root == null) missing(a, sr.usage, who, &.{"--state-root"});
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, gc_usage, who, v) else null;
-    const timeout: ?f64 = if (opts[3].value) |v| floatArg(gc_usage, who, "lock-timeout", v) else null;
+    const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
+    const timeout: ?f64 = if (opts[3].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, opts[0].value.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
+    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -731,6 +739,31 @@ fn nonEmpty(v: ?[]const u8) ?[]const u8 {
     return if (x.len > 0) x else null;
 }
 
+/// --state-root of resume, rollback, gc, retire and status: its default,
+/// EB_STAGED_REBUILD_STATE_ROOT when set and not empty, and the command's
+/// usage and help, which show the option in brackets once it has one.
+const StateRoot = struct {
+    default: ?[]const u8,
+    usage: []const u8,
+    help: []const u8,
+
+    fn of(env: probe.Env, comptime usage: []const u8, comptime help: []const u8) StateRoot {
+        const default = nonEmpty(env.get("EB_STAGED_REBUILD_STATE_ROOT")) orelse
+            return .{ .default = null, .usage = usage, .help = help };
+        return .{ .default = default, .usage = bracketed(usage), .help = bracketed(help) };
+    }
+
+    /// The text with its required --state-root in brackets, the lines
+    /// wrapped as before, as argparse prints them for these commands.
+    fn bracketed(comptime text: []const u8) []const u8 {
+        return comptime blk: {
+            const required = "] --state-root STATE_ROOT";
+            const at = std.mem.find(u8, text, required) orelse @compileError("no required --state-root in: " ++ text);
+            break :blk text[0 .. at + 2] ++ "[--state-root STATE_ROOT]" ++ text[at + required.len ..];
+        };
+    }
+};
+
 const resume_usage =
     \\usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
     \\                                [--lock-timeout LOCK_TIMEOUT]
@@ -755,19 +788,21 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "lock-timeout", .takes_value = true },
     };
     const who = prog ++ " resume";
+    const sr = StateRoot.of(env, resume_usage, resume_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, resume_help, resume_usage, who, &extra);
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
-    if (opts[0].value == null) need.append(a, "--state-root") catch oom();
+    if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
-    missing(a, resume_usage, who, need.items);
+    missing(a, sr.usage, who, need.items);
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(resume_usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
-    const res = run_mod.resumeRun(a, env, &ctx, opts[0].value.?, pos[0], timeout) catch |err| switch (err) {
+    const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
         error.OutOfMemory => refuse("out of memory", .{}),
         else => refuse("{s}", .{last_why}),
     };
@@ -844,7 +879,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const cmd = args[i];
     const rest = args[i + 1 ..];
     if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest);
-    if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest);
+    if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env);
     if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env);
     if (std.mem.eql(u8, cmd, "ledger-maintenance")) return ledger.main(a, rest, .{ .envp = env.envp });
     if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env);
@@ -881,4 +916,34 @@ test "optionLike takes a negative number for a value, as argparse 3.14 does" {
         try std.testing.expect(optionLike(w));
     for ([_][]const u8{ "", "-", "5", "-5", "-0", "-.5", "-1e3", "-5x" }) |w|
         try std.testing.expect(!optionLike(w));
+}
+
+test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" {
+    const expect = std.testing.expectEqualStrings;
+    try expect("usage: eb-staged-rebuild status [-h] [--state-root STATE_ROOT] [run_id]\n", StateRoot.bracketed(status_usage));
+    try expect(
+        \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                run_id
+        \\
+    , StateRoot.bracketed(resume_usage));
+    try expect(
+        \\usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]
+        \\                                  [--lock-timeout LOCK_TIMEOUT]
+        \\                                  run_id
+        \\
+    , StateRoot.bracketed(rollback_usage));
+    try expect(
+        \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
+        \\                            [--grace-hours GRACE_HOURS] [--dry-run]
+        \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+        \\
+    , StateRoot.bracketed(gc_usage));
+    try expect(
+        \\usage: eb-staged-rebuild retire [-h] [--state-root STATE_ROOT]
+        \\                                --module-file MODULE_FILE [--reason REASON]
+        \\                                [--dry-run] [--lock-timeout LOCK_TIMEOUT]
+        \\
+    , StateRoot.bracketed(retire_usage));
+    try expect(comptime StateRoot.bracketed(gc_usage) ++ gc_help[gc_usage.len..], StateRoot.bracketed(gc_help));
 }

@@ -106,10 +106,11 @@ def _payload(path):
 
 
 def _main(argv, env=None):
-    """Run the command line with EB_STAGED_REBUILD_GRACE_HOURS unset unless ``env`` sets it."""
+    """Run the command line with the variables of the grace period and the state root unset unless ``env`` sets them."""
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.dict(os.environ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+        os.environ.pop("EB_STAGED_REBUILD_STATE_ROOT", None)
         os.environ.update(env or {})
         try:
             code = cli.main(argv)
@@ -526,6 +527,60 @@ class GarbageCollectionTests(unittest.TestCase):
                 (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'abc'\n"),
             )
             self.assertFalse(os.path.exists(state))
+
+
+class StateRootVariableTests(unittest.TestCase):
+    def test_every_command_takes_the_state_root_from_the_environment(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            env = {"EB_STAGED_REBUILD_STATE_ROOT": state}
+            for argv in (
+                ["status"],
+                ["status", "run1"],
+                ["retire", "--module-file", installed["demo/1"]["module"], "--dry-run"],
+                ["gc", "--dry-run"],
+                ["resume", "run1"],
+            ):
+                with self.subTest(argv=argv):
+                    given = _main([argv[0], "--state-root", state, *argv[1:]])
+                    self.assertEqual(given[0], 0, given)
+                    self.assertEqual(_main(argv, env), given)
+            self.assertEqual(_main(["rollback", "run1"], env)[0], 0)
+            TransactionTests().assert_old_live(installed)
+
+    def test_the_option_wins_over_the_environment(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, builder = _fixture(root)
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            elsewhere = os.path.join(root, "elsewhere")
+            os.makedirs(elsewhere)
+            env = {"EB_STAGED_REBUILD_STATE_ROOT": elsewhere}
+            self.assertEqual(_main(["status"], env), (0, "no runs\n", ""))
+            code, out, _ = _main(["status", "--state-root", state], env)
+            self.assertEqual((code, out.splitlines()[0]), (0, "run1  complete  backend=installpath  modules=1/1"))
+
+    def test_without_the_variable_the_option_is_required(self):
+        for env in ({}, {"EB_STAGED_REBUILD_STATE_ROOT": ""}):
+            with self.subTest(env=env):
+                code, out, err = _main(["status"], env)
+                self.assertEqual(
+                    (code, out, err.splitlines()[-1:]),
+                    (2, "", ["eb-staged-rebuild status: error: the following arguments are required: --state-root"]),
+                )
+
+    def test_with_the_variable_the_usage_shows_the_option_as_optional(self):
+        code, out, err = _main(["rollback"], {"EB_STAGED_REBUILD_STATE_ROOT": "/nonexistent"})
+        lines = err.splitlines()
+        self.assertEqual(
+            (code, out, lines[:1], lines[-1:]),
+            (
+                2,
+                "",
+                ["usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]"],
+                ["eb-staged-rebuild rollback: error: the following arguments are required: run_id"],
+            ),
+        )
 
 
 if __name__ == "__main__":

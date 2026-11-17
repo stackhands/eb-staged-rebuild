@@ -62,6 +62,11 @@ def _grace(value):
     return hours
 
 
+def _add_state_root(parser):
+    default = os.environ.get("EB_STAGED_REBUILD_STATE_ROOT") or None
+    parser.add_argument("--state-root", default=default, required=default is None)
+
+
 def _add_common(parser):
     parser.add_argument("--software", help="live EASYBUILD_INSTALLPATH_SOFTWARE")
     parser.add_argument("--modules", help="live EASYBUILD_INSTALLPATH_MODULES")
@@ -113,17 +118,17 @@ def _parser():
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
-    resume_p.add_argument("--state-root", required=True)
+    _add_state_root(resume_p)
     resume_p.add_argument("--lock-timeout", type=float, default=None)
     resume_p.add_argument("run_id")
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
-    back_p.add_argument("--state-root", required=True)
+    _add_state_root(back_p)
     back_p.add_argument("--lock-timeout", type=float, default=None)
     back_p.add_argument("run_id")
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
-    gc_p.add_argument("--state-root", required=True)
+    _add_state_root(gc_p)
     gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
@@ -137,14 +142,14 @@ def _parser():
         "retire",
         help="move a module file out of the module tree after its package is published elsewhere",
     )
-    retire_p.add_argument("--state-root", required=True)
+    _add_state_root(retire_p)
     retire_p.add_argument("--module-file", required=True, help="module file to retire")
     retire_p.add_argument("--reason", default=None)
     retire_p.add_argument("--dry-run", action="store_true")
     retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
-    status_p.add_argument("--state-root", required=True)
+    _add_state_root(status_p)
     status_p.add_argument("run_id", nargs="?")
 
     resolve_p = sub.add_parser("resolve", help="print the install path a module file names")
