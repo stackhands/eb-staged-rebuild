@@ -17,9 +17,10 @@ recorded it; and one module forced onto the
 ordinary-rename fallback. Run and rollback take the swap method from the
 journal's recorded rename_exchange probe, so the fallback fixture stops a
 run at build.start, records the probe as failed, and kills the resumed
-run or a later rollback at each fallback rename. A retire, and a
-rollback of one, are killed at every step they reach and then rolled
-back; the module file must end as it began.
+run or a later rollback at each fallback rename. A retire of the first
+fixture's module file, with a module class link and a default link to it,
+and a rollback of one, are killed at every step they reach and then
+rolled back; the module file and both links must end as they began.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 tests/crash_matrix.py
 """
@@ -407,13 +408,25 @@ def fallback_matrix():
     return failures, total
 
 
+RETIRE_LINKS = {"tools/demo/1.lua": "W/modules/all/demo/1.lua", "all/demo/default": "1.lua"}
+
+
+def retire_fixture(root):
+    """ONE, with a module class link and a default link to its module file."""
+    ONE.build(root)
+    for rel, target in RETIRE_LINKS.items():
+        path = os.path.join(root, "modules", rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.symlink(target.replace("W", root, 1) if target.startswith("W/") else target, path)
+
+
 def retire_steps():
     """Fault steps one Python retire reaches, then one rollback of it."""
     from eb_staged_rebuild.retire import retire
 
     root = tempfile.mkdtemp(prefix="crash-retire-steps-")
     try:
-        ONE.build(root)
+        retire_fixture(root)
         faults = FaultInjector()
         result = retire(f"{root}/state", f"{root}/modules/all/demo/1.lua", faults=faults)
         assert result.returncode == 0, result
@@ -435,7 +448,11 @@ def retire_outcome(root):
             continue
         with open(os.path.join(runs, name, "journal.json")) as handle:
             states.append(json.load(handle)["state"])
-    return {"module": text, "states": states}
+    links = {}
+    for rel in RETIRE_LINKS:
+        path = os.path.join(root, "modules", rel)
+        links[rel] = os.readlink(path).replace(root, "W") if os.path.islink(path) else None
+    return {"module": text, "links": links, "states": states}
 
 
 def retire_run_id(root):
@@ -450,8 +467,9 @@ def retire_run_id(root):
 def retire_matrix():
     """A retire, and a rollback of one, killed at every step, then rolled back.
 
-    The module file must end as it began; a retire record left by the kill
-    must refuse a second retire until it is rolled back.
+    The module file and the links to it must end as they began; a retire
+    record left by the kill must refuse a second retire until it is rolled
+    back.
     """
     original = 'local root = "W/software/demo/1"\nsetenv("EBROOTDEMO", root)\n'
     steps, rollback_steps = retire_steps()
@@ -461,7 +479,7 @@ def retire_matrix():
     ]
     for step in steps:
         def body(impl, root):
-            ONE.build(root)
+            retire_fixture(root)
             how = kill_at(impl, ONE, retire_args(root), step, root)
             run_id = retire_run_id(root)
             again = finish(impl, ONE, retire_args(root), root) if run_id else None
@@ -470,12 +488,13 @@ def retire_matrix():
         results = each_impl("crash-retire", body)
         final = results["py"]
         ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["module"] == original
+        ok = ok and final["links"] == RETIRE_LINKS
         ok = ok and (final["again_rc"] in (None, 2)) and set(final["states"]) <= {"rolled_back"}
         failures += report(f"retire killed at {step}", results, ok)
         total += 1
     for step in rollback_steps:
         def body(impl, root):
-            ONE.build(root)
+            retire_fixture(root)
             assert finish(impl, ONE, retire_args(root), root) == 0
             run_id = retire_run_id(root)
             how = kill_at(impl, ONE, ["rollback", "--state-root", f"{root}/state", run_id], step, root)
@@ -484,6 +503,7 @@ def retire_matrix():
         results = each_impl("crash-retire-rb", body)
         final = results["py"]
         ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["module"] == original
+        ok = ok and final["links"] == RETIRE_LINKS
         ok = ok and final["rollback_rc"] == 0 and final["states"] == ["rolled_back"]
         failures += report(f"retire rollback killed at {step}", results, ok)
         total += 1

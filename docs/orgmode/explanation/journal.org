@@ -51,6 +51,7 @@ After the three renames that replace an exchange on some filesystems, the hold n
 *** Retire records
 
 =retire= writes a journal of its own, under =runs/retire-STAMP/=, with =kind= set to =retire=, before it moves the module file and after: =retiring=, then =retired=, then =rolled_back= once a rollback puts the file back.
+Its =links_plan= records every discovered symbolic link to the module file, including the live and retired paths, the link text and whether it is pending, retired or restored.
 
 ** What was considered and turned down
 

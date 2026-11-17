@@ -6,6 +6,8 @@
 
 Take a site-built module out of the site's module tree once another stack on =MODULEPATH= provides the same package, here EESSI 2026.06, so that =module load= finds that one.
 The module file moves into the state root, where a rollback can put it back, and the software directory stays for the jobs that use it.
+Symbolic links that resolve to the module file move with it: links beside it such as =default=, and EasyBuild module-class links at the same relative path under siblings of the =all= directory.
+A link elsewhere in the tree is not discovered.
 
 ** Before you start
 
@@ -74,7 +76,7 @@ eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0 -
 manual: /opt/site/software/Example/1.0-GCCcore-15.2.0 (ready to remove by hand after 2026-11-17T01:49:40Z; gc does not delete the stable software directory)
 #+end_example
 
-To put the module file back, roll the record back:
+To put the module file and its links back, roll the record back:
 
 #+begin_src bash
 eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild retire-20261117T014940Z

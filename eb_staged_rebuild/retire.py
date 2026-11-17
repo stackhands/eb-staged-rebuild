@@ -7,10 +7,14 @@ named is not touched. A job that already loaded the module keeps its paths. A
 job that loads the module afterwards no longer finds it in this tree and falls
 through to the next entry on MODULEPATH.
 
+Symbolic links that resolve to the module file, such as EasyBuild's module
+class links, move with it, first, so that none is left dangling.
+
 The record is a journal under ``<state-root>/runs/retire-<timestamp>/`` in the
-same format as a run journal (``kind`` is ``retire`` and ``modules_plan`` is
-empty). ``rollback RUN_ID`` puts the file back. ``gc`` reads the record to
-decide when the software directory is ready to remove.
+same format as a run journal (``kind`` is ``retire``, ``modules_plan`` is
+empty, and ``links_plan`` lists the links). ``rollback RUN_ID`` puts the file
+back, then the links. ``gc`` reads the record to decide when the software
+directory is ready to remove.
 """
 
 import errno
@@ -23,7 +27,7 @@ from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.journal import journal_path, list_journals, run_dir, save_journal
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import parse_root
-from eb_staged_rebuild.paths import abspath, is_within, lstat_kind
+from eb_staged_rebuild.paths import abspath, is_real_dir, is_within, lstat_kind
 
 KIND = "retire"
 
@@ -75,6 +79,42 @@ def _check_same_filesystem(module, destination_parent):
         )
 
 
+def _links_to(module):
+    """Symbolic links that resolve to ``module``, sorted.
+
+    They are looked for in the module file's directory and, for each ``all``
+    directory above it, in the same place under each sibling of that
+    directory: EasyBuild puts a module class link at
+    ``<modules>/<class>/<name>/...`` beside ``<modules>/all/<name>/...``.
+    """
+    real = os.path.realpath(module)
+    directories = [os.path.dirname(module)]
+    parts = os.path.dirname(module).split(os.sep)
+    for index, part in enumerate(parts):
+        if part != "all":
+            continue
+        top = os.sep.join(parts[:index]) or os.sep
+        try:
+            names = sorted(os.listdir(top))
+        except OSError:
+            continue
+        for name in names:
+            candidate = os.path.join(top, name, *parts[index + 1 :])
+            if name != "all" and is_real_dir(os.path.join(top, name)) and is_real_dir(candidate):
+                directories.append(candidate)
+    links = set()
+    for directory in directories:
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(directory, name)
+            if os.path.islink(path) and os.path.realpath(path) == real:
+                links.add(path)
+    return sorted(links)
+
+
 def _plan(state_root, module):
     module = abspath(module)
     if is_within(module, state_root):
@@ -105,6 +145,8 @@ def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clo
     now = time.time if clock is None else clock
     if dry_run:
         module, _data, software_dir = _plan(state_root, module_file)
+        for link in _links_to(module):
+            _log(f"would retire the link {link}")
         message = f"would retire {module} (software directory {software_dir} is left in place)"
         _log(message)
         return Result(0, None, "dry-run", message)
@@ -115,12 +157,25 @@ def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clo
         when = now()
         name = _unique(state_root, when)
         run_id = f"retire-{name}"
-        destination = os.path.join(retired_dir(state_root), name, module.lstrip(os.sep))
+        top = os.path.join(retired_dir(state_root), name)
+        destination = os.path.join(top, module.lstrip(os.sep))
+        links = [
+            {
+                "live_path": link,
+                "target": os.readlink(link),
+                "retired_path": os.path.join(top, link.lstrip(os.sep)),
+                "status": "pending",
+            }
+            for link in _links_to(module)
+        ]
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         try:
             _check_same_filesystem(module, os.path.dirname(destination))
+            for link in links:
+                os.makedirs(os.path.dirname(link["retired_path"]), exist_ok=True)
+                _check_same_filesystem(link["live_path"], os.path.dirname(link["retired_path"]))
         except Refused:
-            _discard_empty(os.path.join(retired_dir(state_root), name))
+            _discard_empty(top)
             raise
         path = journal_path(state_root, run_id)
         journal = {
@@ -139,10 +194,14 @@ def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clo
             "retired_at": None,
             "rolled_back_at": None,
             "modules_plan": [],
-            "links_plan": [],
+            "links_plan": links,
             "message": "",
         }
         save_journal(path, journal, faults, "journal.retiring")
+        for number, link in enumerate(links, 1):
+            _rename(link["live_path"], link["retired_path"], faults, f"retire.link:{number}")
+            link["status"] = "retired"
+            _log(f"retired the link {link['live_path']} -> {link['retired_path']}")
         _move(module, destination, faults, "retire")
         journal["state"] = "retired"
         journal["retired_at"] = now()
@@ -172,7 +231,11 @@ def _move(source, destination, faults, step):
         os.fsync(fd)
     finally:
         os.close(fd)
-    faults.reach(f"{step}.rename")
+    _rename(source, destination, faults, f"{step}.rename")
+
+
+def _rename(source, destination, faults, step):
+    faults.reach(step)
     try:
         os.replace(source, destination)
     except OSError as exc:
@@ -181,6 +244,21 @@ def _move(source, destination, faults, step):
         raise
     fsync_dir(os.path.dirname(destination))
     fsync_dir(os.path.dirname(source))
+
+
+def _restore_link(link, faults, step, run_id):
+    live = link["live_path"]
+    retired = link["retired_path"]
+    if lstat_kind(retired) == "symlink":
+        if os.readlink(retired) != link["target"]:
+            raise NeedsIntervention(f"{retired} does not match the link recorded for {run_id}")
+        if lstat_kind(live) != "missing":
+            raise NeedsIntervention(f"{live} exists again; refusing to overwrite it with the retired link")
+        _rename(retired, live, faults, step)
+        _log(f"restored the link {live}")
+    elif not (lstat_kind(live) == "symlink" and os.readlink(live) == link["target"]):
+        raise NeedsIntervention(f"neither {live} nor {retired} holds the link recorded for {run_id}")
+    link["status"] = "restored"
 
 
 def rollback_retire(state_root, journal, faults, clock):
@@ -208,6 +286,9 @@ def rollback_retire(state_root, journal, faults, clock):
         pass
     else:
         raise NeedsIntervention(f"neither {module} nor {retired} holds the retired module file")
+    links = journal.get("links_plan") or []
+    for number in range(len(links), 0, -1):
+        _restore_link(links[number - 1], faults, f"rollback.retire.link:{number}", run_id)
     journal["state"] = "rolled_back"
     journal["rolled_back_at"] = clock()
     journal["updated_at"] = journal["rolled_back_at"]

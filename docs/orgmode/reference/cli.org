@@ -150,7 +150,7 @@ A =rolled_back= run, and a retire record, are refused.
 
 *** rollback
 
-Put back what the run =RUN_ID= replaced: the previous trees and module files of a =complete= run, or the module file of a retire record.
+Put back what the run =RUN_ID= replaced: the previous trees and module files of a =complete= run, or the module file and its recorded links from a retire record.
 
 | Option           | Meaning                                                                                                           |
 |------------------+-------------------------------------------------------------------------------------------------------------------|
@@ -190,6 +190,8 @@ Move a module file out of the module tree, once a later =MODULEPATH= entry provi
 | =--lock-timeout= | Seconds to wait for the state root's lock; the default is 0, which refuses at once.                                                                                |
 
 The file moves to =<state-root>/retired/STAMP/= followed by its absolute path, and the record is named =retire-STAMP=, where =STAMP= is the UTC time as =YYYYMMDDTHHMMSSZ=.
+Links that resolve to it beside the module file, and module-class links at the same path below siblings of its =all= directory, move to the same place under =retired/STAMP/= first.
+Rollback restores the module file, then the links, and refuses to overwrite any path that exists again.
 
 *** status
 
