@@ -1,0 +1,1 @@
+`eb_staged_rebuild/site_hooks.py` is an EasyBuild hook for a site prefix. `EASYBUILD_HOOKS` names the file. With `EB_LOCAL_PREFIX` or `EESSI_SITE_SOFTWARE_PATH` set, `pre_install_hook` refuses an install outside that prefix. `EB_LOCAL_MODULE_FOOTER` appends a module footer, and `EB_LOCAL_RPATH=1` turns toolchain rpath on. Unset, each of those does nothing.

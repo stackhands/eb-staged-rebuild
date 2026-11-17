@@ -23,4 +23,5 @@ The title names the task.
    backfill
    anchor
    package-history
+   add-a-site-hook
 #+end_export
