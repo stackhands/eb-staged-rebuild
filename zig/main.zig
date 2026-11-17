@@ -72,8 +72,14 @@ const probe_help = probe_usage ++
     \\  --json
     \\
 ;
-const status_usage = "usage: eb-staged-rebuild status [-h] --state-root STATE_ROOT [run_id]\n";
-const status_help = status_usage ++
+const status_usage = "usage: eb-staged-rebuild status [-h] --state-root STATE_ROOT [--json] [run_id]\n";
+/// argparse wraps this once --state-root has a default; the required form above stays one line.
+const status_usage_default =
+    \\usage: eb-staged-rebuild status [-h] [--state-root STATE_ROOT] [--json]
+    \\                                [run_id]
+    \\
+;
+const status_options =
     \\
     \\positional arguments:
     \\  run_id
@@ -81,8 +87,11 @@ const status_help = status_usage ++
     \\options:
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
+    \\  --json                print one JSON document
     \\
 ;
+const status_help = status_usage ++ status_options;
+const status_help_default = status_usage_default ++ status_options;
 const resolve_usage = "usage: eb-staged-rebuild resolve [-h] module\n";
 const resolve_help = resolve_usage ++
     \\
@@ -384,9 +393,70 @@ fn line(a: Allocator, buf: *std.ArrayList(u8)) void {
     buf.clearRetainingCapacity();
 }
 
+fn fieldOrNull(v: Py, k: []const u8) Py {
+    return pyfmt.get(v, k) orelse .null;
+}
+
+fn statusModule(a: Allocator, m: Py) Py {
+    if (m != .dict) typeError("a modules_plan entry is not an object");
+    var row: std.ArrayList(Py.Entry) = .empty;
+    inline for ([_][]const u8{ "live_software", "rel", "retired", "status" }) |k| {
+        row.append(a, .{ .key = k, .value = fieldOrNull(m, k) }) catch oom();
+    }
+    return .{ .dict = row.items };
+}
+
+/// The fields status prints, as the JSON document: one object per journal.
+/// A missing kind is "rebuild". An empty list is a document, not "no runs".
+fn statusDocument(a: Allocator, journals: []const Py) Py {
+    var runs: std.ArrayList(Py) = .empty;
+    for (journals) |j| {
+        const kind = pyfmt.get(j, "kind");
+        if (kind != null and kind.? == .str and std.mem.eql(u8, kind.?.str, "retire")) {
+            var row: std.ArrayList(Py.Entry) = .empty;
+            row.append(a, .{ .key = "kind", .value = Py.s("retire") }) catch oom();
+            row.append(a, .{ .key = "module_path", .value = fieldOrNull(j, "module_path") }) catch oom();
+            row.append(a, .{ .key = "run_id", .value = fieldOrNull(j, "run_id") }) catch oom();
+            row.append(a, .{ .key = "software_dir", .value = fieldOrNull(j, "software_dir") }) catch oom();
+            row.append(a, .{ .key = "state", .value = fieldOrNull(j, "state") }) catch oom();
+            runs.append(a, .{ .dict = row.items }) catch oom();
+            continue;
+        }
+        const plan = pyfmt.get(j, "modules_plan");
+        const mods: []const Py = if (pyfmt.truthy(plan)) switch (plan.?) {
+            .list => |l| l,
+            else => typeError("modules_plan is not a list"),
+        } else &.{};
+        var rows: std.ArrayList(Py) = .empty;
+        var published: i64 = 0;
+        for (mods) |m| {
+            if (pyfmt.get(m, "status")) |s| {
+                if (s == .str and std.mem.eql(u8, s.str, "published")) published += 1;
+            }
+            rows.append(a, statusModule(a, m)) catch oom();
+        }
+        var row: std.ArrayList(Py.Entry) = .empty;
+        row.append(a, .{ .key = "backend", .value = fieldOrNull(j, "backend") }) catch oom();
+        row.append(a, .{ .key = "kind", .value = if (pyfmt.truthy(kind)) kind.? else Py.s("rebuild") }) catch oom();
+        row.append(a, .{ .key = "message", .value = fieldOrNull(j, "message") }) catch oom();
+        row.append(a, .{ .key = "modules", .value = .{ .list = rows.items } }) catch oom();
+        row.append(a, .{ .key = "modules_published", .value = .{ .int = published } }) catch oom();
+        row.append(a, .{ .key = "modules_total", .value = .{ .int = @intCast(mods.len) } }) catch oom();
+        row.append(a, .{ .key = "run_id", .value = fieldOrNull(j, "run_id") }) catch oom();
+        row.append(a, .{ .key = "state", .value = fieldOrNull(j, "state") }) catch oom();
+        runs.append(a, .{ .dict = row.items }) catch oom();
+    }
+    var top: std.ArrayList(Py.Entry) = .empty;
+    top.append(a, .{ .key = "runs", .value = .{ .list = runs.items } }) catch oom();
+    return .{ .dict = top.items };
+}
+
 fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const sr = StateRoot.of(env, status_usage, status_help);
-    var opts = [_]Opt{.{ .name = "state-root", .takes_value = true }};
+    var opts = [_]Opt{
+        .{ .name = "state-root", .takes_value = true },
+        .{ .name = "json", .takes_value = false },
+    };
     var extra: std.ArrayList([]const u8) = .empty;
     const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " status", &extra);
     const state_root = opts[0].value orelse sr.default orelse
@@ -401,6 +471,12 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         for (journals) |j| if (pyfmt.get(j, "run_id")) |r| if (r == .str and std.mem.eql(u8, r.str, want)) keep.append(a, j) catch oom();
         journals = keep.items;
         if (journals.len == 0) refuse("no journal for {s}", .{want});
+    }
+    if (opts[1].seen) {
+        const out = json.dumps(a, statusDocument(a, journals), 2, true) catch return 1;
+        cli.put(1, out);
+        cli.put(1, "\n");
+        return 0;
     }
     if (journals.len == 0) {
         cli.put(1, "no runs\n");
@@ -750,6 +826,11 @@ const StateRoot = struct {
     fn of(env: probe.Env, comptime usage: []const u8, comptime help: []const u8) StateRoot {
         const default = nonEmpty(env.get("EB_STAGED_REBUILD_STATE_ROOT")) orelse
             return .{ .default = null, .usage = usage, .help = help };
+        // status --json makes the default usage longer than argparse's width,
+        // so the wrapped form is written out rather than derived by bracketing.
+        if (comptime std.mem.indexOf(u8, usage, "[--json]") != null) {
+            return .{ .default = default, .usage = status_usage_default, .help = status_help_default };
+        }
         return .{ .default = default, .usage = bracketed(usage), .help = bracketed(help) };
     }
 
@@ -920,7 +1001,7 @@ test "optionLike takes a negative number for a value, as argparse 3.14 does" {
 
 test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" {
     const expect = std.testing.expectEqualStrings;
-    try expect("usage: eb-staged-rebuild status [-h] [--state-root STATE_ROOT] [run_id]\n", StateRoot.bracketed(status_usage));
+    try expect(status_usage_default, status_help_default[0..status_usage_default.len]);
     try expect(
         \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
         \\                                [--lock-timeout LOCK_TIMEOUT]

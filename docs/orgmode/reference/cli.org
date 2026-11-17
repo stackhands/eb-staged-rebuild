@@ -25,7 +25,7 @@ eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--inclu
                      [--lock-timeout SECONDS]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
                          [--lock-timeout SECONDS]
-eb-staged-rebuild status --state-root DIR [RUN_ID]
+eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
 eb-staged-rebuild resolve MODULE_FILE
 eb-staged-rebuild build-events --config FILE --metadata FILE (--deliver | -- COMMAND...)
 eb-staged-rebuild ledger-maintenance {backfill,anchor,verify-anchors,project} OPTION...
@@ -197,11 +197,20 @@ Print the journals of the state root, or the one of the run =RUN_ID=, in the ord
 | Option         | Meaning                                                                                        |
 |----------------+------------------------------------------------------------------------------------------------|
 | =--state-root= | The state root; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required. |
+| =--json=       | Print one JSON document instead of the text. The text is unchanged without it.                |
 
 A run prints =RUN_ID  STATE  backend=BACKEND  modules=PUBLISHED/PLANNED=, its message, and a line for each module of its plan: the module's status, its module file under the module tree, and its =live= and =retired= paths.
 A retire record prints =RUN_ID  STATE  retire  MODULE_FILE= and the software directory it left in place.
 With no journal, =status= prints =no runs=.
 It takes no lock.
+
+=--json= prints ={"runs": [...]}=, sorted keys, indented by two spaces.
+Each run object has =run_id=, =state=, =backend=, =kind= (=rebuild= when the journal records none), =message=, =modules_published=, =modules_total= and =modules=.
+Each module object has =status=, =rel=, =live_software= and =retired=.
+A retire record has =kind= =retire=, =run_id=, =state=, =module_path= and =software_dir=, and no module list.
+A missing value is =null=.
+With no journal the document is ={"runs": []}=, and the exit status is still 0.
+A =RUN_ID= with no journal is still a refusal.
 
 *** resolve
 

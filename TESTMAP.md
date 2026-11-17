@@ -448,6 +448,8 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | ProbeTests.test_rename_exchange_reports_a_result_for_this_directory | differential "probe --json", "probe text" |
 | ProbeTests.test_probe_all_has_the_open_questions | differential "probe --json" |
 | CliTests.test_dry_run_and_probe_and_resolve | runs against `TOOL_BIN` |
+| StatusJsonTests.test_status_json_is_one_document | differential "status --json, four journals", "status --json, one run", "status --json, no such run"; runs against `TOOL_BIN` |
+| StatusJsonTests.test_status_json_of_an_empty_root_is_an_empty_document | differential "status --json, no runs dir" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
 

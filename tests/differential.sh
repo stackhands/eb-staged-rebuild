@@ -78,9 +78,13 @@ cat > "${st}/runs/r0/journal.json" <<'EOF'
 {"schema": 2, "run_id": "r0", "state": "planned", "backend": "userns", "message": ["a", 1, null, 1.5, true], "modules_plan": [{"rel": "z/9", "status": "built", "live_software": "/x", "retired": "/y é"}]}
 EOF
 compare "status, four journals" status --state-root "${st}"
+compare "status --json, four journals" status --state-root "${st}" --json
+compare "status --json, one run" status --state-root "${st}" --json r1
 compare "status r3" status --state-root "${st}" r3
 compare "status, no such run" status --state-root "${st}" r9
+compare "status --json, no such run" status --state-root "${st}" --json r9
 compare "status, no runs dir" status --state-root "${work}/nostate"
+compare "status --json, no runs dir" status --state-root "${work}/nostate" --json
 compare "status, abbreviated option" status --state "${st}"
 compare "status, no option" status
 mkdir -p "${st}/runs/r4"; echo '{"schema": 1}' > "${st}/runs/r4/journal.json"

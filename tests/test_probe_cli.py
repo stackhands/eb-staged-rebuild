@@ -151,6 +151,103 @@ class CliTests(unittest.TestCase):
             self.assertTrue(body["complete"])
 
 
+class StatusJsonTests(unittest.TestCase):
+    def test_status_json_is_one_document(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, "state")
+            runs = os.path.join(state, "runs")
+            os.makedirs(os.path.join(runs, "r1"))
+            os.makedirs(os.path.join(runs, "r2"))
+            _write(
+                os.path.join(runs, "r1", "journal.json"),
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "run_id": "r1",
+                        "state": "done",
+                        "backend": "bwrap",
+                        "message": "all published",
+                        "modules_plan": [
+                            {
+                                "rel": "demo/1",
+                                "status": "published",
+                                "live_software": "/sw/demo/1",
+                                "retired": "/sw/demo/.1.old",
+                            }
+                        ],
+                    }
+                ),
+            )
+            _write(
+                os.path.join(runs, "r2", "journal.json"),
+                json.dumps(
+                    {
+                        "schema": 2,
+                        "kind": "retire",
+                        "run_id": "r2",
+                        "state": "retired",
+                        "module_path": "/m/x/1.lua",
+                        "software_dir": "/sw/x/1",
+                    }
+                ),
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            completed = subprocess.run(
+                [*CLI, "status", "--state-root", state, "--json"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        document = json.loads(completed.stdout)
+        self.assertEqual(
+            document,
+            {
+                "runs": [
+                    {
+                        "backend": "bwrap",
+                        "kind": "rebuild",
+                        "message": "all published",
+                        "modules": [
+                            {
+                                "live_software": "/sw/demo/1",
+                                "rel": "demo/1",
+                                "retired": "/sw/demo/.1.old",
+                                "status": "published",
+                            }
+                        ],
+                        "modules_published": 1,
+                        "modules_total": 1,
+                        "run_id": "r1",
+                        "state": "done",
+                    },
+                    {
+                        "kind": "retire",
+                        "module_path": "/m/x/1.lua",
+                        "run_id": "r2",
+                        "software_dir": "/sw/x/1",
+                        "state": "retired",
+                    },
+                ]
+            },
+        )
+        self.assertNotIn("no runs", completed.stdout)
+
+    def test_status_json_of_an_empty_root_is_an_empty_document(self):
+        with tempfile.TemporaryDirectory() as root:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            completed = subprocess.run(
+                [*CLI, "status", "--state-root", root, "--json"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {"runs": []})
+
+
 class BwrapKeyTableTests(unittest.TestCase):
     def test_easybuild_5_4_1_writes_the_stage_path_keys(self):
         self.assertTrue(BWRAP_STAGE_KEYS_READ_FROM_SOURCE[(5, 4, 1)])
