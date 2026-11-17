@@ -435,6 +435,68 @@ class GarbageCollectionTests(unittest.TestCase):
             self.assertFalse(os.path.exists(retired))
             TransactionTests().assert_new_live(installed)
 
+    def test_gc_removes_a_generation_once_its_hidden_trees_are_gone(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            clock = Clock()
+            self.assertEqual(run(_spec(software, modules, state, builder, clock=clock)).returncode, 0)
+            generation = os.path.join(state, "generations", "run1")
+            self.assertTrue(os.path.isdir(generation))
+            early = collect(state, 144, clock.now, dry_run=True)
+            self.assertNotIn(generation, [action["path"] for action in early])
+            later = clock.now + 144 * 3600 + 1
+            removal = {"path": generation, "action": "remove", "reason": "generation of a complete run"}
+            self.assertIn(removal, collect(state, 144, later, dry_run=True))
+            self.assertTrue(os.path.isdir(generation))
+            self.assertIn(removal, collect(state, 144, later))
+            self.assertFalse(os.path.exists(generation))
+            journal = load_journal(journal_path(state, "run1"))
+            self.assertEqual(journal["generation_removed_at"], later)
+            self.assertEqual(journal["message"], "retired tree and generation removed")
+            self.assertTrue(os.path.isdir(os.path.join(state, "generations")))
+            self.assertEqual(collect(state, 144, later), [])
+            TransactionTests().assert_new_live(installed)
+
+    def test_gc_removes_a_failed_generation_only_with_include_failed(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+
+            def fail(context):
+                builder(context)
+                return 7
+
+            clock = Clock()
+            self.assertEqual(run(_spec(software, modules, state, fail, clock=clock)).returncode, 7)
+            generation = os.path.join(state, "generations", "run1")
+            self.assertTrue(os.path.isdir(generation))
+            self.assertEqual(collect(state, 0, clock.now + 1), [])
+            self.assertTrue(os.path.isdir(generation))
+            self.assertEqual(
+                collect(state, 0, clock.now + 1, include_failed=True),
+                [{"path": generation, "action": "remove", "reason": "generation of a failed run"}],
+            )
+            self.assertFalse(os.path.exists(generation))
+            self.assertEqual(load_journal(journal_path(state, "run1"))["message"], "generation removed")
+            TransactionTests().assert_old_live(installed)
+            self.assertEqual(resume(state, "run1", builder=builder, clock=clock).returncode, 0)
+            self.assertTrue(os.path.isdir(generation))
+            self.assertIsNone(load_journal(journal_path(state, "run1"))["generation_removed_at"])
+            TransactionTests().assert_new_live(installed)
+
+    def test_gc_refuses_a_generation_named_by_a_run_id_that_is_not_a_plain_name(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, builder = _fixture(root)
+            clock = Clock()
+            self.assertEqual(run(_spec(software, modules, state, builder, clock=clock)).returncode, 0)
+            path = journal_path(state, "run1")
+            journal = load_journal(path)
+            journal["run_id"] = "../runs"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+            with self.assertRaisesRegex(Refused, "run id is not a plain name"):
+                collect(state, 0, clock.now + 1)
+            self.assertTrue(os.path.isdir(os.path.join(state, "runs", "run1")))
+
     @staticmethod
     def _gc(state, *args, env=None):
         code, out, _ = _main(["gc", "--state-root", state, "--dry-run", *args], env)
@@ -447,10 +509,19 @@ class GarbageCollectionTests(unittest.TestCase):
         self.assertEqual(run(spec).returncode, 0)
         return state, load_journal(journal_path(state, "run1"))["modules_plan"][0]["retired"]
 
+    @staticmethod
+    def _removal(state, retired):
+        generation = os.path.join(state, "generations", "run1")
+        return (
+            0,
+            f"remove: {retired} (previous live tree)\n"
+            f"remove: {generation} (generation of a complete run)\n",
+        )
+
     def test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded(self):
         with tempfile.TemporaryDirectory() as root:
             state, retired = self._published(root, 0)
-            remove = (0, f"remove: {retired} (previous live tree)\n")
+            remove = self._removal(state, retired)
             keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
             self.assertEqual(self._gc(state), remove)
             self.assertEqual(self._gc(state, "--grace-hours", "1"), keep)
@@ -461,7 +532,7 @@ class GarbageCollectionTests(unittest.TestCase):
             state, retired = self._published(root, 2)
             keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
             self.assertEqual(self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}), keep)
-            self.assertEqual(self._gc(state, "--grace-hours", "0"), (0, f"remove: {retired} (previous live tree)\n"))
+            self.assertEqual(self._gc(state, "--grace-hours", "0"), self._removal(state, retired))
 
     def test_a_recorded_grace_period_that_is_not_hours_is_not_used(self):
         with tempfile.TemporaryDirectory() as root:
@@ -480,7 +551,7 @@ class GarbageCollectionTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}),
-                        (0, f"remove: {retired} (previous live tree)\n"),
+                        self._removal(state, retired),
                     )
 
     def test_gc_refuses_a_grace_period_below_0_or_not_finite(self):
@@ -598,7 +669,5 @@ class StateRootVariableTests(unittest.TestCase):
                 ["eb-staged-rebuild rollback: error: the following arguments are required: run_id"],
             ),
         )
-
-
 if __name__ == "__main__":
     unittest.main()

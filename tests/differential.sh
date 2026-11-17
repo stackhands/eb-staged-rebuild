@@ -264,6 +264,31 @@ if [ "$(id -u)" != 0 ]; then
 fi
 compare_admin "gc removes past grace" gc --state-root @ROOT@/state --grace-hours 0
 compare_admin "gc again" gc --state-root @ROOT@/state --grace-hours 0
+# gc removes a run's generation once the run's hidden trees are settled, and
+# a failed build's only with --include-failed.
+for impl in py zig; do
+    r="${work}/${impl}"
+    mkdir -p "${r}/gstate/runs/g1" "${r}/gstate/runs/g2" "${r}/gstate/runs/g3" "${r}/gstate/generations/g1/modules/all/gen" \
+        "${r}/gstate/generations/g2/software/gen/1/lib" "${r}/gstate/generations/g3/software/gen" "${r}/software/gen/.1.g1" "${r}/software/gen/.1.g3"
+    touch "${r}/gstate/generations/g1/modules/all/gen/1.lua" "${r}/gstate/generations/g2/software/gen/1/lib/partial.so"
+    printf '{"schema": 2, "run_id": "g1", "state": "complete", "backend": "installpath", "generation_removed_at": null, "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g1", "published_at": 1000.5}], "message": ""}\n' "${r}" "${r}" > "${r}/gstate/runs/g1/journal.json"
+    printf '{"schema": 2, "run_id": "g2", "state": "failed", "backend": "installpath", "created_at": 900.5, "updated_at": 1000.5, "generation_removed_at": null, "modules_plan": [], "message": "eb exited 1"}\n' > "${r}/gstate/runs/g2/journal.json"
+    printf '{"schema": 2, "run_id": "g3", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g3", "published_at": 4102444800.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g3/journal.json"
+done
+compare_admin "gc --dry-run, generations" gc --state-root @ROOT@/gstate --dry-run
+compare_admin "gc removes a complete run's generation" gc --state-root @ROOT@/gstate
+compare_admin "gc --include-failed removes a failed build's generation" gc --state-root @ROOT@/gstate --include-failed
+for impl in py zig; do
+    r="${work}/${impl}"
+    mkdir -p "${r}/gstate/runs/g4" "${r}/gstate/generations/g4"
+    printf '{"schema": 2, "run_id": "../runs", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g4", "published_at": 1000.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g4/journal.json"
+done
+compare_admin "gc refuses a generation for a run id that is not a plain name" gc --state-root @ROOT@/gstate
+for impl in py zig; do rm -rf "${work}/${impl}/gstate" "${work}/${impl}/software/gen"; done
+compare_admin "run, a failed build" env FAKE_EB_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/fstate --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "gc --include-failed removes the failed build's generation" gc --state-root @ROOT@/fstate --grace-hours 0 --include-failed
+compare_admin "resume builds the removed generation again" env FAKE_EB_FAIL=1 @CMD@ resume --state-root @ROOT@/fstate f1
+for impl in py zig; do rm -rf "${work}/${impl}/fstate"; done
 compare_admin "rollback the retire" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "rollback again" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "run --dry-run, auto" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb

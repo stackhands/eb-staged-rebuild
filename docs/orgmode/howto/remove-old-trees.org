@@ -78,7 +78,10 @@ ls -A /opt/site/software/Example
 1.0-GCCcore-15.2.0
 #+end_example
 
-=gc= removes only hidden trees that a journal of the state root names; the journals themselves stay, and =status= still lists the runs.
+=gc= removes only hidden trees that a journal of the state root names.
+Once every hidden tree of a complete or rolled-back run is gone, it also removes that run's generation, =<state-root>/generations/RUN_ID=; the published software already moved out of it.
+With =--include-failed=, it removes the generation of a failed run that published nothing after the same grace period.
+The journals themselves stay, and =status= still lists the runs.
 =docs/examples/site.sh= in the repository runs these steps as its case =gc=.
 
 ** If it fails

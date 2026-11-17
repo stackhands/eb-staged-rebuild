@@ -603,6 +603,7 @@ fn removeGenerationModules(r: *R, generation_root: []const u8) E!void {
 fn build(r: *R) E!u8 {
     const a = r.a;
     r.set("state", Py.s("building"));
+    if (r.get("generation_removed_at")) |v| if (v != .null) r.set("generation_removed_at", .null);
     try r.save("journal.building");
     const gen = r.str("generation_root");
     atomic.makedirs(gen) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, gen)});

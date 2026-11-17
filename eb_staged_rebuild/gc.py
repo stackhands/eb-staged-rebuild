@@ -6,6 +6,11 @@ must replace it with the site's longest job plus a safety margin.  Each run
 records its grace period, and its trees are kept that long unless gc is given
 one for every tree.  Cluster-wide ``lsof`` is not used.
 
+A run's generation directory, ``<state-root>/generations/<run-id>``, holds only
+what publication left there: the published trees were moved out of it. gc
+removes it once every hidden tree of the run is settled: removed, or never made
+and past the grace period. A failed run counts only with ``include_failed``.
+
 A module file moved aside by ``retire`` starts that same clock for the stable
 software directory the module named. gc reports that directory. It does not
 delete it: the directory is the path jobs already have open, and gc only
@@ -20,7 +25,7 @@ from eb_staged_rebuild.atomicio import read_bytes
 from eb_staged_rebuild.cleanup import remove_generation_tree
 from eb_staged_rebuild.constants import SECONDS_PER_HOUR
 from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.journal import journal_path, list_journals, save_journal
+from eb_staged_rebuild.journal import generation_root, journal_path, list_journals, save_journal
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.paths import abspath, is_within, lstat_kind
@@ -47,6 +52,35 @@ def _run_grace(journal, default):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not value >= 0:
         return default
     return value
+
+
+def _finished_run(journal, include_failed):
+    state = journal.get("state")
+    if state == "complete":
+        return "complete run"
+    if state == "rolled_back":
+        return "rolled-back run"
+    if include_failed and state == "failed":
+        return "failed run"
+    return None
+
+
+def _generation(state_root, journal, roots, include_failed, dry_run):
+    """Remove the generation of a run whose hidden trees are all settled."""
+    what = _finished_run(journal, include_failed)
+    if what is None:
+        return []
+    run_id = journal.get("run_id")
+    if not isinstance(run_id, str) or run_id in ("", ".", "..") or "/" in run_id:
+        raise Refused("refusing a journal whose run id is not a plain name")
+    path = generation_root(state_root, run_id)
+    if lstat_kind(path) != "dir":
+        return []
+    if _referenced(path, roots):
+        return [{"path": path, "action": "keep", "reason": "a live module resolves inside it"}]
+    if not dry_run:
+        remove_generation_tree(path, os.path.dirname(path))
+    return [{"path": path, "action": "remove", "reason": f"generation of a {what}"}]
 
 
 def _safe_retired_path(mod):
@@ -182,15 +216,30 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
             continue
         hours = _run_grace(journal, grace_hours) if run_grace else grace_hours
         changed = False
-        for mod in journal.get("modules_plan") or []:
+        plan = journal.get("modules_plan") or []
+        if plan:
+            settled = True
+        else:
+            # A failed build records no plan; the run's own clock decides.
+            when = journal.get("updated_at") or journal.get("created_at")
+            settled = (
+                include_failed
+                and journal.get("state") == "failed"
+                and isinstance(when, (int, float))
+                and now - when >= hours * SECONDS_PER_HOUR
+            )
+        for mod in plan:
             if mod.get("retired_removed_at"):
                 continue
             retired = _safe_retired_path(mod)
-            if lstat_kind(retired) != "dir":
-                continue
             when, why = _retirement(journal, mod, include_failed)
+            if lstat_kind(retired) != "dir":
+                if when is None or now - when < hours * SECONDS_PER_HOUR:
+                    settled = False
+                continue
             if when is None:
                 actions.append({"path": retired, "action": "keep", "reason": why})
+                settled = False
                 continue
             age = now - when
             if _referenced(retired, roots):
@@ -201,6 +250,7 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                         "reason": "a live module resolves inside it",
                     }
                 )
+                settled = False
                 continue
             if age < hours * SECONDS_PER_HOUR:
                 actions.append(
@@ -211,6 +261,7 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                         "retired_at": when,
                     }
                 )
+                settled = False
                 continue
             actions.append(
                 {
@@ -225,8 +276,18 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
             remove_generation_tree(retired, os.path.dirname(retired))
             mod["retired_removed_at"] = now
             changed = True
-        if changed:
-            journal["message"] = "retired tree removed"
+        generation = _generation(state_root, journal, roots, include_failed, dry_run) if settled else []
+        actions.extend(generation)
+        generation_removed = not dry_run and any(action["action"] == "remove" for action in generation)
+        if generation_removed:
+            journal["generation_removed_at"] = now
+        if changed or generation_removed:
+            if changed and generation_removed:
+                journal["message"] = "retired tree and generation removed"
+            elif changed:
+                journal["message"] = "retired tree removed"
+            else:
+                journal["message"] = "generation removed"
             save_journal(
                 journal_path(state_root, journal["run_id"]),
                 journal,

@@ -586,8 +586,9 @@ const gc_help = gc_usage ++
     \\  --grace-hours GRACE_HOURS
     \\  --dry-run
     \\  --lock-timeout LOCK_TIMEOUT
-    \\  --include-failed      also remove failed runs that published nothing and are
-    \\                        older than the grace period
+    \\  --include-failed      also remove the hidden trees and generation of a
+    \\                        failed run that published nothing, after the grace
+    \\                        period
     \\
 ;
 
