@@ -23,7 +23,7 @@ The HTML is written to `docs/build/html`. `docs/orgmode/contributing.org` says h
 
 Linux only. There are two builds of the same command-line tool; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference.
 
-The static binary, one file per architecture, from a [release](https://github.com/stackhands/eb-staged-rebuild/releases):
+The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v1.0.0):
 
 ```bash
 v=1.0.0 arch=x86_64   # or aarch64
