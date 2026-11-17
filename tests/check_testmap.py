@@ -1,7 +1,7 @@
 """Fail when a test that imports the Python code has no row in TESTMAP.md.
 
-Port plan D4: every test in a module that imports ``eb_staged_rebuild`` maps
-to what covers it for the Zig build. The test names come from unittest's own
+Every test in a module that imports ``eb_staged_rebuild`` maps to what covers
+it for the Zig build. The test names come from unittest's own
 loader, so inherited and reassigned test methods count. A row is
 ``module.Class.test``, or ``Class.test`` under a ``tests/module.py`` heading.
 A module that is only a replacement (cited in a replacement column, with no

@@ -27,6 +27,7 @@ release with the binaries, `SHA256SUMS` and build provenance attestations.
 6. Check the draft release: two binaries, `SHA256SUMS`, attestations
    (`gh attestation verify FILE --repo stackhands/eb-staged-rebuild`), and a
    local build of the tag with the same sha256 (`zig build -Drelease=true
-   -Dcommit=<7-char sha> -Dtarget=ARCH-linux-musl`).
+   -Dcommit=<7-char sha> -Dtarget=ARCH-linux-musl`; v1.0.0 predates
+   `-Dcommit` and refuses it, so build that tag without it).
 7. Publish the draft. Assets cannot change after that, so nothing is added
    to a published release.

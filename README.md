@@ -27,8 +27,8 @@ The static binary, one file per architecture, from a [release](https://github.co
 
 ```bash
 v=1.0.0 arch=x86_64   # or aarch64
-curl -LO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/eb-staged-rebuild-${v}-${arch}-linux-musl"
-curl -LO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/SHA256SUMS"
+curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/eb-staged-rebuild-${v}-${arch}-linux-musl"
+curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
 install -m 0755 "eb-staged-rebuild-${v}-${arch}-linux-musl" ~/.local/bin/eb-staged-rebuild
 eb-staged-rebuild --version
@@ -45,19 +45,16 @@ eb-staged-rebuild --version
 
 ## Usage
 
-Rebuild pigz in an EESSI 2026.06 user installation, look at the run, and put the previous tree back:
+Rebuild `Example/1.0-GCCcore-15.2.0`, which EasyBuild installed under `/opt/site`, from the directory that holds its easyconfig, and look at the run:
 
 ```bash
-module load EESSI-extend/2026.06-easybuild
-P=$EASYBUILD_INSTALLPATH
-eb-staged-rebuild probe --path "$P/software"
-eb-staged-rebuild run --software "$P/software" --modules "$P/modules" \
-  --run-id pigz-1 --module pigz/2.8-GCCcore-15.2.0 -- pigz-2.8-GCCcore-15.2.0.eb
-eb-staged-rebuild status --state-root "$P/.eb-staged-rebuild" pigz-1
-eb-staged-rebuild rollback --state-root "$P/.eb-staged-rebuild" pigz-1
+eb-staged-rebuild probe --path /opt/site/software
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+  --run-id example-1 -- Example-1.0-GCCcore-15.2.0.eb
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-1
 ```
 
-`probe` reports the sandbox and whether the filesystem exchanges directories. `run` builds into `$P/.eb-staged-rebuild/generations/pigz-1`, the default state root for that software tree, and swaps it in for `software/pigz/2.8-GCCcore-15.2.0` and its module file. Arguments after `--` go to `eb`. `rollback` swaps the previous tree back. The [how-to](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers dry runs, resume and `gc`.
+`probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover failed runs, rollback and `gc`.
 
 ## Changelog
 

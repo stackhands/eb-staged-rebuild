@@ -32,7 +32,7 @@ python3 -m unittest discover -s tests
 #+end_src
 
 The ledger tests need =openssl= on =PATH= and an eb-stack 0.7.0 binary in =EB_STACK_BIN=, the one =.github/actions/pinned-ledger= builds; without it some skip and the =build-events= and =ledger-maintenance= suites fail.
-=EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration.py=, which rebuilds a package with EasyBuild 5.4.2, Lmod and, when it runs here, bubblewrap.
+=EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration.py=, which rebuilds a package with EasyBuild 5.4.2 and Lmod: with it set, a missing =eb= or Lmod fails the tests, and the bubblewrap case skips where =bwrap= does not run.
 =python3 tests/check_testmap.py= checks that every test that imports the Python code has its row in =TESTMAP.md=, which names what covers it for the Zig build.
 
 With Zig 0.17.1, =zig build test= runs the unit tests of the Zig build, and =zig build -Drelease=true= builds the binary.

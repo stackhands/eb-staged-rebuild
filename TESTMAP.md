@@ -1,8 +1,8 @@
 # Tests that import the Python code, and what covers them for the Zig build
 
-Port plan D4: every test that imports Python code maps to a replacement that
-runs against the Zig build. A row marked "not yet" has no replacement; the
-port of that command is not accepted while one is left.
+Every test that imports Python code maps to a replacement that runs against
+the Zig build. A row marked "not yet" has no replacement; the port of that
+command is not accepted while one is left.
 `tests/check_testmap.py` (CI, unit job) fails on a missing row, a row that
 names no such test, or a "not yet" row.
 

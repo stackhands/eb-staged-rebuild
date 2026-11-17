@@ -3,8 +3,9 @@
 EasyBuild `--rebuild` and `--force` empty an existing install before the new
 install has passed its sanity checks. This program never points EasyBuild at
 the live install for a staged build. The program writes a complete replacement
-in a separate tree, takes one `flock` for the build and publish transaction,
-and then swaps the staged directory with `software/<name>/<version>`.
+in a separate tree under the state root's lock, a `flock` paired with a POSIX
+record lock, and then swaps the staged directory with
+`software/<name>/<version>`.
 
 The swap keeps a real directory at the live install path. A successful
 rebuild changes the inode and the file bytes at that path. The retired directory is kept as
@@ -113,9 +114,9 @@ reverse order and restores module files. A failed rollback reverses its own
 completed operations, leaving the published tree live.
 
 `gc` only removes the hidden retired sibling recorded in a journal. It never
-removes the stable path. The default grace is the notes' 120-hour walltime plus
-a 24-hour margin; that walltime was not measured for this site and must be
-overridden after the site limit is known.
+removes the stable path. The default grace, 144 hours, is an assumed longest
+job of 120 hours plus a 24-hour margin. The 120 hours were not measured at a
+site; an operator sets the grace to the site's longest job plus a margin.
 
 ## Dry run
 
@@ -221,7 +222,7 @@ one is closed in this tree, or kept on purpose.
 8. Closed. A successful publish changes the live directory inode. Tests require the new bytes at that path.
 9. Closed. A caught failure reverses every completed swap and module-file update in that transaction.
 10. Closed. Each open measurement has a recommended answer above.
-11. Closed. `CHANGELOG.md` and the Org-mode how-to and reference describe the swap.
+11. Closed. `CHANGELOG.md` and the explanation pages of the documentation describe the swap.
 
 ### Repository documents at `8e7b6d66`
 
@@ -238,7 +239,7 @@ one is closed in this tree, or kept on purpose.
 11. Closed. The unit suite passes with `ResourceWarning` promoted to an error.
 12. Intended. The module preflight can run before a software-symlink refusal. The install build does not. A module-file symlink is refused in planning, after the build and before any swap, because the path may be known only from that preflight.
 13. Intended. Bubblewrap is accepted when `bwrap --dev-bind / / true` succeeds. `user.max_user_namespaces` is reported. A zero value does not by itself refuse a setuid bubblewrap that passes the probe.
-14. Closed. The runbook states that the preflight runs before the lock. The runbook also states that EasyBuild may run twice. The lock covers build, publish, resume, rollback, retire, and garbage collection.
+14. Closed. The documentation's explanation of the lock states that the preflight runs before the lock and that EasyBuild runs twice. The lock covers build, publish, resume, rollback, retire, and garbage collection.
 15. Intended. Dry-run checks the software directory named by `--module`. It does not check the live module file. That file is checked when a real run plans the publish.
 16. Closed. `--run-id`, `--lock-timeout`, `--skip-live-check`, `--eb`, `EB_STAGED_REBUILD_EB`, `EB_STAGED_REBUILD_STATE_ROOT`, and `EB_STAGED_REBUILD_GRACE_HOURS` are documented.
 17. Closed for the collector: `gc` keeps the state-root lock until collection finishes. Intended for the rest: two state roots are two locks, even when both runs name the same live trees. One state root per live tree is the deployment rule.
@@ -246,4 +247,4 @@ one is closed in this tree, or kept on purpose.
 19. Intended. One unreadable journal makes `status` stop. A partial list would hide the broken run.
 20. Intended. A crash during planning can leave prepared module files while the journal still says `building`. `resume` from `building` rebuilds that generation.
 21. Intended. `resolve` calls a directory complete when it contains install metadata, including the run marker written before publish. The marker means the tree is complete. The marker does not mean the tree is already the live path.
-22. Closed. With integration enabled, missing `eb` or Lmod fails the test. The bubblewrap case skips when that probe fails, and the README says so.
+22. Closed. With integration enabled, missing `eb` or Lmod fails the test. The bubblewrap case skips when that probe fails, and the documentation's contributing page says so.
