@@ -140,6 +140,7 @@ pub const Ctx = struct {
     a: Allocator,
     env: probe.Env,
     pause: PauseCtx,
+    now_fn: *const fn () f64 = nowSeconds,
 
     /// The fault hooks: pause at EB_STAGED_REBUILD_PAUSE_AT and, in the
     /// -Dtest-ops artifact only, fail at EB_STAGED_REBUILD_FAIL_AT.
@@ -691,14 +692,99 @@ fn runGrace(j: Py, default: f64) f64 {
     return if (hours >= 0) hours else default;
 }
 
+fn metricsTreeRunId(c: *Ctx, path: []const u8) ?[]const u8 {
+    const stamp = std.fs.path.join(c.a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
+    if (!std.mem.eql(u8, main_mod.lstatKind(stamp), "file")) return null;
+    const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;
+    defer sys.close(f.fd);
+    const raw = fsx.readAll(c.a, f.fd, 1 << 20) catch return null;
+    const value = json.toPy(c.a, json.parse(c.a, raw) catch return null) catch return null;
+    return str(pyfmt.get(value, "run_id"));
+}
+
+fn currentCreatedAt(c: *Ctx, journals: []const Py, now: f64) ?f64 {
+    var newest: ?f64 = null;
+    for (journals) |j| {
+        if (!eqlStr(pyfmt.get(j, "state"), "complete")) continue;
+        const run_id = str(pyfmt.get(j, "run_id")) orelse continue;
+        const created: f64 = switch (pyfmt.get(j, "created_at") orelse continue) {
+            .int => |n| @floatFromInt(n),
+            .float => |f| f,
+            else => continue,
+        };
+        if (!std.math.isFinite(created) or created < 0 or created > now) continue;
+        const modules = pyfmt.get(j, "modules_plan") orelse continue;
+        if (modules != .list) continue;
+        for (modules.list) |m| {
+            if (!eqlStr(pyfmt.get(m, "status"), "published")) continue;
+            const live = str(pyfmt.get(m, "live_software")) orelse continue;
+            const live_module = str(pyfmt.get(m, "live_module")) orelse continue;
+            const module_root = moduleRoot(c, live_module) orelse continue;
+            if (!std.mem.eql(u8, module_root, abspath(c.a, live))) continue;
+            const stamped = metricsTreeRunId(c, live) orelse continue;
+            if (std.mem.eql(u8, stamped, run_id)) {
+                newest = if (newest) |known| @max(known, created) else created;
+                break;
+            }
+        }
+    }
+    return newest;
+}
+
+fn metricsBody(c: *Ctx, state_root: []const u8, journals: []const Py, now: f64) []const u8 {
+    const generations = std.fs.path.join(c.a, &.{ state_root, "generations" }) catch oom();
+    var names: std.ArrayList([]const u8) = .empty;
+    const fd = fsx.openDir(fsx.cwd, generations, true) catch |err| switch (err) {
+        error.NotFound => null,
+        else => refuse("{s}", .{main_mod.osError(c.a, err, generations)}),
+    };
+    if (fd) |directory| {
+        defer sys.close(directory);
+        var it = fsx.DirIter.init(c.a, directory) catch oom();
+        while (it.next() catch |err| refuse("{s}", .{main_mod.osError(c.a, err, generations)})) |e| {
+            const path = std.fs.path.join(c.a, &.{ generations, e.name }) catch oom();
+            if (std.mem.eql(u8, main_mod.lstatKind(path), "dir"))
+                names.append(c.a, c.a.dupe(u8, e.name) catch oom()) catch oom();
+        }
+    }
+    const current_created_at = currentCreatedAt(c, journals, now);
+    var out: std.ArrayList(u8) = .empty;
+    out.print(c.a,
+        \\# HELP eb_staged_rebuild_generations_present Real generation directories present after garbage collection.
+        \\# TYPE eb_staged_rebuild_generations_present gauge
+        \\eb_staged_rebuild_generations_present {d}
+        \\# HELP eb_staged_rebuild_current_generation_age_seconds Age of the newest generation that remains published live.
+        \\# TYPE eb_staged_rebuild_current_generation_age_seconds gauge
+        \\
+    , .{names.items.len}) catch oom();
+    if (current_created_at) |created| out.print(c.a, "eb_staged_rebuild_current_generation_age_seconds {d}\n", .{now - created}) catch oom();
+    out.print(c.a,
+        \\# HELP eb_staged_rebuild_last_gc_timestamp_seconds Unix timestamp of the last completed garbage-collection pass.
+        \\# TYPE eb_staged_rebuild_last_gc_timestamp_seconds gauge
+        \\eb_staged_rebuild_last_gc_timestamp_seconds {d}
+        \\
+    , .{now}) catch oom();
+    return out.items;
+}
+
+fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []const Py) void {
+    if (path.len == 0) refuse("--metrics-file must name a file; it is empty", .{});
+    const parent = dirname(path);
+    atomic.makedirs(if (parent.len > 0) parent else ".") catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
+    var why: atomic.Why = .{};
+    atomic.atomicWrite(c.a, path, metricsBody(c, state_root, journals, c.now_fn()), .{ .faults = c.faults(), .step = "metrics" }, &why) catch |err|
+        if (err == error.Refused) refuse("{s}", .{why.msg}) else refuse("{s}", .{main_mod.osError(c.a, err, path)});
+}
+
 /// gc: remove each hidden tree whose grace period is over and, with
 /// `include_failed`, the staged tree of a failed run that published
 /// nothing; with `dry_run`, only list them. `grace_hours` applies to every
 /// tree, or with `run_grace` only to the trees whose run recorded no grace
 /// period and to retired module files. Returns the exit status.
-pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64, run_grace: bool) u8 {
+pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64, run_grace: bool, metrics_file: ?[]const u8) u8 {
     const a = c.a;
-    const now = nowSeconds();
+    if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
+    const now = c.now_fn();
     const l = lock(c, state_root_in, lock_timeout);
     defer l.release();
     const state_root = abspath(a, state_root_in);
@@ -807,6 +893,7 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
             actions.append(a, .{ .path = dir, .action = "manual", .reason = a.print("ready to remove by hand after {s}; gc does not delete the stable software directory", .{gmtimeStamp(a, ready, true)}) catch "" }) catch oom();
         }
     }
+    if (metrics_file) |path| writeMetrics(c, path, state_root, journals);
     for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
     return 0;
 }
@@ -842,6 +929,86 @@ test "finishedRun: a complete or rolled-back run, and a failed one only with inc
     try std.testing.expectEqualStrings("failed run", finishedRun(.{ .dict = &failed }, true).?);
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &building }, true));
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &.{} }, true));
+}
+
+test "metrics exclude a retired publication whose live module is missing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-metrics-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    try atomic.makedirs(try a.print("{s}/generations/current", .{root}));
+    try atomic.makedirs(try a.print("{s}/generations/failed", .{root}));
+    try atomic.makedirs(try a.print("{s}/generations/building", .{root}));
+    const live = try a.print("{s}/software/demo/1", .{root});
+    try atomic.makedirs(live);
+    const stamp = try a.print("{s}/.eb-staged-rebuild-complete", .{live});
+    const stamp_fd = try sys.openat(fsx.cwd, stamp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(stamp_fd, "{\"run_id\":\"current\"}\n");
+    sys.close(stamp_fd);
+    const live_module = try a.print("{s}/modules/all/demo/1.lua", .{root});
+    try atomic.makedirs(dirname(live_module));
+    const module_fd = try sys.openat(fsx.cwd, live_module, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(module_fd, try a.print("local root = \"{s}\"\n", .{live}));
+    sys.close(module_fd);
+    const current_plan = [_]Py{.{ .dict = &.{
+        .{ .key = "status", .value = Py.s("published") },
+        .{ .key = "live_software", .value = Py.s(live) },
+        .{ .key = "live_module", .value = Py.s(live_module) },
+    } }};
+    const journals = [_]Py{
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("current") },
+            .{ .key = "state", .value = Py.s("complete") },
+            .{ .key = "created_at", .value = .{ .float = 700 } },
+            .{ .key = "modules_plan", .value = .{ .list = &current_plan } },
+        } },
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("failed") },
+            .{ .key = "state", .value = Py.s("failed") },
+            .{ .key = "created_at", .value = .{ .float = 900 } },
+            .{ .key = "modules_plan", .value = .{ .list = &.{} } },
+        } },
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("building") },
+            .{ .key = "state", .value = Py.s("building") },
+            .{ .key = "created_at", .value = .{ .float = 950 } },
+            .{ .key = "modules_plan", .value = .{ .list = &.{} } },
+        } },
+    };
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const body = metricsBody(&c, root, &journals, 1000);
+    try std.testing.expect(std.mem.indexOf(u8, body, "eb_staged_rebuild_generations_present 3\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "eb_staged_rebuild_current_generation_age_seconds 300\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "bytes") == null);
+    try sys.unlinkat(fsx.cwd, live_module, 0);
+    const retired = metricsBody(&c, root, &journals, 1000);
+    try std.testing.expect(std.mem.indexOf(u8, retired, "\neb_staged_rebuild_current_generation_age_seconds ") == null);
+}
+
+test "gc records its completion time after its starting time" {
+    const Clock = struct {
+        var calls: usize = 0;
+        fn now() f64 {
+            calls += 1;
+            return if (calls == 1) 1000 else 2000;
+        }
+    };
+    Clock.calls = 0;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-metrics-time-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const metrics = try a.print("{s}/metrics.prom", .{root});
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, metrics));
+    try std.testing.expectEqual(@as(usize, 2), Clock.calls);
+    try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
 }
 
 test "linksTo finds the links that resolve to a module file beside it and in each class directory" {

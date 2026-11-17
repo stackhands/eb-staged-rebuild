@@ -18,6 +18,7 @@ The title names the task.
    recover
    roll-back
    remove-old-trees
+   export-metrics
    retire
    record-in-a-ledger
    build-events

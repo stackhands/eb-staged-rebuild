@@ -1,0 +1,29 @@
+name: pinned promtool
+description: Install the checksum-verified promtool from Prometheus 3.16.0.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64)
+            arch=amd64
+            checksum=68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34
+            ;;
+          aarch64)
+            arch=arm64
+            checksum=fd8571b8162f4020232d886f17340bcf92e1722985ae3b4c1d096157826c0fbe
+            ;;
+          *)
+            echo "unsupported architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+        archive="prometheus-3.16.0.linux-${arch}.tar.gz"
+        curl --fail --location --silent --show-error \
+          --output "${RUNNER_TEMP}/${archive}" \
+          "https://github.com/prometheus/prometheus/releases/download/v3.16.0/${archive}"
+        echo "${checksum}  ${RUNNER_TEMP}/${archive}" | sha256sum --check
+        tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" --directory "${RUNNER_TEMP}"
+        sudo install "${RUNNER_TEMP}/prometheus-3.16.0.linux-${arch}/promtool" /usr/local/bin/promtool

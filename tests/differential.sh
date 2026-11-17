@@ -242,12 +242,18 @@ compare_admin() {
         find "${root}" -name journal.json -printf '%h\0' 2>/dev/null | LC_ALL=C sort -z |
             while IFS= read -r -d '' d; do cat "${d}/journal.json"; done > "${out}.journals"
         (cd "${root}" && find . -not -name '.lock*' -not -name .last-retire 2>/dev/null) > "${out}.tree"
-        for f in out err journals; do norm < "${out}.${f}" > "${out}.${f}.n"; done
+        find "${root}" -name '*.prom' -type f -print0 2>/dev/null | LC_ALL=C sort -z |
+            while IFS= read -r -d '' f; do printf '%s\n' "${f#${root}/}"; cat "${f}"; done > "${out}.metrics"
+        for f in out err journals metrics; do
+            norm < "${out}.${f}" |
+                sed -E 's/^(eb_staged_rebuild_(current_generation_age|last_gc_timestamp)_seconds) .*/\1 TIME/' \
+                > "${out}.${f}.n"
+        done
         # Sorted after normalizing, so names that differ only in a stamp
         # compare by what is left.
         norm < "${out}.tree" | LC_ALL=C sort > "${out}.tree.n"
     done
-    for f in rc out.n err.n journals.n tree.n; do
+    for f in rc out.n err.n journals.n metrics.n tree.n; do
         if ! cmp -s "${work}/py.admin.${f}" "${work}/zig.admin.${f}"; then
             [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
             bad=1
@@ -318,6 +324,14 @@ compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
 # copy's own paths, so hashes are compared only through the files they name.
 export NORM_HASH=1
 compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
+compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom
+compare_admin "gc refuses an empty metrics path" gc --state-root @ROOT@/state --metrics-file=
+for impl in py zig; do
+    printf 'unchanged\n' > "${work}/${impl}/metrics-target"
+    ln -s metrics-target "${work}/${impl}/metrics-link.prom"
+done
+compare_admin "gc refuses a symlinked metrics path" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics-link.prom
 compare_admin "run, installpath, recorded prefix" env FAKE_EB_RECORD_PREFIX=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id rp1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status after the run" status --state-root @ROOT@/state r2
 compare_admin "resume a complete run" resume --state-root @ROOT@/state r2
