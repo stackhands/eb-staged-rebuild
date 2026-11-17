@@ -21,18 +21,21 @@ from tests import test_easybuild_integration as base
 
 @unittest.skipUnless(os.environ.get("TOOL_BIN"), "set TOOL_BIN to the program to test")
 class CliEasyBuildIntegrationTests(base.EasyBuildIntegrationTests):
-    def _rebuild(self, prefix, ec, src, backend, *eb_args):
+    def _rebuild(self, prefix, ec, src, backend, *eb_args, build_dir=None):
+        cmd = [
+            os.environ["TOOL_BIN"], "run",
+            "--software", os.path.join(prefix, "software"),
+            "--modules", os.path.join(prefix, "modules"),
+            "--state-root", os.path.join(prefix, ".eb-staged-rebuild"),
+            "--backend", backend,
+            "--eb", "eb",
+            "--module", "stagedemo/1",
+        ]
+        if build_dir is not None:
+            cmd.extend(["--build-dir", build_dir])
+        cmd.extend(["--", ec, f"--sourcepath={src}", "--module-syntax=Lua", *eb_args])
         done = subprocess.run(
-            [
-                os.environ["TOOL_BIN"], "run",
-                "--software", os.path.join(prefix, "software"),
-                "--modules", os.path.join(prefix, "modules"),
-                "--state-root", os.path.join(prefix, ".eb-staged-rebuild"),
-                "--backend", backend,
-                "--eb", "eb",
-                "--module", "stagedemo/1",
-                "--", ec, f"--sourcepath={src}", "--module-syntax=Lua", *eb_args,
-            ],
+            cmd,
             capture_output=True,
             text=True,
             check=False,

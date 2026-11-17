@@ -96,6 +96,13 @@ class CliDocTests(unittest.TestCase):
     def test_docs_name_every_cli_option(self):
         self.assertEqual(missing_from_docs(), [])
 
+    def test_build_dir_how_to_documents_the_flag(self):
+        path = os.path.join(ROOT, "docs", "orgmode", "howto", "set-a-build-directory.org")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("--build-dir", text)
+        self.assertIn("--buildpath", text)
+
     def test_transcripts_do_not_record_a_checkout_path(self):
         """Recorded output must not name the machine that recorded it.
 

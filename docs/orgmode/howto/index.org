@@ -13,6 +13,7 @@ The title names the task.
 
    install
    rebuild
+   set-a-build-directory
    set-permissions
    recover
    roll-back

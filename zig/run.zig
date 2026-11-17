@@ -220,7 +220,7 @@ fn runDir(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
 /// default path, so an allocation failure is an error, never a fallback to
 /// the parent environment.
 fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.proc.Envp {
-    var b = try childEnvBuilder(r, env, software, modules, live_modules);
+    var b = try childEnvBuilder(r, env, software, modules, live_modules, r.spec.build_dir != null);
     return envpOf(r, &b);
 }
 
@@ -230,16 +230,17 @@ fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, li
 /// through a pipe too; basic output, which EasyBuild reads since 4.5.0, has
 /// neither, and --output-style among the eb arguments still wins.
 fn dryRunEnv(r: *R) E!common.proc.Envp {
-    var b = try childEnvBuilder(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    var b = try childEnvBuilder(r, r.env, r.spec.software, r.spec.modules, r.spec.modules, false);
     try b.set("EASYBUILD_OUTPUT_STYLE", "basic");
     return envpOf(r, &b);
 }
 
 /// The environment childEnv gives, before it becomes an envp.
-fn childEnvBuilder(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.env.Builder {
+fn childEnvBuilder(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8, drop_buildpath: bool) E!common.env.Builder {
     const a = r.a;
     var b = try common.env.Builder.fromEnv(a, common.env.Env.fromEnvp(env.envp));
     for ([_][]const u8{ "EASYBUILD_INSTALLPATH", "EASYBUILD_PREFIX", "EASYBUILD_REMOVE_GHOST_INSTALL_DIRS", "EASYBUILD_INSTALLPATH_SOFTWARE", "EASYBUILD_INSTALLPATH_MODULES" }) |k| b.unset(k);
+    if (drop_buildpath) b.unset("EASYBUILD_BUILDPATH");
     try b.set("EASYBUILD_INSTALLPATH_SOFTWARE", software);
     try b.set("EASYBUILD_INSTALLPATH_MODULES", modules);
     const live = try engine.modulePath(a, live_modules, engine.modulesSuffix(r.spec.eb_args, b.get("EASYBUILD_SUFFIX_MODULES_PATH")));
@@ -609,13 +610,14 @@ fn build(r: *R) E!u8 {
     atomic.makedirs(gen) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, gen)});
     try removeGenerationModules(r, gen);
     try hit(r, r.faults(), "build.start");
-    const filtered = engine.ensureRebuild(a, engine.filterEbArgs(a, r.spec.eb_args));
+    const filtered = engine.ensureRebuild(a, engine.filterEbArgsOpts(a, r.spec.eb_args, r.spec.build_dir != null));
     var cmd: std.ArrayList([]const u8) = .empty;
     var envp: common.proc.Envp = undefined;
     const software = try std.fs.path.join(a, &.{ gen, "software" });
     const modules = try std.fs.path.join(a, &.{ gen, "modules" });
     if (std.mem.eql(u8, r.spec.backend, "bwrap")) {
         try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--experimental", "--bwrap", try a.print("--bwrap-installpath={s}", .{gen}), "--bwrap-options=--die-with-parent" });
+        if (r.spec.build_dir) |bd| try cmd.append(a, try a.print("--buildpath={s}", .{bd}));
         try cmd.appendSlice(a, filtered);
         envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
     } else {
@@ -623,6 +625,7 @@ fn build(r: *R) E!u8 {
         atomic.makedirs(modules) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, modules)});
         var inner: std.ArrayList([]const u8) = .empty;
         try inner.appendSlice(a, &.{ r.spec.eb_executable, try a.print("--installpath-software={s}", .{software}), try a.print("--installpath-modules={s}", .{modules}) });
+        if (r.spec.build_dir) |bd| try inner.append(a, try a.print("--buildpath={s}", .{bd}));
         try inner.appendSlice(a, filtered);
         envp = try childEnv(r, r.env, software, modules, r.spec.modules);
         if (std.mem.eql(u8, r.spec.backend, "userns")) {
@@ -1408,7 +1411,8 @@ pub fn run(r: *R, probes: Py) E!Result {
         try manifests.append(a, .{ .key = rel, .value = snap });
     };
     const gen = admin.abspath(a, try std.fs.path.join(a, &.{ r.spec.state_root, "generations", run_id }));
-    r.journal = .{ .dict = try a.dupe(Py.Entry, &.{
+    var j_entries: std.ArrayList(Py.Entry) = .empty;
+    try j_entries.appendSlice(a, &.{
         .{ .key = "schema", .value = .{ .int = 2 } },
         .{ .key = "run_id", .value = Py.s(run_id) },
         .{ .key = "state", .value = Py.s("created") },
@@ -1440,7 +1444,9 @@ pub fn run(r: *R, probes: Py) E!Result {
         .{ .key = "eb_command", .value = .null },
         .{ .key = "retired_at", .value = .null },
         .{ .key = "generation_removed_at", .value = .null },
-    }) };
+    });
+    if (r.spec.build_dir) |bd| try j_entries.append(a, .{ .key = "build_dir", .value = Py.s(admin.abspath(a, bd)) });
+    r.journal = .{ .dict = j_entries.items };
     try r.save("journal.created");
     log("run {s} backend {s} generation {s}", .{ run_id, r.spec.backend, gen });
     return runLocked(r, true);
@@ -1476,6 +1482,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
         .lock_timeout = lock_timeout,
         .prepare_executable = if (pyfmt.get(j, "prepare_executable")) |p| (if (p == .str) p.str else null) else null,
         .ledger_config = if (pyfmt.get(j, "ledger_config")) |p| (if (p == .str and p.str.len > 0) p.str else null) else null,
+        .build_dir = if (pyfmt.get(j, "build_dir")) |p| (if (p == .str and p.str.len > 0) p.str else null) else null,
     };
 }
 
@@ -2082,6 +2089,20 @@ test "childEnv fails rather than fall back to the parent environment" {
         try std.testing.expect(saw);
         if (!failing.has_induced_failure) break;
     }
+}
+
+test "childEnvBuilder unsets EASYBUILD_BUILDPATH only when drop_buildpath is true" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{ "PATH=/bin", "EASYBUILD_BUILDPATH=/keep/me" };
+    const env: probe.Env = .{ .envp = parent };
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r_keep: R = .{ .a = a, .env = env, .ctx = &ctx, .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} } };
+    const b_keep = try childEnvBuilder(&r_keep, env, "/gen/software", "/gen/modules", "/m", false);
+    try std.testing.expectEqualStrings("/keep/me", b_keep.get("EASYBUILD_BUILDPATH").?);
+    const b_drop = try childEnvBuilder(&r_keep, env, "/gen/software", "/gen/modules", "/m", true);
+    try std.testing.expect(b_drop.get("EASYBUILD_BUILDPATH") == null);
 }
 
 test "notADirectory says what the path is instead" {

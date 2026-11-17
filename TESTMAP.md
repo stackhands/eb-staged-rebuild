@@ -407,7 +407,25 @@ site variables through CLI/docs tests and integration coverage.
 | EasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree |
 | EasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build |
 | EasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind |
+| EasyBuildIntegrationTests.test_build_dir_directs_eb_away_from_default_buildpath | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_build_dir_directs_eb_away_from_default_buildpath |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |
+
+### tests/test_build_dir.py
+
+| test | replacement |
+|---|---|
+| BuildDirTests.test_without_build_dir_eb_args_and_env_are_unchanged | differential "run, without --build-dir keeps --buildpath", "the argv without --build-dir"; `zig/engine.zig` test "buildCommand includes --buildpath only when build_dir is set"; `zig/run.zig` test "childEnvBuilder unsets EASYBUILD_BUILDPATH only when drop_buildpath is true" |
+| BuildDirTests.test_build_dir_passes_buildpath_in_installpath_and_overrides_eb_args | differential "run, --build-dir overrides EASYBUILD_BUILDPATH and --buildpath", "the argv with --build-dir"; `zig/engine.zig` test "filterEbArgsOpts drops --buildpath only when requested" |
+| BuildDirTests.test_build_dir_passes_buildpath_in_bwrap | differential "run, --build-dir, bwrap", "the bwrap argv with --build-dir"; `zig/engine.zig` test "buildCommand includes --buildpath only when build_dir is set" |
+| BuildDirTests.test_build_dir_passes_buildpath_in_userns | differential "run, --build-dir, userns", "the userns argv with --build-dir" |
+| BuildDirTests.test_relative_build_dir_is_made_absolute_and_saved_in_journal | differential "run --dry-run, relative --build-dir", "run, --build-dir fails then resume" |
+| BuildDirTests.test_resume_reuses_recorded_build_dir | differential "run, --build-dir fails then resume", "resume reuses recorded --build-dir", "the resume argv with --build-dir" |
+| BuildDirTests.test_build_dir_refuses_empty_string | differential "run, empty --build-dir" |
+| BuildDirTests.test_build_dir_refuses_inside_generation | differential "run, --build-dir is generations", "run, --build-dir inside generation" |
+| BuildDirTests.test_build_dir_refuses_inside_live_prefix | differential "run, --build-dir inside live software", "run, --build-dir inside live modules" |
+| BuildDirTests.test_build_dir_refuses_symlink_resolving_inside_generation_or_live_prefix | differential "run, --build-dir symlink into software", "run, --build-dir symlink into modules", "run, --build-dir symlink into generation" |
+| BuildDirTests.test_build_dir_refuses_non_directory_file | differential "run, --build-dir is a file" |
+| BuildDirTests.test_build_dir_allows_sibling_of_live_prefix_and_symlink_outside | differential "run --dry-run, --build-dir", "run, --build-dir overrides EASYBUILD_BUILDPATH and --buildpath" |
 
 ### tests/test_sealed_install.py
 
@@ -456,6 +474,7 @@ site variables through CLI/docs tests and integration coverage.
 | test | replacement |
 |---|---|
 | CliDocTests.test_docs_name_every_cli_option | differential "top level --help", "run -h", "resume -h", "rollback -h", "status -h", "gc -h", "retire -h", "probe -h", "resolve -h": the binary's help equals the Python parser's, which this test checks against the docs |
+| CliDocTests.test_build_dir_how_to_documents_the_flag | `docs/examples/site.sh` case `build-dir` runs `--build-dir` with the binary and `docs/orgmode/howto/set-a-build-directory.org` records it |
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the output recorded in the Org pages; no binary behaviour |
 | CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
 

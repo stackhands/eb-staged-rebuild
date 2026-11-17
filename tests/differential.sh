@@ -580,6 +580,45 @@ compare_admin "modes after a restricting prepare" env sh -c 'cd "$1" && find . -
 compare_admin "retire a published module" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "gc after a published module is retired" gc --state-root @ROOT@/state --grace-hours 0
 compare_admin "rollback the published module retire" rollback --state-root @ROOT@/state @RETIRE@
+# --build-dir passes --buildpath to eb when set, preserves eb_args and
+# EASYBUILD_BUILDPATH when unset, persists through resume, and refuses
+# paths inside the generation or the live prefix.
+for impl in py zig; do
+    r="${work}/${impl}"
+    mkdir -p "${r}/scratch-outside"
+    ln -s "${r}/scratch-outside" "${r}/scratch-link"
+    ln -s "${r}/software/demo/via-link" "${r}/bad-sw-link"
+    ln -s "${r}/modules/all/via-link" "${r}/bad-mod-link"
+    ln -s "${r}/state/generations/via-link" "${r}/bad-gen-link"
+    printf 'file\n' > "${r}/build-file"
+done
+compare_admin "run --dry-run, --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir @ROOT@/scratch-outside --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, relative --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir rel/build --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run, --build-dir overrides EASYBUILD_BUILDPATH and --buildpath" env EASYBUILD_BUILDPATH=@ROOT@/ignored-env FAKE_EB_ARGV=@ROOT@/bp_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd1 --skip-live-check --build-dir @ROOT@/scratch-link --module demo/1 -- demo-1.eb --buildpath=@ROOT@/ignored-arg
+compare_admin "the argv with --build-dir" env cat @ROOT@/bp_argv
+compare_admin "rollback the --build-dir run" rollback --state-root @ROOT@/state bd1
+compare_admin "run, without --build-dir keeps --buildpath" env EASYBUILD_BUILDPATH=@ROOT@/kept-env FAKE_EB_ARGV=@ROOT@/nobp_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd2 --skip-live-check --module demo/1 -- demo-1.eb --buildpath=@ROOT@/kept-arg
+compare_admin "the argv without --build-dir" env cat @ROOT@/nobp_argv
+compare_admin "rollback the run without --build-dir" rollback --state-root @ROOT@/state bd2
+compare_admin "run, --build-dir, bwrap" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_ARGV=@ROOT@/bw_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id bd3 --skip-live-check --build-dir @ROOT@/scratch-outside --module demo/1 -- demo-1.eb
+compare_admin "the bwrap argv with --build-dir" env cat @ROOT@/bw_argv
+compare_admin "rollback the bwrap --build-dir run" rollback --state-root @ROOT@/state bd3
+compare_admin "run, --build-dir, userns" env FAKE_EB_ARGV=@ROOT@/ns_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id bd4 --skip-live-check --build-dir @ROOT@/scratch-outside --module demo/1 -- demo-1.eb
+compare_admin "the userns argv with --build-dir" env cat @ROOT@/ns_argv
+compare_admin "rollback the userns --build-dir run" rollback --state-root @ROOT@/state bd4
+compare_admin "run, --build-dir fails then resume" env FAKE_EB_FAIL=1 FAKE_EB_ARGV=@ROOT@/res_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd5 --skip-live-check --build-dir rel/resume-build --module demo/1 -- demo-1.eb
+compare_admin "resume reuses recorded --build-dir" env FAKE_EB_ARGV=@ROOT@/res_argv @CMD@ resume --state-root @ROOT@/state bd5
+compare_admin "the resume argv with --build-dir" env cat @ROOT@/res_argv
+compare_admin "rollback the resumed --build-dir run" rollback --state-root @ROOT@/state bd5
+compare_admin "run, empty --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir= --dry-run -- demo-1.eb
+compare_admin "run, --build-dir is generations" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/state/generations --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside generation" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/state/generations/r1/build --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside live software" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/software/demo --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside live modules" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/modules/all --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into software" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-sw-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into modules" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-mod-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into generation" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-gen-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir is a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/build-file --dry-run -- demo-1.eb
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.
