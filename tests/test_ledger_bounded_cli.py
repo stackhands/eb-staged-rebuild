@@ -107,6 +107,11 @@ class Case:
         with open(self.log, encoding="utf-8") as handle:
             return [json.loads(line)["stage"] for line in handle]
 
+    def events(self):
+        """The run's outbox events, in order, each with the receipt it was acknowledged with."""
+        with open(os.path.join(self.state, "runs", "run1", "outbox.json"), encoding="utf-8") as handle:
+            return json.load(handle)["events"]
+
     def sizes(self):
         with open(self.sizes_path, encoding="utf-8") as handle:
             return [int(line) for line in handle.read().split()]
@@ -126,6 +131,9 @@ class ReceiptLimitTests(unittest.TestCase):
                 self.assertEqual(again.returncode, 0, again.stdout + again.stderr[-2000:])
                 self.assertEqual(case.payload(), "v1\n")
                 self.assertEqual(case.stages(), ["started", "finished"])
+                started = case.events()[0]["receipt"]
+                self.assertEqual((started["index"], started["replayed"]), (0, True))
+                self.assertEqual(case.events()[1]["receipt"]["replayed"], False)
                 self.assertEqual(case.sizes(), [_OUTPUT_LIMIT] * 3)
 
     def test_receipt_beyond_the_output_limit_is_not_read(self):
