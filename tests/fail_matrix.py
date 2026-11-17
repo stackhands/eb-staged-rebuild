@@ -5,8 +5,9 @@ Ports the in-process failure tests of tests/test_engine.py
 test_failure_on_second_module_restores_both_modules,
 test_every_rollback_failure_restores_published_tree) to the command
 line. EB_STAGED_REBUILD_FAIL_AT=STEP makes the step fail with an I/O
-error: the Python tool's FaultInjector raises OSError(EIO) there, and the
--Dtest-ops artifact named by TOOL_BIN_TEST_OPS fails the same step. Each
+error: tests/fail_cli.py, the Python tool with that test hook, raises
+OSError(EIO) there, and the -Dtest-ops artifact named by
+TOOL_BIN_TEST_OPS fails the same step. Each
 implementation then takes its own error path. A failed run must leave
 every live tree and module file as it was, or have published all of
 them; a resume must then publish. A failed rollback must leave the run
@@ -25,12 +26,20 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import crash_matrix as cm  # noqa: E402
 
+FAIL_CLI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fail_cli.py")
+
+
+def command(impl):
+    if impl == "py":
+        return [sys.executable, FAIL_CLI]
+    return cm.command(impl)
+
 
 def call(impl, fixture, root, args, fail_at=None):
     env = cm.env_for(fixture, root, None, "")
     if fail_at:
         env["EB_STAGED_REBUILD_FAIL_AT"] = fail_at
-    return subprocess.run(cm.command(impl) + args, env=env, cwd=root, capture_output=True, text=True).returncode
+    return subprocess.run(command(impl) + args, env=env, cwd=root, capture_output=True, text=True).returncode
 
 
 def failed_run(fixture, step):

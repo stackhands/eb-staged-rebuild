@@ -230,6 +230,25 @@ class TransactionTests(unittest.TestCase):
                         )
                     self.assert_old_live(installed)
 
+    def test_an_installed_tool_ignores_the_fail_hook(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.dict(
+            os.environ, {"EB_STAGED_REBUILD_FAIL_AT": "build.start"}
+        ):
+            software, modules, state, installed, builder = _fixture(root)
+            result = run(_spec(software, modules, state, builder))
+            self.assertEqual(result.returncode, 0, result.message)
+            self.assert_new_live(installed)
+
+    def test_the_fail_hook_fails_each_step_it_names(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(
+            FaultInjector, "failing", frozenset({"build.start"})
+        ):
+            software, modules, state, installed, builder = _fixture(root)
+            with self.assertRaises(OSError) as caught:
+                run(_spec(software, modules, state, builder))
+            self.assertEqual(str(caught.exception), "[Errno 5] injected failure at build.start")
+            self.assert_old_live(installed)
+
     def test_failed_build_never_touches_live_tree(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, state, installed, _builder = _fixture(root)

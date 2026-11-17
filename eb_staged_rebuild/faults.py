@@ -1,8 +1,10 @@
 """Named steps at which a test pauses, fails or crashes a command.
 
 The engine calls ``FaultInjector.reach`` with the name of each step before it takes it. A
-test passes a ``FaultInjector`` that crashes at one step, or names steps in
-``EB_STAGED_REBUILD_FAIL_AT`` and ``EB_STAGED_REBUILD_PAUSE_AT``.
+test passes a ``FaultInjector`` that crashes at one step, sets ``FaultInjector.failing``,
+or names a step in ``EB_STAGED_REBUILD_PAUSE_AT``. Only ``tests/fail_cli.py`` reads
+``EB_STAGED_REBUILD_FAIL_AT`` into ``failing``, as only the binary's ``-Dtest-ops``
+artifact reads that variable.
 """
 
 import errno
@@ -21,6 +23,9 @@ class InjectedCrash(BaseException):
 class FaultInjector:
     """Record each named step and, when asked, raise before that step runs."""
 
+    #: Steps that fail with ``OSError(EIO)``; set by tests only.
+    failing = frozenset()
+
     def __init__(self, fail_at=None):
         self.fail_at = fail_at
         self.reached = []
@@ -28,17 +33,15 @@ class FaultInjector:
     def reach(self, step):
         """Record ``step``, and stop there if a test asked to.
 
-        A step equal to ``fail_at`` raises ``InjectedCrash``; one that ``EB_STAGED_REBUILD_FAIL_AT``
-        lists raises ``OSError(EIO)``; one that ``EB_STAGED_REBUILD_PAUSE_AT`` names pauses.
+        A step equal to ``fail_at`` raises ``InjectedCrash``; one in ``failing`` raises
+        ``OSError(EIO)``; one that ``EB_STAGED_REBUILD_PAUSE_AT`` names pauses.
         """
         self.reached.append(step)
         if self.fail_at is not None and step == self.fail_at:
             raise InjectedCrash(step)
-        # A failed operation at each named step (a comma-separated list), for
-        # tests that drive the command line: the same I/O error the Zig test
-        # artifact returns there. No filename, so str() is
-        # "[Errno 5] injected failure at STEP".
-        if step in os.environ.get("EB_STAGED_REBUILD_FAIL_AT", "").split(","):
+        # The same I/O error the Zig test artifact returns there. No filename,
+        # so str() is "[Errno 5] injected failure at STEP".
+        if step in self.failing:
             raise OSError(errno.EIO, f"injected failure at {step}")
         # A real SIGKILL cannot be injected in-process. Tests set this to
         # pause after the previous step has happened and before this one.

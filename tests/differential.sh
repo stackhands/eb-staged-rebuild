@@ -315,6 +315,9 @@ compare_admin "rollback the run on relative trees from another directory" env -C
 compare_admin "run --dry-run, userns, relative trees" run --software software --modules modules --state-root state --backend userns --dry-run -- demo-1.eb
 compare_admin "run, userns, relative trees" env FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend userns --eb @ROOT@/eb --run-id rel2 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "rollback the userns run on relative trees" rollback --state-root state rel2
+# EB_STAGED_REBUILD_FAIL_AT is a test hook that neither tool reads.
+compare_admin "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" env EB_STAGED_REBUILD_FAIL_AT=build.invoke @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with the test hook set" rollback --state-root @ROOT@/state f1
 # A rollback needs the run's tree live: a later run is rolled back first.
 compare_admin "run, an earlier run" env FAKE_EB_PAYLOAD=earlier @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, a later run" env FAKE_EB_PAYLOAD=later @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o2 --skip-live-check --module demo/1 -- demo-1.eb

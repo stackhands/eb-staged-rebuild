@@ -171,8 +171,9 @@ Five test programs run the Python tool and the binary on separate copies of one 
   (`lib/1`, `app/1`), a `--prepare` policy that counts its runs, a sealed installation (read-only trees) and
   a forced ordinary-rename fallback. A row cites "FIXTURE: run killed at STEP" and its rollback forms.
 - `tests/fail_matrix.py`: against the `-Dtest-ops` artifact, `EB_STAGED_REBUILD_FAIL_AT=STEP` makes a step
-  fail with an I/O error in both implementations (the Python fault injector raises `OSError(EIO)`), for
-  every step of a run and a rollback, with one and two modules.
+  fail with an I/O error in both implementations (`tests/fail_cli.py` runs the Python tool with that test
+  hook, and its fault injector raises `OSError(EIO)`), for every step of a run and a rollback, with one and
+  two modules.
 - `tests/signal_harness.py`: SIGTERM or SIGINT to a run while its build command runs, a command that exits
   with stray workers, and a retire while another process has the state lock.
 - `tests/test_easybuild_integration_cli.py`: the real-EasyBuild tests with `TOOL_BIN run` in place of the
@@ -189,6 +190,8 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
 | TransactionTests.test_failure_on_second_module_restores_both_modules | fail_matrix "two modules: run fails at STEP", every step of `lib/1` and `app/1` |
+| TransactionTests.test_an_installed_tool_ignores_the_fail_hook | differential "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" |
+| TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
 | TransactionTests.test_dry_run_creates_no_state_and_changes_nothing | differential "run --dry-run, installpath", "run --dry-run, auto", "run --dry-run, userns" |
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
