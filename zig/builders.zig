@@ -44,6 +44,9 @@ fn exited(pid: linux.pid_t) bool {
     return @backingInt(info.signo) != 0;
 }
 
+/// Refused: there is no /proc to confirm that the process group stopped;
+/// CannotStart: the command could not be started; ExecFailed: execve
+/// failed (`exec_errno`) or a test failed the step (`injected_at`).
 pub const RunError = error{ Refused, CannotStart, ExecFailed };
 
 /// The errno of the last execve that failed in the child (error.ExecFailed).

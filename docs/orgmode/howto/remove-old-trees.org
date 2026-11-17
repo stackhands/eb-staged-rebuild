@@ -1,0 +1,106 @@
+#+TITLE: Remove the trees a rebuild left behind
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Remove the trees a rebuild left behind
+
+Free the space of the installations that rebuilds and rollbacks replaced, once no job can still be using them.
+Each one stays beside the stable directory under a hidden name, =software/NAME/.VERSION.RUN_ID=, and =gc= removes those whose grace period is over.
+
+** Before you start
+
+- The state root, =/opt/site/.eb-staged-rebuild= for the site of [[file:rebuild.org][Rebuild an installed module]].
+- The longest time a job runs at the site, with a margin: the grace period has to cover a job that started just before a tree was replaced.
+  The default is 144 hours, which assumes jobs of up to 120 hours and adds a day; give =--grace-hours= or =EB_STAGED_REBUILD_GRACE_HOURS= the site's own value.
+
+** Steps
+
+1. See which runs left a tree:
+
+   #+begin_src bash
+   eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild
+   #+end_src
+
+   #+begin_example
+   example-1  complete  backend=bwrap  modules=1/1
+     published
+     published  all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1
+   example-2  complete  backend=bwrap  modules=1/1
+     published
+     published  all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2
+   example-3  rolled_back  backend=bwrap  modules=0/1
+     rolled back
+     restored   all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3
+   #+end_example
+
+   =example-1= and =example-2= are complete, so their hidden tree is the installation they replaced; =example-3= was rolled back, so its hidden tree is the one it had published.
+2. See what =gc= would do now:
+
+   #+begin_src bash
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --dry-run
+   #+end_src
+
+   #+begin_example
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1 (within grace (previous live tree))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (within grace (previous live tree))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (within grace (rolled-back candidate))
+   #+end_example
+
+   Every tree is younger than 144 hours, and is kept.
+   The grace period of a tree starts when its run published, or when it was rolled back.
+3. Remove the trees older than the site's grace period.
+   With =--grace-hours 0=, as here, that is every tree; look first, then remove them:
+
+   #+begin_src bash
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0 --dry-run
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0
+   #+end_src
+
+   #+begin_example
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1 (previous live tree)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (previous live tree)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (rolled-back candidate)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1 (previous live tree)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (previous live tree)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (rolled-back candidate)
+   #+end_example
+
+** Check that it worked
+
+Only the stable directory is left:
+
+#+begin_src bash
+ls -A /opt/site/software/Example
+#+end_src
+
+#+begin_example
+1.0-GCCcore-15.2.0
+#+end_example
+
+=gc= removes only hidden trees that a journal of the state root names; the journals themselves stay, and =status= still lists the runs.
+=docs/examples/site.sh= in the repository runs these steps as its case =gc=.
+
+** If it fails
+
+| Message                                                                                             | Cause                                                                                | What to do                                                                                                                             |
+|-----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | A run, a rollback or =retire= is using the state root, and =--lock-timeout= ran out. | Run =gc= when it is done, or give =--lock-timeout= more seconds.                                                                       |
+| =keep: PATH (a live module resolves inside it)=                                                     | A module file of a run still names a directory inside the hidden tree.               | Find the module file with =resolve=; the tree is removed once nothing names it.                                                        |
+| =manual: PATH (ready to remove by hand after ...)=                                                  | A retired module file named this stable directory, and its grace period is over.     | Remove it by hand once nothing uses it, as in [[file:retire.org][Retire a module file that another stack provides]]; =gc= never removes a stable directory. |
+
+Here another process holds the lock while =gc= waits 0.2 seconds for it, as =site.sh= does in its case =lock=:
+
+#+begin_src bash
+eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --dry-run --lock-timeout 0.2
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock
+#+end_example
+
+** Related
+
+- [[file:roll-back.org][Put the previous installation back]], which needs the hidden tree
+- [[file:retire.org][Retire a module file that another stack provides]]
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]], for why the old tree is kept
+- [[file:../reference/cli.org][The eb-staged-rebuild command]]

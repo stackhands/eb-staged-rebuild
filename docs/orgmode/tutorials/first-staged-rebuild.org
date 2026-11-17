@@ -1,0 +1,269 @@
+#+TITLE: Rebuild an installation and put the old one back
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Rebuild an installation and put the old one back
+
+By the end of this tutorial you will have rebuilt an installed package with eb-staged-rebuild, seen the new installation take the place of the old one under the same path, and put the old one back.
+Everything runs on one Linux machine, as an ordinary user, in a directory of your home.
+A small stand-in for EasyBuild, the one in the repository's =docs/examples/=, takes the place of the real one and of a real build, so you need no EasyBuild and no software stack.
+
+** What you will need
+
+- A Linux machine with =git=, =bash= and Python 3.11 or newer:
+
+  #+begin_src bash
+  python3 --version
+  #+end_src
+
+  #+begin_example
+  Python 3.12.3
+  #+end_example
+
+** Install eb-staged-rebuild
+
+Clone the repository and check out the commit this tutorial was checked with:
+
+#+begin_src bash
+cd
+git clone https://github.com/stackhands/eb-staged-rebuild.git
+cd eb-staged-rebuild
+git checkout c44b8ad
+#+end_src
+
+Install the Python package into a virtual environment of its own, and put that environment's commands on =PATH=:
+
+#+begin_src bash
+python3 -m venv ~/eb-staged-rebuild-venv
+~/eb-staged-rebuild-venv/bin/python -m pip install --quiet .
+export PATH=~/eb-staged-rebuild-venv/bin:$PATH
+eb-staged-rebuild --version
+#+end_src
+
+#+begin_example
+eb-staged-rebuild 1.0.0
+#+end_example
+
+** Make an installation to rebuild
+
+Make a directory for the tutorial, and put the stand-in for EasyBuild in it as =bin/eb=:
+
+#+begin_src bash
+mkdir -p ~/rebuild-tutorial/bin
+install -m 755 docs/examples/eb-standin ~/rebuild-tutorial/bin/eb
+cd ~/rebuild-tutorial
+export PATH=$PWD/bin:$PATH
+eb --version
+#+end_src
+
+#+begin_example
+eb-standin
+#+end_example
+
+Now make what an EasyBuild installation leaves behind: a software directory, =software/demo/1=, and a module file, =modules/all/demo/1.lua=, whose =root= names that directory.
+The file =PAYLOAD= stands for the installed program, and =easybuild/demo-1.eb= for the copy of the easyconfig EasyBuild keeps in each installation:
+
+#+begin_src bash
+mkdir -p software/demo/1/easybuild modules/all/demo
+printf 'payload-v1\n' > software/demo/1/PAYLOAD
+printf "name = 'demo'\nversion = '1'\n" > software/demo/1/easybuild/demo-1.eb
+cat > modules/all/demo/1.lua <<EOF
+local root = "$PWD/software/demo/1"
+conflict("demo")
+setenv("EBROOTDEMO", root)
+setenv("EBVERSIONDEMO", "1")
+EOF
+cat modules/all/demo/1.lua
+#+end_src
+
+#+begin_example
+local root = "/home/alice/rebuild-tutorial/software/demo/1"
+conflict("demo")
+setenv("EBROOTDEMO", root)
+setenv("EBVERSIONDEMO", "1")
+#+end_example
+
+Your home directory is in place of =/home/alice= on your machine.
+Tell eb-staged-rebuild, the way you would tell EasyBuild, where the software and the module files are:
+
+#+begin_src bash
+export EASYBUILD_INSTALLPATH_SOFTWARE=$PWD/software
+export EASYBUILD_INSTALLPATH_MODULES=$PWD/modules
+#+end_src
+
+** Ask what this machine supports
+
+#+begin_src bash
+eb-staged-rebuild probe --path software
+#+end_src
+
+#+begin_example
+bwrap: usable
+  version: bubblewrap 0.9.0
+user.max_user_namespaces: 192727
+user-namespace sandbox: usable
+RENAME_EXCHANGE: yes on ext4
+EasyBuild framework: unknown
+  bwrap stage-path keys: None (unknown)
+filesystem: ext4 /
+lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
+#+end_example
+
+The line that matters here is =RENAME_EXCHANGE: yes=: the filesystem of =software= can exchange two directories in one step, which is how the new installation will take the place of the old one.
+=EasyBuild framework: unknown= is the stand-in, which does not say it is EasyBuild.
+Your machine may answer =not usable= on the first lines; this tutorial does not need them.
+
+** Look before you rebuild
+
+Ask what a rebuild of =demo-1.eb= would do, without doing it:
+
+#+begin_src bash
+eb-staged-rebuild run --backend installpath --dry-run -- demo-1.eb
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: dry-run: no build, no module file written
+eb-staged-rebuild: backend: installpath
+eb-staged-rebuild: software: /home/alice/rebuild-tutorial/software
+eb-staged-rebuild: modules: /home/alice/rebuild-tutorial/modules
+eb-staged-rebuild: state root: /home/alice/rebuild-tutorial/.eb-staged-rebuild
+eb-staged-rebuild: bwrap usable: True (bubblewrap 0.9.0)
+eb-staged-rebuild: user.max_user_namespaces: 192727
+eb-staged-rebuild: renameat2 RENAME_EXCHANGE on ext4: yes
+eb-staged-rebuild: easybuild: eb-standin
+eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
+eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
+eb-staged-rebuild: command: eb --installpath-software=/home/alice/rebuild-tutorial/.eb-staged-rebuild/generations/<run-id>/software --installpath-modules=/home/alice/rebuild-tutorial/.eb-staged-rebuild/generations/<run-id>/modules demo-1.eb --rebuild
+#+end_example
+
+The last line is the command EasyBuild would get.
+It does not install into =software=: it installs into a new directory under =.eb-staged-rebuild=, the /state root/, which the tool keeps beside =software=.
+=--backend installpath= says to do it with EasyBuild's install-path options only, the one way the stand-in understands.
+
+** Rebuild
+
+Run the rebuild, and call the run =first=:
+
+#+begin_src bash
+eb-staged-rebuild run --backend installpath --run-id first -- demo-1.eb
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: module preflight: eb --dry-run demo-1.eb --rebuild
+eb-staged-rebuild: run first backend installpath generation /home/alice/rebuild-tutorial/.eb-staged-rebuild/generations/first
+eb-staged-rebuild: running eb --installpath-software=/home/alice/rebuild-tutorial/.eb-staged-rebuild/generations/first/software --installpath-modules=/home/alice/rebuild-tutorial/.eb-staged-rebuild/generations/first/modules demo-1.eb --rebuild
+eb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)
+eb-staged-rebuild: published module all/demo/1.lua
+eb-staged-rebuild: run first published 1 module(s)
+#+end_example
+
+First the tool asked EasyBuild which installations the build replaces: =demo/1=.
+Then the stand-in built into =generations/first=, writing =payload-v2= where the old installation has =payload-v1=, and the tool exchanged that new tree with =software/demo/1=.
+The installed program is now the new one:
+
+#+begin_src bash
+cat software/demo/1/PAYLOAD
+#+end_src
+
+#+begin_example
+payload-v2
+#+end_example
+
+The old one is still there, beside it, under a hidden name made from the version and the run:
+
+#+begin_src bash
+ls -A software/demo
+cat software/demo/.1.first/PAYLOAD
+#+end_src
+
+#+begin_example
+.1.first
+1
+payload-v1
+#+end_example
+
+The module file names the same directory as before, so whatever loads =demo/1= finds the new installation at the old path:
+
+#+begin_src bash
+cat modules/all/demo/1.lua
+#+end_src
+
+#+begin_example
+local root = "/home/alice/rebuild-tutorial/software/demo/1"
+conflict("demo")
+setenv("EBROOTDEMO", root)
+setenv("EBVERSIONDEMO", "1")
+#+end_example
+
+The tool keeps a journal of each run in the state root.
+Ask it about the runs:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root .eb-staged-rebuild
+#+end_src
+
+#+begin_example
+first  complete  backend=installpath  modules=1/1
+  published
+  published  all/demo/1.lua  live=/home/alice/rebuild-tutorial/software/demo/1 retired=/home/alice/rebuild-tutorial/software/demo/.1.first
+#+end_example
+
+The run is =complete=: its one module is published, the =live= directory holds the new installation and the =retired= one holds the old.
+
+** Put the old one back
+
+Roll the run back:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root .eb-staged-rebuild first
+cat software/demo/1/PAYLOAD
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: restored all/demo/1.lua
+eb-staged-rebuild: run first rolled back; replacement kept at its retired path
+payload-v1
+#+end_example
+
+The two directories were exchanged again, and the module file was written back as it was.
+The new installation is now the one at the hidden name, and the journal says so:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root .eb-staged-rebuild
+#+end_src
+
+#+begin_example
+first  rolled_back  backend=installpath  modules=0/1
+  rolled back
+  restored   all/demo/1.lua  live=/home/alice/rebuild-tutorial/software/demo/1 retired=/home/alice/rebuild-tutorial/software/demo/.1.first
+#+end_example
+
+** Clean up
+
+Remove the tutorial's directory, the checkout and the virtual environment:
+
+#+begin_src bash
+cd
+rm -rf ~/rebuild-tutorial ~/eb-staged-rebuild ~/eb-staged-rebuild-venv
+#+end_src
+
+** What just happened
+
+1. =run= asked EasyBuild, with =eb --dry-run=, which installations the build replaces, and had EasyBuild install into a /generation/, =.eb-staged-rebuild/generations/first=, instead of into =software/demo/1=.
+2. With the build finished, it moved the new tree next to the old one and exchanged the two with a single =renameat2(RENAME_EXCHANGE)= call, then replaced the module file in its own directory.
+   At every moment =software/demo/1= named a complete installation: the old one until the exchange, the new one after it.
+3. The old tree stayed at =software/demo/.1.first=, and =rollback= exchanged the two again.
+4. Each step was written to the run's journal, which is what =status= read.
+
+[[file:../explanation/staging.org][Why a rebuild is staged and swapped in]] gives the reasons for each step.
+
+** Next steps
+
+- [[file:../howto/rebuild.org][Rebuild an installed module]] with EasyBuild, on a site's software tree.
+- [[file:../howto/recover.org][Finish a run that failed or stopped]].
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]].
+- [[file:../reference/cli.org][The eb-staged-rebuild command]], for every command and option.
+
+=docs/examples/tutorial.sh= in the repository runs the commands of this tutorial from "Make an installation to rebuild" on, and stops at the first one that does not do what the tutorial says.
+
+Checked with Python 3.12.3 and eb-staged-rebuild at commit c44b8ad on 2026-11-17.

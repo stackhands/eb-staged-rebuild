@@ -16,18 +16,25 @@ GENERATION_POINTER_SCHEMAS = (1, 3)
 
 
 def journal_path(state_root, run_id):
+    """Return ``STATE_ROOT/runs/RUN_ID/journal.json``."""
     return os.path.join(os.fspath(state_root), "runs", run_id, "journal.json")
 
 
 def run_dir(state_root, run_id):
+    """Return ``STATE_ROOT/runs/RUN_ID``, the directory of a run's journal and outbox."""
     return os.path.join(os.fspath(state_root), "runs", run_id)
 
 
 def generation_root(state_root, run_id):
+    """Return ``STATE_ROOT/generations/RUN_ID``, where a run's build installs."""
     return os.path.join(os.fspath(state_root), "generations", run_id)
 
 
 def save_journal(path, data, faults, step):
+    """Write a journal atomically, with its schema and publication set.
+
+    A journal that does not record a directory swap needs intervention and is not written.
+    """
     if data.get("kind") == "retire":
         data["schema"] = SCHEMA
     elif data.get("ledger_policy"):
@@ -59,6 +66,11 @@ def _require_directory_swap(data):
 
 
 def load_journal(path):
+    """Read a journal.
+
+    A path that is not a regular file is refused. A journal that cannot be read, or whose
+    schema this program does not apply, needs intervention.
+    """
     if not os.path.isfile(path) or os.path.islink(path):
         raise Refused(f"no journal at {path}")
     try:
@@ -84,6 +96,10 @@ def load_journal(path):
 
 
 def list_journals(state_root):
+    """Return the journals under ``STATE_ROOT/runs``, in name order.
+
+    An entry without a regular ``journal.json`` is left out.
+    """
     runs = os.path.join(os.fspath(state_root), "runs")
     found = []
     if not os.path.isdir(runs):

@@ -20,6 +20,11 @@ def _sha256(path):
 
 
 def snapshot(path):
+    """Return a record of the tree at ``path``.
+
+    The record has each entry's relative path, kind, inode and size, and a symbolic link's
+    target or a file's SHA-256. A missing path, a link or another kind is recorded as such.
+    """
     path = os.fspath(path)
     kind = lstat_kind(path)
     if kind == "missing":
@@ -74,10 +79,12 @@ def snapshot(path):
 
 
 def same_snapshot(before, after):
+    """Return whether two snapshots are equal."""
     return before == after
 
 
 def empty_real_dir(path):
+    """Return whether ``path`` is a real directory with no entries."""
     if lstat_kind(path) != "dir":
         return False
     return not os.listdir(path)

@@ -30,12 +30,20 @@ const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
+/// The domain a head file must name.
 pub const DOMAIN = "eb-stack-ledger-v1";
+/// The schema a backfill manifest must name.
 pub const MANIFEST_SCHEMA = "eb-staged-rebuild/observed-backfill/1";
+/// The schema of the files `project` writes.
 pub const HISTORY_SCHEMA = "eb-staged-rebuild/ledger-history/1";
+/// The `build.kind` of a finding that `backfill` appends.
 pub const BACKFILL_KIND = "observed-backfill";
+/// The `build.tool` of a finding that `backfill` appends.
 pub const TOOL = "eb-staged-rebuild/ledger-maintenance";
+/// Seconds an eb-stack call may take when --timeout is not given.
 pub const DEFAULT_TIMEOUT: f64 = 120;
+/// The exit status when eb-stack acknowledged nothing: the same command can
+/// be run again.
 pub const PENDING_EXIT: u8 = 75;
 const prog = "ledger-maintenance";
 
@@ -71,6 +79,7 @@ fn refuse(comptime f: []const u8, args: anytype) Fail {
     return fail(error.Refused, f, args);
 }
 
+/// The message of the last refusal, for a caller that got the error.
 pub fn lastMessage() []const u8 {
     return why.items;
 }
@@ -104,22 +113,26 @@ pub const V = union(enum) {
     arr: []const V,
     obj: []const Mem,
 
+    /// The value of `key` in an object, or null.
     pub fn get(v: V, key: []const u8) ?V {
         if (v != .obj) return null;
         for (v.obj) |m| if (std.mem.eql(u8, m.key, key)) return m.val;
         return null;
     }
 
+    /// Whether an object has `key`.
     pub fn has(v: V, key: []const u8) bool {
         return v.get(key) != null;
     }
 
+    /// The text of a string value, or null for any other value.
     pub fn str_(v: ?V) ?[]const u8 {
         const x = v orelse return null;
         return if (x == .str) x.str else null;
     }
 };
 
+/// One member of an object, in the order of the text.
 pub const Mem = struct { key: []const u8, val: V };
 
 const Parser = struct {
@@ -349,6 +362,8 @@ fn utf8(a: Allocator, data: []const u8, comptime f: []const u8, args: anytype) F
 
 // ---- JSON writers ------------------------------------------------------------
 
+/// How a value is written: the sort_keys, ensure_ascii, indent and
+/// separators arguments of Python's json.dumps.
 pub const Style = struct {
     sort: bool,
     ascii: bool,
@@ -396,6 +411,8 @@ fn newline(out: *std.ArrayList(u8), a: Allocator, st: Style, level: usize) Alloc
     try out.appendNTimes(a, ' ', st.indent.? * level);
 }
 
+/// Append `v` to `out` as Python's json.dumps writes it with `st`, at
+/// indent level `level`.
 pub fn write(out: *std.ArrayList(u8), a: Allocator, v: V, st: Style, level: usize) Allocator.Error!void {
     const item_sep: []const u8 = if (st.indent != null or st.compact) "," else ", ";
     const key_sep: []const u8 = if (st.compact and st.indent == null) ":" else ": ";
@@ -433,6 +450,7 @@ pub fn write(out: *std.ArrayList(u8), a: Allocator, v: V, st: Style, level: usiz
     }
 }
 
+/// `v` as Python's json.dumps writes it with `st`.
 pub fn dump(a: Allocator, v: V, st: Style) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     try write(&out, a, v, st, 0);
@@ -850,9 +868,11 @@ fn listdir(a: Allocator, dir: []const u8) Fail![]const []const u8 {
 
 // ---- environment and eb-stack ----------------------------------------------------
 
+/// The process environment, read in place.
 pub const Env = struct {
     envp: proc.Envp,
 
+    /// The value of the variable `name`, or null when it is not set.
     pub fn get(e: Env, name: []const u8) ?[]const u8 {
         var i: usize = 0;
         while (e.envp[i]) |p| : (i += 1) {
@@ -988,6 +1008,8 @@ fn hasSpace(s: []const u8) bool {
 
 // ---- log and head readers ------------------------------------------------------
 
+/// A head file eb-stack signed: its size, root, time and public key, and
+/// the whole value.
 pub const Head = struct {
     size: i64,
     root: []const u8,
@@ -1032,6 +1054,8 @@ fn pyRepr(a: Allocator, v: V) []const u8 {
     };
 }
 
+/// One record of the log: its value and index, and the fields the readers
+/// use.
 pub const Record = struct {
     v: V,
     index: usize,
@@ -1161,6 +1185,7 @@ const Verifier = struct {
     }
 };
 
+/// A log and its head, read once and verified by eb-stack.
 pub const VerifiedLog = struct { head: Head, records: []const Record };
 
 /// Read `log` and `head` once and have eb-stack verify those bytes. The head
@@ -1219,6 +1244,7 @@ fn only(a: Allocator, mapping: ?V, allowed: []const []const u8, what: []const u8
     return m;
 }
 
+/// A backfill manifest and the SHA-256 of its bytes.
 pub const Manifest = struct { v: V, digest: []const u8 };
 
 /// An observed-history manifest, refused unless its bytes hash to
@@ -1402,6 +1428,9 @@ fn checkReceipt(a: Allocator, receipt: V, event_id: []const u8) Fail!V {
     return receipt;
 }
 
+/// backfill: append a finding for each observation of a manifest pinned by
+/// its SHA-256, through `eb-stack ledger append`, and return the result the
+/// command prints.
 pub fn backfill(a: Allocator, env: Env, eb_stack: []const u8, log: []const u8, key: []const u8, head: []const u8, public_key: []const u8, manifest_path: []const u8, manifest_sha256: []const u8, timeout: f64, faults: Faults, now_s: i64) Fail!V {
     _ = try executable(a, eb_stack);
     _ = try newOrFile(a, log, "ledger");
@@ -1480,6 +1509,7 @@ pub fn backfill(a: Allocator, env: Env, eb_stack: []const u8, log: []const u8, k
 pub const Faults = struct {
     env: Env,
 
+    /// Pause at `step` when EB_STAGED_REBUILD_PAUSE_AT names it.
     pub fn reach(f: Faults, step: []const u8) Fail!void {
         const token = f.env.get("EB_STAGED_REBUILD_PAUSE_AT") orelse return;
         if (token.len == 0 or !std.mem.eql(u8, token, step)) return;
@@ -1692,6 +1722,8 @@ pub fn verifyAnchors(a: Allocator, env: Env, eb_stack: []const u8, log: []const 
 
 // ---- package history projections ---------------------------------------------------
 
+/// package_of: the package of a module name, the part before the first
+/// slash.
 pub fn packageOf(module: []const u8) []const u8 {
     const i = std.mem.findScalar(u8, module, '/') orelse return module;
     return module[0..i];
@@ -2257,6 +2289,8 @@ fn val(opts: []const Opt, name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// ledger-maintenance: run the command the arguments name and print its
+/// result. Returns the exit status.
 pub fn main(a: Allocator, args: []const []const u8, env: Env) u8 {
     why_alloc = a;
     if (args.len == 0) usageError("the following arguments are required: command", .{});

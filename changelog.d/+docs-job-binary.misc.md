@@ -1,0 +1,1 @@
+The docs job of the tests workflow runs `docs/examples/site.sh` with the release binary, whose `build-events` and `ledger-maintenance` commands the ledger guides use, and the tutorial with the Python package.

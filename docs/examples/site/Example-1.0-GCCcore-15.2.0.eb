@@ -1,0 +1,16 @@
+easyblock = 'Binary'
+
+name = 'Example'
+version = '1.0'
+
+homepage = 'https://example.org/example'
+description = "A placeholder package: one shell script."
+
+toolchain = {'name': 'GCCcore', 'version': '15.2.0'}
+
+sources = ['example-1.0.sh']
+checksums = ['8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4']
+
+sanity_check_paths = {'files': ['example-1.0.sh'], 'dirs': []}
+
+moduleclass = 'tools'

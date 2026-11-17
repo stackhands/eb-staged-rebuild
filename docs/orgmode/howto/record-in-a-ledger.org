@@ -1,0 +1,205 @@
+#+TITLE: Record each rebuild in a signed ledger
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Record each rebuild in a signed ledger
+
+Have every run append its publication to an eb-stack ledger, a log of signed records that says which module file changed, when and by whom, and that a rollback corrects.
+The run records =started= before it exchanges the directories and =finished= after; with the ledger required, which is the default, a run whose =started= record was not acknowledged does not exchange anything.
+
+** Before you start
+
+- eb-stack 0.7.0, the release the tests run against, from [[https://github.com/stackhands/eb-stack/releases/tag/v0.7.0][its release page]], here at =/opt/site/bin/eb-stack=.
+- =openssl=, for the signing key.
+- Directories for the log, the key and the signed head, here under =/opt/site=.
+  The key must not be inside the log's directory.
+
+** Steps
+
+1. Check the eb-stack version:
+
+   #+begin_src bash
+   /opt/site/bin/eb-stack --version
+   #+end_src
+
+   #+begin_example
+   eb-stack 0.7.0
+   #+end_example
+
+2. Make an Ed25519 key that only you can read, and its public half:
+
+   #+begin_src bash
+   openssl genpkey -algorithm ed25519 -out /opt/site/keys/ledger.pem
+   chmod 400 /opt/site/keys/ledger.pem
+   openssl pkey -in /opt/site/keys/ledger.pem -pubout -out /opt/site/keys/ledger.pub
+   #+end_src
+
+3. Write the ledger configuration, =/opt/site/etc/ledger.json=:
+
+   #+begin_src bash
+   cat /opt/site/etc/ledger.json
+   #+end_src
+
+   #+begin_example
+   {
+     "eb_stack": "/opt/site/bin/eb-stack",
+     "log": "/opt/site/ledger/stack.jsonl",
+     "key": "/opt/site/keys/ledger.pem",
+     "public_key": "/opt/site/keys/ledger.pub",
+     "head": "/opt/site/ledger-heads/head.json",
+     "actor": "alice",
+     "stack": "2026.06",
+     "target": "x86_64/amd/zen4"
+   }
+   #+end_example
+
+   =actor=, =stack= and =target= go into every record; [[file:../reference/configuration.org][Configuration files]] lists every key.
+4. Run the rebuild with =--ledger-config=:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-4 \
+     --ledger-config /opt/site/etc/ledger.json -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+   eb-staged-rebuild: run example-4 backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-4
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-4 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
+   == Temporary log file in case of crash /tmp/eb-hmoub8cm/easybuild-ku9bcc_h.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == Temporary log file(s) /tmp/eb-hmoub8cm/easybuild-ku9bcc_h.log* have been removed.
+   == Temporary directory /tmp/eb-hmoub8cm has been removed.
+   == Building/installing in bwrap namespace
+     >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-4/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
+     >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-4/bwrap_info.json
+     >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-4/modules']
+   == Temporary log file in case of crash /tmp/eb-wdl0q5ug/easybuild-fq919go_.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+   == building and installing Example/1.0-GCCcore-15.2.0...
+     >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+   == fetching files and verifying checksums...
+     >> sources:
+     >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+   == ... (took < 1 sec)
+   == creating build dir, resetting environment...
+     >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+   == ... (took < 1 sec)
+   == unpacking...
+   == ... (took < 1 sec)
+   == patching...
+   == ... (took < 1 sec)
+   == preparing...
+     >> loading toolchain module: GCCcore/15.2.0
+     >> defining build environment for GCCcore/15.2.0 toolchain
+   == ... (took < 1 sec)
+   == configuring...
+   == ... (took < 1 sec)
+   == building...
+   == ... (took < 1 sec)
+   == testing...
+   == ... (took < 1 sec)
+   == installing...
+   == ... (took 12 secs)
+   == taking care of extensions...
+   == ... (took < 1 sec)
+   == restore after iterating...
+   == ... (took < 1 sec)
+   == postprocessing...
+   == ... (took < 1 sec)
+   == sanity checking...
+     >> file 'example-1.0.sh' found: OK
+     >> loading modules: Example/1.0-GCCcore-15.2.0...
+   == ... (took < 1 sec)
+   == cleaning up...
+   == ... (took < 1 sec)
+   == creating module...
+     >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-4/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   == ... (took < 1 sec)
+   == permissions...
+   == ... (took < 1 sec)
+   == packaging...
+   == ... (took < 1 sec)
+   == COMPLETED: Installation ended successfully (took 12 secs)
+   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.015019.log
+   == Build succeeded for 1 out of 1 (total: 12 secs)
+   == Summary:
+      * [SUCCESS] Example/1.0-GCCcore-15.2.0
+   == Temporary log file(s) /tmp/eb-wdl0q5ug/easybuild-fq919go_.log* have been removed.
+   == Temporary directory /tmp/eb-wdl0q5ug has been removed.
+   eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+   eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-4 published 1 module(s)
+   #+end_example
+
+** Check that it worked
+
+The run appended a =started= and a =finished= record, after the =finding= that [[file:backfill.org][Record software installed before the ledger]] added for this site:
+
+#+begin_src bash
+/opt/site/bin/eb-stack ledger show --log /opt/site/ledger/stack.jsonl --package Example
+#+end_src
+
+#+begin_example
+index	ts	action	target	module	actor
+2	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+1	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+0	2026-11-17T01:50:04Z	finding	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+3 of 3 records
+#+end_example
+
+The signed head, which the run wrote after each record, covers the =finished= record:
+
+#+begin_src bash
+/opt/site/bin/eb-stack ledger verify --log /opt/site/ledger/stack.jsonl --public-key /opt/site/keys/ledger.pub \
+  --record 2 --head /opt/site/ledger-heads/head.json
+#+end_src
+
+#+begin_example
+record 2 id 3a09b87620339f9b79f7ddbd86219b93155116af65f905c1f9f38b124b700e29 is in the head of size 3 root d89955534bbfb572d6b209b59bd327802cd379b280cf98667c5beb509582ac64
+tile log size 3 root d89955534bbfb572d6b209b59bd327802cd379b280cf98667c5beb509582ac64 extends the head and holds the same lines
+#+end_example
+
+A rollback of the run appends a =correction= of the =finished= record, again as =started= and =finished=:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild example-4
+/opt/site/bin/eb-stack ledger show --log /opt/site/ledger/stack.jsonl --package Example
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: restored all/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run example-4 rolled back; replacement kept at its retired path
+index	ts	action	target	module	actor
+4	2026-11-17T01:50:19Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+3	2026-11-17T01:50:19Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+2	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+1	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+0	2026-11-17T01:50:04Z	finding	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+5 of 5 records
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its cases =ledger-setup=, =ledger-run= and =ledger-rollback=.
+
+** If it fails
+
+| Message                                                                                                                                                 | Cause                                                                                          | What to do                                                                                                                    |
+|---------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: ledger config KEY must be an absolute path=                                                                                         | =eb_stack=, =log=, =key=, =head= or =public_key= is missing or relative.                       | Give the absolute path.                                                                                                       |
+| =eb-staged-rebuild: the live directory was not swapped: N ledger event(s) not acknowledged (...); run resume=, exit status 75                           | eb-stack did not acknowledge the =started= record; the error is in the parentheses.            | Fix the cause, then =resume= the run: it delivers the same record, and exchanges the directories only after.                  |
+| =eb-staged-rebuild: run RUN_ID published 1 module(s); N ledger event(s) not acknowledged (...); run resume=, exit status 75                             | The run published, but the =finished= record was not acknowledged.                             | Fix the cause, then =resume= the run to deliver it.                                                                           |
+| =eb-staged-rebuild: run RUN_ID was not rolled back: N ledger event(s) not acknowledged (...); run resume=, exit status 75                               | eb-stack did not acknowledge the =started= record of the correction, and nothing was put back. | Fix the cause, then run =rollback= again: it delivers the record first. =resume= delivers it as well, but does not roll back. |
+| =eb-staged-rebuild: run RUN_ID rolled back; replacement kept at its retired path; N ledger event(s) not acknowledged (...); run resume=, exit status 75 | The rollback is done, but records of the correction were not acknowledged.                     | Fix the cause, then run =rollback= again to deliver it: =resume= refuses a run that was rolled back.                          |
+| =eb-staged-rebuild: ledger policy changed; restore the recorded configuration before resuming=                                                          | The configuration file differs from the one the run recorded.                                  | Put the file back as it was for the run; a run keeps one ledger from start to end.                                            |
+
+With ="required": false= in the configuration, a run whose =started= record was not acknowledged exchanges the directories anyway, and the record waits in the run's outbox for =resume=.
+
+** Related
+
+- [[file:build-events.org][Record any build command in the ledger]]
+- [[file:anchor.org][Anchor the ledger once a day]]
+- [[file:package-history.org][Write the history of each package]]
+- [[file:../explanation/ledger.org][What the ledger records]]
+- [[file:../reference/configuration.org][Configuration files]]

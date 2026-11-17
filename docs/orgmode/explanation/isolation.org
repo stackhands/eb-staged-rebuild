@@ -1,0 +1,76 @@
+#+TITLE: How a build is kept off the live tree
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* How a build is kept off the live tree
+
+How does eb-staged-rebuild make EasyBuild install into the run's generation, when everything EasyBuild knows about the site points it at the live tree?
+
+** The problem
+
+EasyBuild installs where its configuration says, and a site's configuration names the live tree: in =EASYBUILD_INSTALLPATH= and its relatives, in a configuration file, or in options such as =--prefix= that a build list passes on.
+Some options do worse than point there: =--remove-ghost-install-dirs= deletes an earlier installation directory that the new module file no longer names.
+And EasyBuild runs the easyconfig's commands and the site's hooks, which can write wherever the account may.
+A rebuild that lets any of these reach =software/NAME/VERSION= while jobs use it is the in-place rebuild the tool is there to avoid.
+
+** How eb-staged-rebuild handles it
+
+*** The command it runs
+
+The arguments after =--= reach EasyBuild without the options that choose where it installs or that remove an earlier installation:
+
+| Removed                                                                                                                 | Why                                                        |
+|-------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------|
+| =--installpath=, =--installpath-software=, =--installpath-modules=, =--prefix=, =--subdir-software=, =--subdir-modules= | They choose where the installation and its module file go. |
+| =--bwrap=, =--disable-bwrap=, =--bwrap-installpath=, =--bwrap-options=                                                  | The backend sets these itself.                             |
+| =--remove-ghost-install-dirs=                                                                                           | It deletes the directory a module file no longer names.    |
+
+=--rebuild= is added unless =--rebuild=, =--force= or =-f= is there already.
+In EasyBuild's environment, =EASYBUILD_INSTALLPATH=, =EASYBUILD_PREFIX= and =EASYBUILD_REMOVE_GHOST_INSTALL_DIRS= are removed, and =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= are set by the backend; options on the command line also win over a configuration file.
+[[py:eb_staged_rebuild.builders.filter_eb_args]] and [[zig:eb-staged-rebuild.engine.filterEbArgs]] make the cut.
+
+Before it takes the lock, the run asks EasyBuild what the build would install, with =eb --dry-run= and the same arguments against the live tree.
+Each module the dry run lists has to be installed already, as a real directory under =--software=; a module that is installed and only a dependency, marked =[x]=, is left alone.
+That refuses a =--robot= run before anything is built when the dry run lists a dependency that is not installed, marked =[ ]=.
+
+*** The backends
+
+| Backend       | EasyBuild installs to                                                                      | What protects the live tree                                                                  |
+|---------------+--------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------|
+| =bwrap=       | the stable path, inside EasyBuild's bubblewrap sandbox, which binds the generation over it | the bind mount: what EasyBuild writes at the stable path lands in the generation             |
+| =userns=      | the generation, with =--installpath-software= and =--installpath-modules=                  | a user and mount namespace in which the live software and module trees are mounted read-only |
+| =installpath= | the generation, with the same two options                                                  | nothing but the options                                                                      |
+
+=--backend auto=, the default, takes =bwrap= when =bwrap --dev-bind / / true= runs, then =userns= when its namespace can be made and a test write to a read-only mount fails with =EROFS=, and otherwise =installpath=, with the line =neither bubblewrap nor the user-namespace sandbox is usable; using the unsandboxed install-path fallback=.
+=--backend bwrap= and =--backend userns= refuse to run when their probe fails, for a site that does not accept the fallback.
+=probe= runs the same tests, and [[file:../howto/install.org][Install eb-staged-rebuild]] shows its report.
+
+With =bwrap=, EasyBuild records where it put the installation in =bwrap_info.json=.
+EasyBuild 5.4 writes the paths there; 5.3.0 and 5.3.1 do not, and for them the tool uses the layout those versions build; for any other EasyBuild that leaves the paths out, it refuses to publish.
+It also refuses a build that bubblewrap made with an overlay filesystem, whose directory holds only what changed.
+The paths it reads must be inside the run's generation.
+
+** What was considered and turned down
+
+- /Trusting the site's configuration./
+  One stray =--prefix= in a build list would send a rebuild at the live tree.
+- /A read-only bind of the live trees for every backend./
+  It needs a user namespace, which not every cluster allows; the =userns= backend does it where they are allowed.
+- /Refusing to run without a sandbox./
+  A host without bubblewrap and without user namespaces could not rebuild at all; such a site can pass =--backend bwrap= or =--backend userns= to get that refusal.
+
+** Limits
+
+- With =installpath=, nothing keeps a hook or a build command off the live tree.
+- With =bwrap=, only the installation being rebuilt is redirected; the rest of the live tree is as writable as outside the sandbox.
+- The =userns= backend runs EasyBuild as root inside its namespace, and EasyBuild refuses to run as root unless =EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES= is set; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
+- With =installpath= and =userns=, the build finds the dependencies in the live tree only if =MODULEPATH= already names its =modules/all=: the tool adds the module root, one level up, where Lmod finds no module under its usual name.
+- With =--robot=, EasyBuild's dry run lists the dependencies of installed modules too, such as the build dependencies of an installed toolchain, and a run is refused for one of those that is not installed, though =eb --robot= would not build it; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
+- The tests run EasyBuild 5.4.2; pin that version, or a later one the integration test has run.
+
+** Further reading
+
+- [[file:staging.org][Why a rebuild is staged and swapped in]] covers what happens to the generation.
+- [[file:../howto/rebuild.org][Rebuild an installed module]] shows a dry run, a refused =--robot= and the =userns= refusal.
+- [[file:../reference/cli.org][The eb-staged-rebuild command]] lists the options of =run=.
+- [[https://github.com/stackhands/eb-staged-rebuild/blob/main/DESIGN.md][DESIGN.md]] is the maintainers' record of the design and of what was rejected.

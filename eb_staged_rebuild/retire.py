@@ -29,10 +29,12 @@ KIND = "retire"
 
 
 def is_retire(journal):
+    """Return whether a journal is a retire journal."""
     return journal.get("kind") == KIND
 
 
 def retired_dir(state_root):
+    """Return ``STATE_ROOT/retired``, where ``retire`` moves module files."""
     return os.path.join(abspath(state_root), "retired")
 
 

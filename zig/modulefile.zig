@@ -9,7 +9,10 @@ const oom = @import("oom.zig").oom;
 const common = @import("zig_common");
 const pytext = common.pytext;
 
+/// The language of a module file.
 pub const Syntax = enum { lua, tcl };
+/// The root assignment parseRoot found: the language, and the install
+/// directory it names.
 pub const Root = struct { syntax: Syntax, path: []const u8 };
 
 fn wsAt(s: []const u8, i: usize) ?usize {
@@ -216,6 +219,7 @@ pub fn relpath(a: Allocator, path: []const u8, start: []const u8) []const u8 {
     return std.mem.join(a, "/", out.items) catch ".";
 }
 
+/// Refused, with the reason in the caller's `why`, or out of memory.
 pub const RewriteError = error{Refused} || Allocator.Error;
 
 fn pathChar(c: u8) bool {

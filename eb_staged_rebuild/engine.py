@@ -66,6 +66,10 @@ _MODULE_LINE = re.compile(r"^\s*\*\s+\[([ xFR-])\]\s+.*\(module:\s*(.+)\)\s*$")
 
 @dataclass
 class Spec:
+    """What a run is asked to do.
+
+    The options of ``run``, and the builder, fault injector and clock that a test replaces.
+    """
     software: str
     modules: str
     state_root: str
@@ -89,6 +93,10 @@ class Spec:
 
 @dataclass
 class Result:
+    """The outcome of ``run``, ``resume`` or ``rollback``.
+
+    Its exit status, the run, the run's state, a message, and the build command.
+    """
     returncode: int
     run_id: str = None
     state: str = ""
@@ -1376,6 +1384,11 @@ def _dry_run(spec, probes, faults):
 
 
 def describe_module(path):
+    """Return what a module file names, as ``resolve`` prints it.
+
+    That is its kind, syntax and root, the kind of the root, and whether the root holds a
+    complete installation.
+    """
     kind = lstat_kind(path)
     if kind != "file":
         return {"path": os.fspath(path), "kind": kind, "complete": False, "root": None}

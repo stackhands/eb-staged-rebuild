@@ -145,6 +145,11 @@ def _eb_args(raw):
 
 
 def main(argv=None):
+    """Run the ``eb-staged-rebuild`` command line and return its exit status.
+
+    A refusal, an intervention or an ``OSError`` is printed as ``eb-staged-rebuild: MESSAGE``
+    and gives exit status 2; otherwise the status is the command's.
+    """
     parser = _parser()
     args = parser.parse_args(argv)
     try:

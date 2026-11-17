@@ -1,0 +1,23 @@
+// The states of a run's journal, and the commands that move it on.
+digraph states {
+    graph [bgcolor="white", rankdir=TB, nodesep=0.6, ranksep=0.45, fontname="Helvetica"];
+    node [shape=box, style="rounded,filled", fillcolor="#f4f4f4", color="#555555", fontname="Helvetica", fontsize=11];
+    edge [color="#555555", fontname="Helvetica", fontsize=10];
+
+    created [label="created\nthe journal and the record of the live tree exist"];
+    building [label="building\nEasyBuild installs into the generation"];
+    failed [label="failed\nthe build failed, its tree is incomplete,\nor the live tree changed; nothing live changed"];
+    built [label="built\nthe module files are prepared;\nnothing is published yet"];
+    publishing [label="publishing\nthe trees and module files are being exchanged"];
+    complete [label="complete\nevery module is published"];
+    rolled_back [label="rolled_back\nthe previous trees and module files are back"];
+
+    created -> building [label=" run"];
+    building -> failed;
+    building -> built;
+    failed -> building [label=" resume"];
+    built -> publishing [label=" run, or resume"];
+    publishing -> built [label=" a step failed:\n the old trees are back"];
+    publishing -> complete;
+    complete -> rolled_back [label=" rollback"];
+}

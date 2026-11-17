@@ -1,9 +1,10 @@
-//! run, resume and rollback of a run journal, without a ledger: build into
-//! a generation under the state root, check the live tree did not change,
-//! plan each module, optionally run a publication-preparation program, then
-//! exchange each staged tree with its live directory and write the module
-//! files. Every step is journaled before it happens; a failure while
-//! publishing puts the old live trees back.
+//! run, resume and rollback of a run journal: build into a generation
+//! under the state root, check the live tree did not change, plan each
+//! module, optionally run a publication-preparation program, then exchange
+//! each staged tree with its live directory and write the module files;
+//! with a ledger configuration, publish.zig records each stage. Every step
+//! is journaled before it happens; a failure while publishing puts the old
+//! live trees back.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -40,6 +41,7 @@ fn log(comptime f: []const u8, args: anytype) void {
     cli.out("eb-staged-rebuild: " ++ f ++ "\n", args);
 }
 
+/// A command's outcome: its exit status and, for a failure, its message.
 pub const Result = struct { code: u8, message: []const u8 = "" };
 
 /// One run in progress: its journal, kept as the Python tool keeps it.
@@ -73,10 +75,12 @@ pub const R = struct {
         return r.fail(error.NeedsIntervention, f, args);
     }
 
+    /// The journal's value of `k`, or null.
     pub fn get(r: *R, k: []const u8) ?Py {
         return pyfmt.get(r.journal, k);
     }
 
+    /// Set `k` in the journal held in memory; saving it is a step of its own.
     pub fn set(r: *R, k: []const u8, v: Py) void {
         r.journal = dictSet(r.a, r.journal, k, v);
     }
@@ -1245,6 +1249,8 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
     };
 }
 
+/// resume: finish or undo the run the journal names, as its state says,
+/// under the state root's lock.
 pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) E!Result {
     const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
     const st = fsx.statAt(fsx.cwd, path, false) catch {

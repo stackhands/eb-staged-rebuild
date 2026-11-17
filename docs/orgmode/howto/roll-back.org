@@ -1,0 +1,89 @@
+#+TITLE: Put the previous installation back
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Put the previous installation back
+
+Undo a rebuild that was published: put the installation it replaced back under the stable path, and the module file back as it was.
+
+** Before you start
+
+- The run's name and its state root; =status --state-root DIR= lists the runs.
+- A run that is =complete=.
+  A run that failed published nothing, and a run that stopped part way is finished with =resume= first, as in [[file:recover.org][Finish a run that failed or stopped]].
+- The previous tree still on disk, at =software/NAME/.VERSION.RUN_ID=: =gc= removes it once the grace period is over.
+
+** Steps
+
+1. Roll the run back:
+
+   #+begin_src bash
+   eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild example-3
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: restored all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-3 rolled back; replacement kept at its retired path
+   #+end_example
+
+   The two trees were exchanged again, and the module file got its bytes from before the run back.
+
+** Check that it worked
+
+The run is =rolled_back= and its module =restored=:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-3
+#+end_src
+
+#+begin_example
+example-3  rolled_back  backend=bwrap  modules=0/1
+  rolled back
+  restored   all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3
+#+end_example
+
+The rebuilt tree is now the hidden one of this run, and stays there for =gc=:
+
+#+begin_src bash
+ls -A /opt/site/software/Example
+#+end_src
+
+#+begin_example
+.1.0-GCCcore-15.2.0.example-1
+.1.0-GCCcore-15.2.0.example-2
+.1.0-GCCcore-15.2.0.example-3
+1.0-GCCcore-15.2.0
+#+end_example
+
+The other hidden trees are the ones the runs =example-1= and =example-2= replaced.
+A second rollback changes nothing:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild example-3
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: run example-3 is already rolled back
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =rollback=.
+
+** If it fails
+
+| Message                                                                     | Cause                                                                                        | What to do                                                                              |
+|-----------------------------------------------------------------------------+----------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: run RUN_ID is STATE; only a complete run can roll back= | The run published nothing, or has not finished.                                              | A failed run changed nothing; finish one that stopped with =resume=, then roll it back. |
+| =eb-staged-rebuild: run RUN_ID was not rolled back: ...=, exit 75           | The run records its publications in a ledger that did not acknowledge the rollback's record. | Make the ledger reachable, and run the same command again; nothing was changed.         |
+| =eb-staged-rebuild: no journal at PATH=                                     | No run of that name in that state root.                                                      | Check the name with =status=, and the state root.                                       |
+
+A rollback that fails part way exchanges the trees back to the published state and says so; run it again once the cause is gone.
+
+Roll back only the latest run of an installation.
+=rollback= does not check that the run's tree is still the live one: after a later run, rolling back an earlier one puts back the tree from before the earlier run, moves the later run's tree to the earlier run's hidden name, and leaves the later run =complete= in its journal.
+
+** Related
+
+- [[file:rebuild.org][Rebuild an installed module]]
+- [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], for what a rollback records
+- [[file:../explanation/publication.org][How a rebuild is published]]

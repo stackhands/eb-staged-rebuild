@@ -1,0 +1,108 @@
+#+TITLE: Retire a module file that another stack provides
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Retire a module file that another stack provides
+
+Take a site-built module out of the site's module tree once another stack on =MODULEPATH= provides the same package, here EESSI 2026.06, so that =module load= finds that one.
+The module file moves into the state root, where a rollback can put it back, and the software directory stays for the jobs that use it.
+
+** Before you start
+
+- The module file, and the state root on the same filesystem as the module tree: the move is one rename.
+- The other stack's module of the same name and version on =MODULEPATH=, after the site's own tree.
+- No other command using the state root: =retire= does not wait for the lock unless =--lock-timeout= says so.
+
+** Steps
+
+1. Look at what would move:
+
+   #+begin_src bash
+   eb-staged-rebuild retire --state-root /opt/site/.eb-staged-rebuild --module-file \
+     /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua --reason 'provided by EESSI 2026.06' \
+     --dry-run
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: would retire /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua (software directory /opt/site/software/Example/1.0-GCCcore-15.2.0 is left in place)
+   #+end_example
+
+2. Retire it, with the reason to keep in the record:
+
+   #+begin_src bash
+   eb-staged-rebuild retire --state-root /opt/site/.eb-staged-rebuild --module-file \
+     /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua --reason 'provided by EESSI 2026.06'
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: retired /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua -> /opt/site/.eb-staged-rebuild/retired/20261117T014940Z/opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua; software directory /opt/site/software/Example/1.0-GCCcore-15.2.0 left in place
+   #+end_example
+
+   The record is named after the time of the move, as the directory under =retired/= is.
+
+** Check that it worked
+
+The record says what moved, and the software directory it left:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild retire-20261117T014940Z
+#+end_src
+
+#+begin_example
+retire-20261117T014940Z  retired  retire  /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+  software directory /opt/site/software/Example/1.0-GCCcore-15.2.0
+#+end_example
+
+The module file is gone from the module tree:
+
+#+begin_src bash
+ls -lA /opt/site/modules/all/Example
+#+end_src
+
+#+begin_example
+total 0
+#+end_example
+
+Once the grace period is over, =gc= names the software directory for removal by hand; it never removes a stable directory itself.
+With =--grace-hours 0=:
+
+#+begin_src bash
+eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0 --dry-run
+#+end_src
+
+#+begin_example
+manual: /opt/site/software/Example/1.0-GCCcore-15.2.0 (ready to remove by hand after 2026-11-17T01:49:40Z; gc does not delete the stable software directory)
+#+end_example
+
+To put the module file back, roll the record back:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild retire-20261117T014940Z
+ls -lA /opt/site/modules/all/Example
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: restored /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run retire-20261117T014940Z rolled back; /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua restored
+total 4
+-rw-r--r-- 1 alice alice 717 Nov 17 01:48 1.0-GCCcore-15.2.0.lua
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =retire=.
+
+** If it fails
+
+| Message                                                                                | Cause                                                                                | What to do                                                                               |
+|----------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: PATH is already retired (RUN_ID)=                                  | A record of the state root moved this module file already.                           | Nothing to do; =status --state-root DIR RUN_ID= shows the record.                        |
+| =eb-staged-rebuild: PATH is not a regular file (KIND)=                                 | The path is missing, a directory or a symbolic link.                                 | Name the module file itself.                                                             |
+| =eb-staged-rebuild: PATH has no root assignment, so its software directory is unknown= | The module file has no Lua =local root= or Tcl =set root= line for the tool to read. | Move it by hand; =retire= only moves a module file whose software directory it can name. |
+| =eb-staged-rebuild: PATH and the state root are on different filesystems; ...=         | The move would not be one rename.                                                    | Give =--state-root= a directory on the module tree's filesystem.                         |
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at ...=                   | A run, a rollback or =gc= is using the state root.                                   | Run it again when that is done, or give =--lock-timeout= seconds to wait.                |
+
+** Related
+
+- [[file:remove-old-trees.org][Remove the trees a rebuild left behind]], for the =manual= line
+- [[file:roll-back.org][Put the previous installation back]]
+- [[file:../reference/files.org][Files]], for =retired/= and the record
+- [[file:../reference/cli.org][The eb-staged-rebuild command]]

@@ -1,0 +1,298 @@
+#+TITLE: The eb-staged-rebuild command
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The eb-staged-rebuild command
+
+=eb-staged-rebuild= rebuilds an existing EasyBuild installation in a staged tree, the /generation/, exchanges the complete tree with the stable =software/NAME/VERSION= directory, and then replaces the module file in its own directory.
+It keeps a journal of each run under a state root, from which it resumes, rolls back and removes old trees.
+This page describes the static binary and the Python package, which behave the same except as [[file:compatibility.org][Compatibility]] lists.
+
+** Synopsis
+
+#+begin_example
+eb-staged-rebuild [-h] [--version] COMMAND [OPTION...]
+
+eb-staged-rebuild probe [--path DIR] [--eb EB] [--json]
+eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb EB]
+                      [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
+                      [--dry-run] [--module NAME/VERSION]... [--run-id ID]
+                      [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
+                      [--ledger-config FILE] -- EASYCONFIG [EB-ARGUMENT...]
+eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
+eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
+eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
+                     [--lock-timeout SECONDS]
+eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
+                         [--lock-timeout SECONDS]
+eb-staged-rebuild status --state-root DIR [RUN_ID]
+eb-staged-rebuild resolve MODULE_FILE
+eb-staged-rebuild build-events --config FILE --metadata FILE (--deliver | -- COMMAND...)
+eb-staged-rebuild ledger-maintenance {backfill,anchor,verify-anchors,project} OPTION...
+#+end_example
+
+The Python package runs the last two as =python3 -m eb_staged_rebuild.build_events= and =python3 -m eb_staged_rebuild.ledger_maintenance=, and =--help= does not list them.
+The binary's help, from =eb-staged-rebuild --help=; the Python package's can wrap its lines at other places, as [[file:compatibility.org][Compatibility]] lists:
+
+#+begin_example
+usage: eb-staged-rebuild [-h] [--version]
+                         {probe,run,resume,rollback,gc,retire,status,resolve} ...
+
+Build EasyBuild software in a staged tree, then exchange the complete tree
+with the stable live directory.
+
+positional arguments:
+  {probe,run,resume,rollback,gc,retire,status,resolve}
+    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
+                        EasyBuild
+    run                 build and atomically swap a staged tree
+    resume              continue a run after a crash
+    rollback            restore the previous module files, or put a retired
+                        module file back
+    gc                  remove hidden retired siblings after the grace period
+    retire              move a module file out of the module tree after its
+                        package is published elsewhere
+    status              show run journals
+    resolve             print the install path a module file names
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
+#+end_example
+
+** Arguments
+
+The first argument is the command, and =COMMAND --help= prints that command's options.
+For =run=, every argument after =--= goes to EasyBuild: the easyconfig, and any of =eb='s own options.
+For =resume=, =rollback= and =status=, =RUN_ID= names a run, or a retire record, in the state root.
+
+** Options
+
+| Option         | Meaning                                                                                                                                                      |
+|----------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =-h=, =--help= | Print the usage on stdout and exit 0.                                                                                                                        |
+| =--version=    | Print the version on stdout and exit 0. The Python package prints =eb-staged-rebuild 1.0.0=; the binary adds its target, build mode, Zig version and commit. |
+
+The binary's commit is the one =zig build= was given with =-Dcommit=, or =unknown=.
+Built with =zig build -Drelease=true -Dcommit=c44b8ad=, it prints:
+
+#+begin_example
+eb-staged-rebuild 1.0.0 (x86_64-linux-musl, safe, zig 0.17.1, c44b8ad)
+#+end_example
+
+Each command takes the options of its section below.
+
+*** probe
+
+Report what this machine and filesystem support: bubblewrap (=bwrap=), user namespaces, =renameat2(RENAME_EXCHANGE)=, the EasyBuild version, the filesystem, and how the lock works.
+
+| Option   | Meaning                                                                                                   |
+|----------+-----------------------------------------------------------------------------------------------------------|
+| =--path= | A directory on the filesystem to probe, normally the software tree; the default is the current directory. |
+| =--eb=   | The EasyBuild command to ask for its version; the default is =EB_STAGED_REBUILD_EB=, or =eb=.             |
+| =--json= | Print the report as JSON, indented and with the keys sorted, instead of the lines below.                  |
+
+The lines, in this order:
+
+| Line                                                                             | Meaning                                                                                                                                                               |
+|----------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =bwrap: usable= or =bwrap: not usable=                                           | Whether =bwrap= runs here; then its =version:=, or the =reason:= it does not.                                                                                         |
+| =user.max_user_namespaces: N=                                                    | The kernel's limit; 0 turns user namespaces off.                                                                                                                      |
+| =kernel.unprivileged_userns_clone: N=                                            | Printed only by a kernel that has this setting.                                                                                                                       |
+| =user-namespace sandbox: usable= or =not usable=                                 | Whether the =userns= backend can start its sandbox; then the =reason:= when it cannot.                                                                                |
+| =RENAME_EXCHANGE: yes on FSTYPE= or =no on FSTYPE=                               | Whether two directories on the filesystem of =--path= were exchanged in one call; after =no=, the error on a line of its own.                                         |
+| =EasyBuild framework: VERSION=                                                   | The version =eb --version= printed, or =unknown=; then =bwrap stage-path keys:=, whether that EasyBuild has the options =bwrap= staging uses, and how that was found. |
+| =EasyBuild: REASON=                                                              | In place of the two lines above, when =eb= could not be run.                                                                                                          |
+| =filesystem: FSTYPE MOUNT=                                                       | The filesystem type and mount point of =--path=.                                                                                                                      |
+| =lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured= | How the state-root lock is taken, and that it was measured on one node only.                                                                                          |
+
+*** run
+
+Build the easyconfig in a new generation under the state root, and publish it in place of the installation it rebuilds.
+
+| Option              | Meaning                                                                                                                                                                                                |
+|---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =--software=        | The live software tree; the default is =EASYBUILD_INSTALLPATH_SOFTWARE=. One of the two is required.                                                                                                   |
+| =--modules=         | The live module tree, which holds =all/=; the default is =EASYBUILD_INSTALLPATH_MODULES=. One of the two is required.                                                                                  |
+| =--state-root=      | Where journals and generations go; the default is =EB_STAGED_REBUILD_STATE_ROOT=, or =.eb-staged-rebuild= beside the software tree. It has to be on the software tree's filesystem.                    |
+| =--eb=              | The EasyBuild command; the default is =EB_STAGED_REBUILD_EB=, or =eb=.                                                                                                                                 |
+| =--backend=         | How the build is kept off the live tree: =bwrap=, =userns=, =installpath=, or =auto=, the default, which takes the first of those that works here. =bwrap= and =userns= refuse when their probe fails. |
+| =--grace-hours=     | Hours to keep the previous tree, written into the journal; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144. =gc= does not read this value, but its own =--grace-hours=.                         |
+| =--dry-run=         | Print the backend, the roots, the probes and the command EasyBuild would get, with =<run-id>= in the generation path, and stop: no journal, no lock, no build, no file.                                |
+| =--module=          | A =NAME/VERSION= directory of the software tree to replace, besides those EasyBuild lists; may be given more than once.                                                                                |
+| =--run-id=          | The run's name; the default is the UTC time and the process id, =YYYYMMDD-HHMMSS-PID=. A name that has a journal is refused.                                                                           |
+| =--lock-timeout=    | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                           |
+| =--skip-live-check= | Do not record the live directories at the start, and do not refuse one that changed during the build.                                                                                                  |
+| =--prepare=         | The absolute path of a program to run with the path of =prepare-context.json=, after the build and before the exchange; a status other than 0 stops the run with that status.                          |
+| =--ledger-config=   | A JSON file that names an eb-stack ledger to record each publication in.                                                                                                                               |
+
+Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
+Every module that list names, except one marked =[x]= (installed, and left alone), must be an existing directory =software/NAME/VERSION=.
+The arguments after =--= reach EasyBuild with =--rebuild= added, unless they hold =--rebuild=, =--force= or =-f=.
+These options would point EasyBuild at the live tree, and are dropped: =--prefix=, =--installpath=, =--installpath-software=, =--installpath-modules=, =--subdir-software=, =--subdir-modules=, =--bwrap=, =--disable-bwrap=, =--bwrap-installpath=, =--bwrap-options= and =--remove-ghost-install-dirs=.
+EasyBuild's output and the program's own lines, each starting =eb-staged-rebuild:=, go to stdout; a refusal goes to stderr.
+
+*** resume
+
+Continue the run =RUN_ID= after a failed build, a crash or a lost machine.
+
+| Option           | Meaning                                                                      |
+|------------------+------------------------------------------------------------------------------|
+| =--state-root=   | The state root that holds the run; required.                                 |
+| =--lock-timeout= | Seconds to wait for the state root's lock; without it the wait has no limit. |
+
+A run that is =created=, =building= or =failed= builds its generation again, and one that is =built= or =publishing= publishes the generation it has.
+A =complete= run prints that it is complete and delivers any ledger record still pending.
+A =rolled_back= run, and a retire record, are refused.
+
+*** rollback
+
+Put back what the run =RUN_ID= replaced: the previous trees and module files of a =complete= run, or the module file of a retire record.
+
+| Option           | Meaning                                                                      |
+|------------------+------------------------------------------------------------------------------|
+| =--state-root=   | The state root that holds the run; required.                                 |
+| =--lock-timeout= | Seconds to wait for the state root's lock; without it the wait has no limit. |
+
+The replacement stays at the hidden name =software/NAME/.VERSION.RUN_ID= until =gc= removes it.
+A run in any other state is refused, except one that is rolled back already: that prints so and exits 0.
+
+*** gc
+
+Remove the hidden trees, =software/NAME/.VERSION.RUN_ID=, whose grace period has passed.
+
+| Option             | Meaning                                                                                                              |
+|--------------------+----------------------------------------------------------------------------------------------------------------------|
+| =--state-root=     | The state root whose journals name the trees; required.                                                              |
+| =--grace-hours=    | Hours to keep a tree after its run published or rolled back; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144. |
+| =--dry-run=        | Print what would be removed, and remove nothing.                                                                     |
+| =--include-failed= | Also remove the staged tree of a failed run that published nothing, once it is older than the grace period.          |
+| =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                         |
+
+Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
+=manual= names the stable directory a retire record left in place, which =gc= never removes.
+
+*** retire
+
+Move a module file out of the module tree, once a later =MODULEPATH= entry provides its package, and leave the software directory in place.
+
+| Option           | Meaning                                                                                       |
+|------------------+-----------------------------------------------------------------------------------------------|
+| =--state-root=   | The state root that records the move; required. It has to be on the module file's filesystem. |
+| =--module-file=  | The module file to retire, a regular file with a =root= assignment; required.                 |
+| =--reason=       | Text to keep in the retire record.                                                            |
+| =--dry-run=      | Print what would move, and move nothing.                                                      |
+| =--lock-timeout= | Seconds to wait for the state root's lock; the default is 0, which refuses at once.           |
+
+The file moves to =<state-root>/retired/STAMP/= followed by its absolute path, and the record is named =retire-STAMP=, where =STAMP= is the UTC time as =YYYYMMDDTHHMMSSZ=.
+
+*** status
+
+Print the journals of the state root, or the one of the run =RUN_ID=, in the order of their names.
+
+| Option         | Meaning                   |
+|----------------+---------------------------|
+| =--state-root= | The state root; required. |
+
+A run prints =RUN_ID  STATE  backend=BACKEND  modules=PUBLISHED/PLANNED=, its message, and a line for each module of its plan: the module's status, its module file under the module tree, and its =live= and =retired= paths.
+A retire record prints =RUN_ID  STATE  retire  MODULE_FILE= and the software directory it left in place.
+With no journal, =status= prints =no runs=.
+It takes no lock.
+
+*** resolve
+
+Print as JSON the installation directory that the =root= assignment of the module file =MODULE_FILE=, Lua or Tcl, names:
+
+| Key         | Value                                                                                                    |
+|-------------+----------------------------------------------------------------------------------------------------------|
+| =path=      | =MODULE_FILE= as given.                                                                                  |
+| =kind=      | What =MODULE_FILE= is: =file=, =dir=, =symlink=, =missing= or =other=.                                   |
+| =syntax=    | =lua= or =tcl=, the syntax of the assignment; =null= when there is none.                                 |
+| =root=      | The directory the assignment names, or =null=.                                                           |
+| =root_kind= | What =root= is, as for =kind=.                                                                           |
+| =complete=  | Whether =root= is a real directory holding =PAYLOAD=, =.eb-staged-rebuild-complete= or =easybuild/*.eb=. |
+
+When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printed.
+
+*** build-events
+
+Record =started=, =finished= and =aborted= events in an eb-stack ledger around one command, which runs with the caller's environment, stdin, stdout and stderr.
+
+| Option       | Meaning                                                                                   |
+|--------------+-------------------------------------------------------------------------------------------|
+| =--config=   | The build-events configuration, JSON; required.                                           |
+| =--metadata= | What this operation builds, JSON; required.                                               |
+| =--deliver=  | Deliver the events the outbox holds, and run no command; instead of a command after =--=. |
+
+At the end one line, =build-events: MESSAGE=, goes to stderr.
+
+*** ledger-maintenance
+
+Append observed history to an eb-stack ledger, sign and check daily anchors of it, and write a package history from it.
+
+| Command          | Options                                                                                                  |
+|------------------+----------------------------------------------------------------------------------------------------------|
+| =backfill=       | =--eb-stack=, =--log=, =--public-key=, =--key=, =--head=, =--manifest=, =--manifest-sha256=, =--timeout= |
+| =anchor=         | =--eb-stack=, =--log=, =--public-key=, =--key=, =--anchors=, =--timeout=                                 |
+| =verify-anchors= | =--eb-stack=, =--log=, =--public-key=, =--anchors=, =--timeout=                                          |
+| =project=        | =--eb-stack=, =--log=, =--public-key=, =--head=, =--out=, =--timeout=                                    |
+
+| Option              | Meaning                                                                                           |
+|---------------------+---------------------------------------------------------------------------------------------------|
+| =--eb-stack=        | The eb-stack executable.                                                                          |
+| =--log=             | The ledger, a JSON Lines file.                                                                    |
+| =--public-key=      | The Ed25519 public key that signs the heads.                                                      |
+| =--key=             | The Ed25519 PKCS#8 PEM signing key, outside the directories of the log, the head and the anchors. |
+| =--head=            | The signed head file.                                                                             |
+| =--manifest=        | The backfill manifest.                                                                            |
+| =--manifest-sha256= | The SHA-256 the manifest has to have.                                                             |
+| =--anchors=         | The directory of daily anchors.                                                                   |
+| =--out=             | The directory to write the package history to: missing, or holding an earlier history only.       |
+| =--timeout=         | Seconds each eb-stack call may take; the default is 120.                                          |
+
+Every option but =--timeout= is required, and every path has to be absolute, normalized and free of symbolic links.
+On success the command prints one JSON object on stdout.
+
+** Environment
+
+| Variable                         | Used by        | Meaning                         |
+|----------------------------------+----------------+---------------------------------|
+| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=          | The default of =--software=.    |
+| =EASYBUILD_INSTALLPATH_MODULES=  | =run=          | The default of =--modules=.     |
+| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=          | The default of =--state-root=.  |
+| =EB_STAGED_REBUILD_EB=           | =probe=, =run= | The default of =--eb=.          |
+| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=    | The default of =--grace-hours=. |
+
+[[file:environment.org][Environment variables]] also lists what reaches EasyBuild.
+
+** Exit status
+
+| Status | Meaning                                                                                                                |
+|--------+------------------------------------------------------------------------------------------------------------------------|
+|      0 | Done, or nothing to do.                                                                                                |
+|      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                   |
+|      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.         |
+|     75 | A required ledger did not acknowledge a record, and the command stopped before its next change; run it again to go on. |
+|      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.         |
+
+[[file:exit-status.org][Exit status]] gives the statuses of each command, =build-events= and =ledger-maintenance= included.
+
+** Files
+
+| File                                                | Use                                                                 |
+|-----------------------------------------------------+---------------------------------------------------------------------|
+| =<state-root>/runs/RUN_ID/journal.json=             | The journal of a run or retire record.                              |
+| =<state-root>/generations/RUN_ID/=                  | The generation: the tree EasyBuild built, and its module files.     |
+| =<state-root>/.lock=, =<state-root>/.lock.posix=    | The lock of the state root.                                         |
+| =software/NAME/.VERSION.RUN_ID=                     | The previous tree after a run, or the replacement after a rollback. |
+| =software/NAME/VERSION/.eb-staged-rebuild-complete= | What the run published, written before the exchange.                |
+
+[[file:files.org][Files]] describes each of them.
+
+** See also
+
+- [[file:../tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]]
+- [[file:../howto/rebuild.org][Rebuild an installed module]]
+- [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]]
+- [[file:configuration.org][Configuration files]], for =--ledger-config=, =build-events= and the backfill manifest
+- [[py:eb_staged_rebuild.cli.main]] and the rest of the [[file:api.org][API]]

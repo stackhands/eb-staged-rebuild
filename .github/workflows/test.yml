@@ -62,6 +62,45 @@ jobs:
           export PATH="/usr/share/lmod/lmod/libexec:${PATH}"
           TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest tests.test_easybuild_integration_cli -v
 
+  docs:
+    # The scripts behind the documented output; docs.yml builds the site.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: shellcheck -S warning docs/examples/*.sh
+      - run: python -m pip install .
+      - name: the tutorial
+        run: bash docs/examples/tutorial.sh
+      - name: ledger CLI
+        uses: ./.github/actions/pinned-ledger
+      - name: bubblewrap and Lmod
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl
+      - name: EasyBuild 5.4.2
+        run: python -m pip install easybuild-framework==5.4.2 easybuild-easyblocks==5.4.2 easybuild-easyconfigs==5.4.2
+      - name: user namespaces for the userns backend
+        # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - run: zig build -Drelease=true
+      - name: the example site of the how-to guides, with the binary
+        env:
+          LMOD_CMD: /usr/share/lmod/lmod/libexec/lmod
+        run: |
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/site
+          export PATH="$PWD/zig-out/bin:/usr/share/lmod/lmod/libexec:${PATH}"
+          bash docs/examples/site.sh all
+
   zig:
     # The Zig build: its unit tests, and the read-only commands compared
     # with the Python tool.

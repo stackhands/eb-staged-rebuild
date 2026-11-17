@@ -1,0 +1,119 @@
+#+TITLE: Write the history of each package
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Write the history of each package
+
+Turn the ledger into one page per package, in Markdown and in JSON, that says which modules it has, where they are, and every change to them, with corrections applied.
+=project= writes the pages only from a log that =eb-stack ledger verify= accepted against a signed head that covers every record.
+
+** Before you start
+
+- The eb-stack 0.7.0, the log, the head and the public key of [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], and the private key to sign a current head.
+- A directory for the pages, here =/opt/site/ledger-history=, that is missing or holds only what an earlier =project= wrote there.
+- With the Python package, run =python3 -m eb_staged_rebuild.ledger_maintenance= where this guide runs =eb-staged-rebuild ledger-maintenance=.
+
+** Steps
+
+1. Write the pages:
+
+   #+begin_src bash
+   eb-staged-rebuild ledger-maintenance project --eb-stack /opt/site/bin/eb-stack --log /opt/site/ledger/stack.jsonl \
+     --public-key /opt/site/keys/ledger.pub --head /opt/site/ledger-heads/head.json --out /opt/site/ledger-history
+   #+end_src
+
+   #+begin_example
+   ledger-maintenance: head /opt/site/ledger-heads/head.json covers 5 of the 7 records in /opt/site/ledger/stack.jsonl; sign a current head before reading
+   #+end_example
+
+   =project= refuses, with exit status 2: the rollback of =example-4= signed this head, and the two records of =build-events= came after it.
+   =build-events= signs its heads in its outbox, not here.
+2. Sign a head that covers every record:
+
+   #+begin_src bash
+   /opt/site/bin/eb-stack ledger head --log /opt/site/ledger/stack.jsonl --key /opt/site/keys/ledger.pem \
+     --out /opt/site/ledger-heads/head.json
+   #+end_src
+
+   #+begin_example
+   signed head size 7 root ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63 at 2026-11-17T01:50:35Z to /opt/site/ledger-heads/head.json
+   checkpoint eb-stack-ledger/2026.06/2026 size 7 root ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63 to /opt/site/ledger/stack.jsonl.tiles/checkpoint
+   #+end_example
+
+3. Write the pages again:
+
+   #+begin_src bash
+   eb-staged-rebuild ledger-maintenance project --eb-stack /opt/site/bin/eb-stack --log /opt/site/ledger/stack.jsonl \
+     --public-key /opt/site/keys/ledger.pub --head /opt/site/ledger-heads/head.json --out /opt/site/ledger-history
+   #+end_src
+
+   #+begin_example
+   {"files": ["index.json", "index.md", "packages/Example.json", "packages/Example.md"], "out": "/opt/site/ledger-history", "packages": 1, "root": "ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63", "size": 7}
+   #+end_example
+
+** Check that it worked
+
+=project= wrote an index and one page per package:
+
+#+begin_src bash
+ls -A /opt/site/ledger-history /opt/site/ledger-history/packages
+#+end_src
+
+#+begin_example
+/opt/site/ledger-history:
+index.json
+index.md
+packages
+
+/opt/site/ledger-history/packages:
+Example.json
+Example.md
+#+end_example
+
+The page of =Example= has the =finding= of the backfill, the run that was rolled back with its correction, and the run that is live now:
+
+#+begin_src bash
+cat /opt/site/ledger-history/packages/Example.md
+#+end_src
+
+#+begin_example
+# Package history: Example
+
+Stack: 2026.06
+
+Verified head: size 7, root ba6f1be48e4d5a551dda63607955c17cd5d3e4f22d8c9ff748d673d5630bfc63, signed 2026-11-17T01:50:35Z by 7a9e8ad70df5c3b9255fc95f08cbf29fecfc44da34d96c9a396ac81b2ae700af.
+
+## Modules
+
+| Module | State | Last change | Location |
+| --- | --- | --- | --- |
+| Example/1.0-GCCcore-15.2.0 | installed | #6 | /opt/site/software/Example/1.0-GCCcore-15.2.0 |
+
+## Events
+
+| # | Time (UTC) | Action | Stage | Module | Actor | Status | Details |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 2026-11-17T01:50:04Z | finding |  | Example/1.0-GCCcore-15.2.0 | alice | effective | observed by manifest audit-1; provenance /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.014923.log sha256 d98f1972c6edb777ca7fe44215b8451abde0102f6d693a08e2c05f1643324408; reason observed by backfill manifest audit-1 at 2026-11-17T01:50:04Z; no history before the observation is recorded |
+| 1 | 2026-11-17T01:50:19Z | rebuild-inplace | started | Example/1.0-GCCcore-15.2.0 | alice | effective |  |
+| 2 | 2026-11-17T01:50:19Z | rebuild-inplace | finished | Example/1.0-GCCcore-15.2.0 | alice | corrected | corrected by \#4; correction started by \#3 |
+| 3 | 2026-11-17T01:50:19Z | correction | started | Example/1.0-GCCcore-15.2.0 | alice | effective | corrects \#2; reason run example-4 was rolled back |
+| 4 | 2026-11-17T01:50:19Z | correction | finished | Example/1.0-GCCcore-15.2.0 | alice | effective | corrects \#2; reason run example-4 was rolled back |
+| 5 | 2026-11-17T01:50:19Z | rebuild-inplace | started | Example/1.0-GCCcore-15.2.0 | alice | effective |  |
+| 6 | 2026-11-17T01:50:35Z | rebuild-inplace | finished | Example/1.0-GCCcore-15.2.0 | alice | effective |  |
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =project=.
+
+** If it fails
+
+| Message                                                                                              | Cause                                            | What to do                                                                          |
+|------------------------------------------------------------------------------------------------------+--------------------------------------------------+-------------------------------------------------------------------------------------|
+| =ledger-maintenance: head HEAD covers N of the M records in LOG; sign a current head before reading= | Records were appended after the head was signed. | Sign a current head with =eb-stack ledger head=, as in step 2.                      |
+| =ledger-maintenance: head HEAD covers M records but ledger LOG has N=                                | The log is shorter than the head says.           | Records were removed from the log; compare it with the anchors before you trust it. |
+
+** Related
+
+- [[file:anchor.org][Anchor the ledger once a day]]
+- [[file:backfill.org][Record software installed before the ledger]]
+- [[file:../explanation/ledger.org][What the ledger records]]
+- [[file:../reference/files.org][Files]], for what =project= writes

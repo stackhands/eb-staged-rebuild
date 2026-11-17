@@ -868,6 +868,9 @@ fn onStop(sig: linux.SIG) callconv(.c) void {
     linux.exit_group(@intCast(128 + @backingInt(sig)));
 }
 
+/// build-events: run one software-build command between its `started`
+/// record and its `finished` or `aborted` one, or with --deliver send what
+/// an earlier operation left pending. Returns the exit status.
 pub fn main(a: Allocator, args_in: []const []const u8, env: probe.Env) u8 {
     var args = args_in;
     var command: []const []const u8 = &.{};

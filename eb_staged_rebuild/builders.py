@@ -55,6 +55,10 @@ def filter_eb_args(args):
 
 
 def ensure_rebuild(args):
+    """Return EasyBuild's arguments with ``--rebuild`` added.
+
+    Arguments that have ``--rebuild``, ``--force`` or ``-f`` already are returned as they are.
+    """
     names = {arg.split("=", 1)[0] for arg in args}
     if "--rebuild" in names or "--force" in names or "-f" in names:
         return list(args)
@@ -62,6 +66,12 @@ def ensure_rebuild(args):
 
 
 def child_env(base, software, modules, live_modules):
+    """Return the environment EasyBuild runs with.
+
+    It is the caller's, without EasyBuild's install-path variables, with
+    ``EASYBUILD_INSTALLPATH_SOFTWARE`` and ``EASYBUILD_INSTALLPATH_MODULES`` set to ``software``
+    and ``modules``, and with ``live_modules`` put first on ``MODULEPATH`` when it is not on it.
+    """
     env = dict(base)
     for key in (
         "EASYBUILD_INSTALLPATH",
@@ -81,12 +91,17 @@ def child_env(base, software, modules, live_modules):
 
 
 def installpath_dirs(generation_root):
+    """Return the ``software`` and ``modules`` directories of a generation."""
     software = os.path.join(generation_root, "software")
     modules = os.path.join(generation_root, "modules")
     return software, modules
 
 
 def installpath_command(ctx):
+    """Return the ``installpath`` build: command, environment, software and modules directories.
+
+    EasyBuild installs into the generation's directories, given as its install paths.
+    """
     software, modules = installpath_dirs(ctx.generation_root)
     cmd = [
         ctx.eb_executable,
@@ -99,6 +114,10 @@ def installpath_command(ctx):
 
 
 def bwrap_command(ctx):
+    """Return the ``bwrap`` build: command and environment.
+
+    EasyBuild's bubblewrap mode binds the generation over the live install directory.
+    """
     cmd = [
         ctx.eb_executable,
         "--experimental",
@@ -230,4 +249,5 @@ def run_command(cmd, env, faults, step):
 
 
 def format_command(cmd):
+    """Return a command as one line of text, as the log prints it."""
     return " ".join(cmd)

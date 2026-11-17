@@ -1,3 +1,10 @@
+"""Named steps at which a test pauses, fails or crashes a command.
+
+The engine calls ``FaultInjector.reach`` with the name of each step before it takes it. A
+test passes a ``FaultInjector`` that crashes at one step, or names steps in
+``EB_STAGED_REBUILD_FAIL_AT`` and ``EB_STAGED_REBUILD_PAUSE_AT``.
+"""
+
 import errno
 import os
 import time
@@ -19,6 +26,11 @@ class FaultInjector:
         self.reached = []
 
     def reach(self, step):
+        """Record ``step``, and stop there if a test asked to.
+
+        A step equal to ``fail_at`` raises ``InjectedCrash``; one that ``EB_STAGED_REBUILD_FAIL_AT``
+        lists raises ``OSError(EIO)``; one that ``EB_STAGED_REBUILD_PAUSE_AT`` names pauses.
+        """
         self.reached.append(step)
         if self.fail_at is not None and step == self.fail_at:
             raise InjectedCrash(step)

@@ -1,0 +1,46 @@
+#+TITLE: Environment variables
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Environment variables
+
+The variables eb-staged-rebuild reads, and the environment of each program it starts.
+
+** Read by eb-staged-rebuild
+
+| Variable                         | Use                                                                                                                                                                                                                                                                    |
+|----------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=: the default of =--software=.                                                                                                                                                                                                                                    |
+| =EASYBUILD_INSTALLPATH_MODULES=  | =run=: the default of =--modules=.                                                                                                                                                                                                                                     |
+| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=: the default of =--state-root=, before =.eb-staged-rebuild= beside the software tree. The other commands take =--state-root= only.                                                                                                                               |
+| =EB_STAGED_REBUILD_EB=           | =probe= and =run=: the default of =--eb=, before =eb=.                                                                                                                                                                                                                 |
+| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run= and =gc=: the default of =--grace-hours=, before 144. A value that is not a number makes the binary refuse with =eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'VALUE'= and exit 2, and the Python package stop with a traceback and exit 1. |
+| =PATH=                           | Where =eb=, =bwrap= and =unshare= are found when they are not given as paths.                                                                                                                                                                                          |
+| =MODULEPATH=                     | Passed on to EasyBuild, with the live module tree in front.                                                                                                                                                                                                            |
+
+** What EasyBuild gets
+
+Each EasyBuild command, the dry run and the build alike, gets the caller's environment with these changes:
+
+- =EASYBUILD_INSTALLPATH=, =EASYBUILD_PREFIX= and =EASYBUILD_REMOVE_GHOST_INSTALL_DIRS= are removed.
+- =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= name the generation's =software= and =modules= with the =installpath= and =userns= backends, and the live trees for the dry run and for =bwrap=, where =--bwrap-installpath= moves the installation.
+- The live module tree, the directory =--modules= names, goes first on =MODULEPATH=, unless it is there already.
+  That is the directory, not its =all/=: [[file:../explanation/isolation.org][How a build is kept off the live tree]] says what that means for dependencies.
+
+The =--prepare= program, the command of =build-events= and =eb-stack= get the caller's environment unchanged.
+
+** For tests
+
+These make a command stop or fail on purpose, for the crash and fail tests; leave them unset.
+
+| Variable                                                                                    | Effect                                                                                                                                                                                                                                           |
+|---------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =EB_STAGED_REBUILD_PAUSE_AT=                                                                | Both builds pause before the step it names, or before every step that starts with what comes before a trailing =*=, after creating the file =EB_STAGED_REBUILD_PAUSE_READY= names, for =EB_STAGED_REBUILD_PAUSE_SECONDS= seconds, 30 when unset. |
+| =EB_STAGED_REBUILD_FAIL_AT=                                                                 | Each step of the list, separated by commas, fails with =[Errno 5] injected failure at STEP=. The Python package and the =-Dtest-ops= test artifact read it; the release binary does not.                                                         |
+| =EB_STAGED_REBUILD_ACL_MODEL=, =EB_STAGED_REBUILD_ACL_STORE=, =EB_STAGED_REBUILD_ACL_FAULT= | Only the =-Dtest-ops= test artifact reads them: they emulate the ACLs of a filesystem.                                                                                                                                                           |
+
+** See also
+
+- [[file:cli.org][The eb-staged-rebuild command]]
+- [[file:../explanation/isolation.org][How a build is kept off the live tree]]
+- [[py:eb_staged_rebuild.builders.child_env]]

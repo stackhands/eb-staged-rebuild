@@ -23,9 +23,11 @@ pub const sandbox_command = "__userns-sandbox";
 /// Conventional exit for a sandbox that could not be set up.
 pub const sandbox_setup_exit: u8 = 125;
 
+/// The process environment, read in place.
 pub const Env = struct {
     envp: proc.Envp,
 
+    /// The value of the variable `name`, or null when it is not set.
     pub fn get(e: Env, name: []const u8) ?[]const u8 {
         var i: usize = 0;
         while (e.envp[i]) |p| : (i += 1) {
@@ -503,6 +505,9 @@ fn probeEasybuild(a: Allocator, env: Env, eb: []const u8) Py {
     return .{ .dict = d.items };
 }
 
+/// probe_all: every probe, under the keys of the Python tool's JSON:
+/// bwrap, user_namespaces, userns_sandbox, rename_exchange, easybuild,
+/// filesystem and flock.
 pub fn probeAll(a: Allocator, env: Env, directory: []const u8, eb: []const u8) !Py {
     var d: D = .empty;
     put(a, &d, "bwrap", probeBwrap(a, env));

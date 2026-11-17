@@ -1,3 +1,6 @@
+"""The errors a command reports as ``eb-staged-rebuild: MESSAGE``, with exit status 2."""
+
+
 class StagedRebuildError(Exception):
     """A failed run that left the live software directory alone."""
 

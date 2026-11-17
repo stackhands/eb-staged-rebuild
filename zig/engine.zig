@@ -1,6 +1,6 @@
 //! run: build a complete staged install, then swap it with the live
-//! directory. This build carries the checks and the dry run; the build, the
-//! swap and resume follow.
+//! directory. This file checks the roots, picks the backend and prints the
+//! dry run; run.zig builds, publishes, resumes and rolls back.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -26,6 +26,8 @@ fn log(comptime f: []const u8, args: anytype) void {
     cli.out("eb-staged-rebuild: " ++ f ++ "\n", args);
 }
 
+/// What a run is asked to do: the options of `run`, as the Python tool's
+/// Spec holds them.
 pub const Spec = struct {
     software: []const u8,
     modules: []const u8,
@@ -139,6 +141,9 @@ fn symlinkComponent(a: Allocator, path: []const u8) ?[]const u8 {
     }
 }
 
+/// _check_roots: refuse a software or modules path that is not a real
+/// directory, a state root with a symbolic link in its path, an unknown
+/// backend, and a preparation program that is not an absolute path.
 pub fn checkRoots(a: Allocator, spec: Spec) void {
     if (spec.prepare_executable) |p| {
         if (p.len == 0) refuse("publication preparation executable must not be empty", .{});
@@ -171,6 +176,8 @@ fn strOr(v: ?Py, fallback: []const u8) []const u8 {
 
 // ---- run ----------------------------------------------------------------
 
+/// run: check the roots, probe, pick the backend, then print the dry run
+/// or hand the run to run.zig. Returns the exit status.
 pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     var spec = spec_in;
     checkRoots(a, spec);

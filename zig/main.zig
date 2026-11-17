@@ -1,9 +1,10 @@
 //! eb-staged-rebuild: build EasyBuild software in a staged tree, then
 //! exchange the complete tree with the stable live directory.
 //!
-//! This build carries probe, status, resolve, retire, gc, and rollback of a
-//! retire journal; run, resume and rollback of a run journal follow in the order the port plan
-//! sets, and until then report that they are not in this build.
+//! The commands of the Python tool in one static binary: probe, run,
+//! resume, rollback, gc, retire, status and resolve, and the
+//! ledger-maintenance and build-events commands of its other entry
+//! points. COMPAT.md lists where the two builds differ.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -14,6 +15,7 @@ const probe = @import("probe.zig");
 const ledger = @import("ledger.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
+const build_events = @import("build_events.zig");
 const build_options = @import("build_options");
 
 const sys = common.sys;
@@ -23,6 +25,7 @@ const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
 
+/// The version build.zig.zon gives; --version prints it.
 pub const version = build_options.version;
 const prog = "eb-staged-rebuild";
 
@@ -311,6 +314,9 @@ pub fn loadJournal(a: Allocator, path: []const u8) Py {
     return j;
 }
 
+/// _require_directory_swap: a journal records a directory swap: its
+/// publication, when set, is directory-swap, and every module it plans has
+/// a live and a retired tree. A retire journal passes.
 pub fn requireDirectorySwap(a: Allocator, j: Py) void {
     if (pyfmt.get(j, "publication")) |p| {
         const ok = p == .null or (p == .str and std.mem.eql(u8, p.str, "directory-swap"));
@@ -343,6 +349,8 @@ fn lessName(_: void, x: []const u8, y: []const u8) bool {
     return json.pyTextLess(x, y);
 }
 
+/// list_journals: the journals under the state root's runs directory, in
+/// name order; an entry without a regular journal.json is left out.
 pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
     var found: std.ArrayList(Py) = .empty;
     const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch return &.{};
@@ -768,6 +776,8 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     return 0;
 }
 
+/// The entry point: run the command the arguments name, and return its
+/// exit status.
 pub fn main(init: std.process.Init.Minimal) u8 {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const a = arena_state.allocator();
@@ -813,7 +823,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env);
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
-    if (std.mem.eql(u8, cmd, "build-events")) return @import("build_events.zig").main(a, rest, env);
+    if (std.mem.eql(u8, cmd, "build-events")) return build_events.main(a, rest, env);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
     usageError(top_usage, prog, "argument command: invalid choice: '{s}' (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{cmd});
 }

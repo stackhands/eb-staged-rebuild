@@ -11,8 +11,11 @@ const fsx = common.fsx;
 const json = common.json;
 const Allocator = std.mem.Allocator;
 
+/// Refused, with the reason in the caller's `why`, or out of memory.
 pub const Error = error{Refused} || Allocator.Error;
 
+/// A symbolic link in the module tree: its path relative to the tree, and
+/// its target as readlink gives it.
 pub const Link = struct { rel: []const u8, target: []const u8 };
 
 fn lessText(_: void, x: []const u8, y: []const u8) bool {
@@ -65,6 +68,8 @@ pub fn walkModuleTree(a: Allocator, modules_root: []const u8, why: *[]const u8) 
     return .{ .files = files.items, .links = links.items };
 }
 
+/// One installation a module file names: the staged tree, the stable live
+/// tree, and the module text with its root set to the live tree.
 pub const Install = struct { staged: []const u8, live: []const u8, text: []const u8 };
 
 /// swap_install_for: the staged tree, the stable live tree, and the module
