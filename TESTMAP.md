@@ -200,7 +200,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | TransactionTests.test_a_module_that_is_no_directory_is_refused_for_what_it_is | differential "run, no installed target", "run, --module names a file"; `zig/run.zig` test "notADirectory says what the path is instead" |
 | TransactionTests.test_symlinked_state_root_is_refused | differential "run, symlinked state root" |
 | RollbackTests.test_rollback_restores_exact_old_directory | differential "rollback the run", "rollback the run again" |
-| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback the earlier run after the later one" |
+| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback a run a later run replaced", "rollback the earlier run after the later one" |
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |

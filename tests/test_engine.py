@@ -362,8 +362,10 @@ class RollbackTests(unittest.TestCase):
             self.assertEqual(run(_spec(software, modules, state, later, run_id="run2")).returncode, 0)
             with open(row["module"], encoding="utf-8") as handle:
                 module_text = handle.read()
+            inode = os.lstat(row["install"]).st_ino
             with self.assertRaisesRegex(Refused, "holds the tree of run run2; roll back run2 first"):
                 rollback(state, "run1")
+            self.assertEqual(os.lstat(row["install"]).st_ino, inode)
             self.assertEqual(_payload(row["install"]), "v2\n")
             with open(row["module"], encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), module_text)
