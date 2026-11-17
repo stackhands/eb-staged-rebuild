@@ -406,6 +406,10 @@ This is the case =robot= of =site.sh=.
 ** If it fails
 
 A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
+=run= is the command that builds and then swaps. There is no =swap= command. A build that prints =eb exited N; live modules were not changed= did not swap, and the live tree is as it was.
+=status --state-root DIR RUN= repeats that line. =DIR= is the state root the dry run printed, or =.eb-staged-rebuild= beside the software tree when =--state-root= was left out.
+=rollback= refuses a run whose state is =failed=, because nothing was published.
+=eb-keep-logs why= reads a log tree whose runs are directories named =YYYYMMDD_HHMMSS=. The state root is not one, so =why --root= of it reports that no run is there. An eb-pipeline run with =[logs] keep_failed= writes that log tree, and =eb-keep-logs why --root= of the log root reads the failure.
 These messages come before or instead of a build:
 
 | Message                                                                                                          | Cause                                                                                                                                                                          | What to do                                                              |
@@ -413,6 +417,8 @@ These messages come before or instead of a build:
 | =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                              | No easyconfig after =--=.                                                                                                                                                      | Put the easyconfig, and any option for EasyBuild, after =--=.           |
 | =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock=              | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out.                                                                                 | Wait for it, or give =--lock-timeout= more seconds.                     |
 | =eb-staged-rebuild: /opt/site/software/Example/2.0-GCCcore-15.2.0 is missing, not an existing rebuild directory= | =--module=, or a dependency that a =--robot= run would install, names a module that is not installed. A file there is =a file=, and a FIFO, socket or device =a special file=. | Install the module with EasyBuild first, or name one that is installed. |
+| =eb-staged-rebuild: eb exited N; live modules were not changed=                                                                                         | EasyBuild's build failed, so =run= did not swap.                                                                                                                                                 | Read EasyBuild's lines above that one. =status --state-root DIR RUN= repeats it. =eb-keep-logs why= does not read the state root; it reads a log tree of =YYYYMMDD_HHMMSS= runs. |
+| =invalid choice: 'swap'=                                                                                                                                 | There is no =swap= command. =run= builds and swaps.                                                                                                                                              | Run =eb-staged-rebuild run=. A failed build does not swap.                                                                               |
 
 The first in full, as =site.sh= prints it in its case =no-easyconfig=:
 
@@ -424,7 +430,7 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 eb-staged-rebuild: pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb
 #+end_example
 
-The last in full, as =site.sh= prints it in its case =not-installed=:
+The missing-directory row in full, as =site.sh= prints it in its case =not-installed=:
 
 #+begin_src bash
 eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
