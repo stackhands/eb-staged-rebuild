@@ -1,0 +1,60 @@
+#+TITLE: Add a site EasyBuild hook
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Add a site EasyBuild hook
+
+Point EasyBuild at a hook that keeps an install inside the site prefix, appends a module footer, or turns rpath on.
+EasyBuild runs a hook file from =--hooks= or =EASYBUILD_HOOKS=, as [[https://docs.easybuild.io/hooks/][EasyBuild hooks]] describes.
+This file does nothing until one of its variables is set, so naming it is safe before you choose which of the three you want.
+It does not replace a decision about what to build. It runs inside the EasyBuild that is already building.
+
+** Before you start
+
+- EasyBuild, the one a staged rebuild or a direct =eb= runs.
+- The path of =eb_staged_rebuild/site_hooks.py= in this repository, or of that module once the package is installed.
+
+** Steps
+
+1. Name the file, without setting a variable yet. EasyBuild loads it and the build is unchanged:
+
+   #+begin_src bash
+   export EASYBUILD_HOOKS="$PWD/eb_staged_rebuild/site_hooks.py"
+   #+end_src
+
+   If EESSI-extend already sets =EASYBUILD_HOOKS=, import what you need from your own hook file instead of replacing that path:
+
+   #+begin_src python
+   from eb_staged_rebuild.site_hooks import pre_install_hook, pre_module_hook, pre_build_hook
+   #+end_src
+
+2. Keep the install inside the prefix. Set one variable. =EB_LOCAL_PREFIX= wins when both are set:
+
+   #+begin_src bash
+   export EB_LOCAL_PREFIX=/opt/site
+   #+end_src
+
+   =pre_install_hook= raises =eb-staged-rebuild: install path INSTALLDIR is outside /opt/site= when the install directory is not that prefix or inside it.
+   =/opt/site-extra= is outside =/opt/site=. With the variable unset, the hook returns and the install continues. =EESSI_SITE_SOFTWARE_PATH= is the prefix when =EB_LOCAL_PREFIX= is unset.
+
+3. Append a line to the module file, or turn rpath on. Each is independent of the prefix check:
+
+   #+begin_src bash
+   export EB_LOCAL_MODULE_FOOTER='setenv("SITE_SOFTWARE", "1")'
+   export EB_LOCAL_RPATH=1
+   #+end_src
+
+   =pre_module_hook= adds the footer once. =pre_build_hook= sets the toolchain option =rpath= when the value is =1=, =true= or =on=. Any other value, including unset, leaves the option alone.
+
+** If it fails
+
+| Message | Cause | What to do |
+|---|---|---|
+| =eb-staged-rebuild: install path INSTALLDIR is outside PREFIX= | The install directory is not under the prefix you named. | Build into that prefix, or unset =EB_LOCAL_PREFIX= and =EESSI_SITE_SOFTWARE_PATH= if this build is meant to land elsewhere. |
+| The footer is missing | =EB_LOCAL_MODULE_FOOTER= is unset, or =EASYBUILD_HOOKS= does not name this file. | Export the variable and point =EASYBUILD_HOOKS= at =site_hooks.py=. |
+| Rpath stayed off | =EB_LOCAL_RPATH= is not =1=, =true= or =on=. | Set it to =1=. |
+
+** Related
+
+- [[https://docs.easybuild.io/hooks/][EasyBuild hooks]], for =EASYBUILD_HOOKS= and the hook names
+- [[file:rebuild.org][Rebuild into a new generation]], for the build this hook can wrap
