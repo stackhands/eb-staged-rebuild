@@ -503,8 +503,8 @@ site variables through CLI/docs tests and integration coverage.
 
 `publish.zig` `bounded()` calls zig-common `proc.run` with the options `_bounded` implies: a 64 KiB stdout and stderr limit
 with the rest read and dropped (`stdout_overflow = .truncate`), `end_with_leader` and `wait_for_group`. The process-group
-tests are ported to zig-common `src/proc_test.zig` with those options; the two receipt tests run through `build-events`
-in `tests/test_ledger_bounded_cli.py`, against `TOOL_BIN` or the Python module.
+tests are ported to zig-common `src/proc_test.zig` with those options; the two receipt tests run through
+`run --ledger-config` in `tests/test_ledger_bounded_cli.py`, against the Python tool and `TOOL_BIN`.
 
 | test | replacement |
 |---|---|
@@ -515,7 +515,7 @@ in `tests/test_ledger_bounded_cli.py`, against `TOOL_BIN` or the Python module.
 | test_ledger_bounded.BoundedOutputTests.test_timeout_returns_after_every_group_member_has_exited | zig-common `src/proc_test.zig` test "a timeout returns after every group member has exited" |
 | test_ledger_bounded.BoundedOutputTests.test_interrupted_call_returns_after_every_group_member_has_exited | zig-common `src/proc_test.zig` test "an interrupted call returns after every group member has exited" (Zig: the `cancel` flag a signal handler sets, in place of Python's in-process signal) |
 | test_ledger_bounded.BoundedOutputTests.test_a_noisy_helper_cannot_outlive_a_killed_caller | zig-common `src/proc_test.zig` test "a noisy helper cannot outlive a killed caller" |
-| test_ledger_bounded.ExactReceiptTests.test_receipt_that_fills_the_output_limit_is_accepted | `tests/test_ledger_bounded_cli.py` test_receipt_that_fills_the_output_limit_is_accepted (the replay comes from a retry after `fail-after-append`) |
+| test_ledger_bounded.ExactReceiptTests.test_receipt_that_fills_the_output_limit_is_accepted | `tests/test_ledger_bounded_cli.py` test_receipt_that_fills_the_output_limit_is_accepted (the replay comes from `resume` after `fail-after-append`) |
 | test_ledger_bounded.ExactReceiptTests.test_receipt_beyond_the_output_limit_is_not_read | `tests/test_ledger_bounded_cli.py` test_receipt_beyond_the_output_limit_is_not_read |
 ## tests/test_ledger_directory_swap.py (`run`, `resume` and `rollback` with a ledger)
 
