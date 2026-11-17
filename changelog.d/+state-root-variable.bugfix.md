@@ -1,0 +1,1 @@
+`resume`, `rollback`, `gc`, `retire` and `status` refused to run without `--state-root`, even with `EB_STAGED_REBUILD_STATE_ROOT` set, which `run` uses. They now take the variable as the default of `--state-root` too, unless it is empty, and their usage then shows the option in brackets, as argparse prints it. Both the Python tool and the binary.

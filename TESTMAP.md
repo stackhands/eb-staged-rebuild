@@ -171,8 +171,9 @@ Five test programs run the Python tool and the binary on separate copies of one 
   (`lib/1`, `app/1`), a `--prepare` policy that counts its runs, a sealed installation (read-only trees) and
   a forced ordinary-rename fallback. A row cites "FIXTURE: run killed at STEP" and its rollback forms.
 - `tests/fail_matrix.py`: against the `-Dtest-ops` artifact, `EB_STAGED_REBUILD_FAIL_AT=STEP` makes a step
-  fail with an I/O error in both implementations (the Python fault injector raises `OSError(EIO)`), for
-  every step of a run and a rollback, with one and two modules.
+  fail with an I/O error in both implementations (`tests/fail_cli.py` runs the Python tool with that test
+  hook, and its fault injector raises `OSError(EIO)`), for every step of a run and a rollback, with one and
+  two modules.
 - `tests/signal_harness.py`: SIGTERM or SIGINT to a run while its build command runs, a command that exits
   with stray workers, and a retire while another process has the state lock.
 - `tests/test_easybuild_integration_cli.py`: the real-EasyBuild tests with `TOOL_BIN run` in place of the
@@ -189,15 +190,32 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
 | TransactionTests.test_failure_on_second_module_restores_both_modules | fail_matrix "two modules: run fails at STEP", every step of `lib/1` and `app/1` |
+| TransactionTests.test_an_installed_tool_ignores_the_fail_hook | differential "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" |
+| TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
 | TransactionTests.test_dry_run_creates_no_state_and_changes_nothing | differential "run --dry-run, installpath", "run --dry-run, auto", "run --dry-run, userns" |
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
 | TransactionTests.test_symlink_rebuild_target_is_refused_before_build | differential "run, symlinked target" |
 | TransactionTests.test_module_path_cannot_escape_software_root | differential "run, module escapes" |
+| TransactionTests.test_a_module_that_is_no_directory_is_refused_for_what_it_is | differential "run, no installed target", "run, --module names a file"; `zig/run.zig` test "notADirectory says what the path is instead" |
 | TransactionTests.test_symlinked_state_root_is_refused | differential "run, symlinked state root" |
 | RollbackTests.test_rollback_restores_exact_old_directory | differential "rollback the run", "rollback the run again" |
+| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback the earlier run after the later one" |
+| RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
+| GarbageCollectionTests.test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded | differential "run, a grace period of 0 hours", "gc, the run's grace period", "gc, --grace-hours instead of the run's", "gc, the environment does not replace the run's" |
+| GarbageCollectionTests.test_a_longer_grace_period_of_the_run_outlasts_the_default | differential "gc, the environment does not replace the run's" (a run's own grace period against `EB_STAGED_REBUILD_GRACE_HOURS`) |
+| GarbageCollectionTests.test_a_recorded_grace_period_that_is_not_hours_is_not_used | differential "record a grace period below 0", "gc, a recorded grace period below 0"; `zig/admin.zig` test "runGrace uses the hours a run recorded, when they are a number at least 0" |
+| GarbageCollectionTests.test_gc_refuses_a_grace_period_below_0_or_not_finite | differential "gc, --grace-hours below 0", "gc, --grace-hours=-5", "gc, --grace-hours -1e3", "gc, --grace-hours nan", "gc, --grace-hours inf", "gc, --grace-hours -inf"; `zig/main.zig` test "optionLike takes a negative number for a value, as argparse 3.14 does" |
+| GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_below_0_or_not_finite | differential "gc, a grace period below 0 in the environment", "gc, nan in the environment", "gc, inf and white space in the environment" |
+| GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
+| GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_that_is_not_a_number | differential "gc, a grace period in the environment that is not a number", "gc, an empty grace period in the environment", "gc, a grace period in the environment that needs quoting" |
+| GarbageCollectionTests.test_run_refuses_an_environment_grace_period_that_is_not_a_number | differential "run, a grace period in the environment that is not a number" |
+| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
+| StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
+| StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
+| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
 
 ### tests/test_retire.py
 
@@ -275,7 +293,8 @@ tests cover the same bytes, mode, hard links and symbolic links.
 ### tests/test_backends.py
 
 A fake `bwrap` and `unshare` first on PATH answer the probes (`FAKE_BWRAP_FAIL`, `FAKE_UNSHARE_FAIL` make them
-refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
+refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION` and records the `MODULEPATH` it gets in
+`FAKE_EB_MODULEPATH`.
 
 | test | replacement |
 |---|---|
@@ -285,6 +304,11 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | FakeEbTests.test_bwrap_swaps_the_staged_generation | differential "run, bwrap" |
 | FakeEbTests.test_userns_records_the_stable_prefix | differential "run, userns" |
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
+| FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| FakeEbTests.test_eb_finds_the_live_module_files_on_modulepath | differential "run, MODULEPATH names the live module files" |
+| FakeEbTests.test_relative_trees_reach_easybuild_as_absolute_paths | differential "run, relative trees" |
+| FakeEbTests.test_userns_mounts_relative_trees_by_absolute_path | differential "run, userns, relative trees" |
+| FakeEbTests.test_rollback_from_elsewhere_after_a_run_on_relative_trees | differential "rollback the run on relative trees from another directory" |
 | FakeEbTests.test_easybuild_53_layout_without_stage_keys | differential "run, bwrap, 5.3 layout without stage keys" |
 | FakeEbTests.test_missing_stage_key_on_unknown_version_is_not_published | differential "run, bwrap, unknown release without stage keys" |
 | FakeEbTests.test_overlay_upper_is_not_published | differential "run, bwrap, overlay" |
@@ -292,6 +316,8 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | FakeEbTests.test_auto_prefers_bwrap | differential "run, auto prefers bwrap" |
 | FakeEbTests.test_auto_uses_installpath_when_no_sandbox_is_available | differential "run, auto with no sandbox uses installpath" |
 | FakeEbTests.test_userns_command_mounts_both_live_trees_read_only | differential "run, userns", "run --dry-run, userns" |
+| ChildEnvTests.test_the_live_module_files_go_first_on_modulepath | `zig/run.zig` test "childEnv puts the live module files first on MODULEPATH" |
+| ChildEnvTests.test_the_suffix_is_the_one_easybuild_reads | `zig/run.zig` test "childEnv puts the live module files first on MODULEPATH", differential "run, MODULEPATH with the suffix EasyBuild reads" |
 | BwrapInfoTests.test_legacy_versions_use_the_documented_layout | differential "run, bwrap, 5.3 layout without stage keys" |
 | BwrapInfoTests.test_present_keys_win | differential "run, bwrap" |
 | BwrapInfoTests.test_overlay_is_refused | differential "run, bwrap, overlay" |
@@ -299,7 +325,10 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 ### tests/test_dry_run_lines.py
 
 The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `--rebuild`, the
-`FAKE_EB_DEPS` dependencies as `[x]` with `--robot`, and every line wrapped at `FAKE_EB_WRAP` columns.
+`FAKE_EB_DEPS` dependencies as `[x]` with `--robot`, the `FAKE_EB_UNBUILT` and `FAKE_EB_MISSING` ones as
+`[ ]`, and every line wrapped at `FAKE_EB_WRAP` columns. Its `--extended-dry-run` builds the
+`FAKE_EB_MISSING` dependencies and the listed easyconfigs, or exits `FAKE_EB_XFAIL`, and its `--bwrap`
+makes a live mount point for each module the dry run lists, as EasyBuild's `prepare_bwrap` does.
 
 | test | replacement |
 |---|---|
@@ -307,8 +336,19 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 | ParseTests.test_installed_dependencies_are_left_out | `zig/run.zig` test "relsFromDryRun leaves out installed dependencies" |
 | ParseTests.test_an_entry_ends_at_the_next_entry_or_log_line | `zig/run.zig` test "relsFromDryRun ends an entry at the next entry or log line" |
 | ParseTests.test_the_fake_wraps_as_easybuild_does | the fake itself, used by differential "run, wrapped dry-run lines" |
+| ParseTests.test_the_extended_dry_run_names_the_modules_it_builds | `zig/run.zig` test "builtByExtendedDryRun names the modules it builds" |
+| ParseTests.test_escape_sequences_in_rich_output_are_left_out | `zig/run.zig` test "relsFromDryRun and builtByExtendedDryRun read rich's coloured output" |
+| ParseTests.test_only_whole_csi_and_osc_sequences_are_left_out | `zig/run.zig` test "stripEscapes leaves out whole CSI and OSC sequences only" |
 | RunTests.test_a_wrapped_module_line_names_the_module | differential "run, wrapped dry-run lines" |
 | RunTests.test_robot_rebuilds_only_the_listed_easyconfig | differential "run, --robot with installed dependencies" |
+| RunTests.test_robot_leaves_out_dependencies_eb_would_not_build | differential "run, --robot with dependencies eb would not build" |
+| RunTests.test_bwrap_mount_points_of_unbuilt_dependencies_are_removed | differential "run, bwrap, --robot leaves no mount point behind" |
+| RunTests.test_wrapped_extended_dry_run_lines_name_the_modules | differential "run, --robot, wrapped extended dry-run lines" |
+| RunTests.test_robot_refuses_a_missing_dependency_that_eb_would_build | differential "run, --robot with a missing dependency eb would build" |
+| RunTests.test_force_color_does_not_hide_the_module_lines | differential "run, --robot with FORCE_COLOR=0", "the output style each eb run got"; `zig/run.zig` test "dryRunEnv asks EasyBuild for basic output, and the build keeps the caller's" |
+| RunTests.test_escape_sequences_that_reach_the_module_preflight_are_left_out | differential "run, --robot, --output-style=rich with FORCE_COLOR=1" |
+| RunTests.test_force_color_does_not_hide_a_dependency_eb_would_build | differential "run, --module, --robot with FORCE_COLOR=1 and a missing dependency eb would build" |
+| RunTests.test_an_extended_dry_run_that_fails_refuses | differential "run, --robot, the extended dry run fails" |
 
 ### tests/test_prepare_recovery.py
 
@@ -343,6 +383,11 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 |---|---|
 | EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree |
+| EasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree |
+| EasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build |
+| EasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_robot_leaves_no_mount_point_behind |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |
 
 ### tests/test_sealed_install.py
@@ -435,6 +480,9 @@ it writes, with ids, times and the state root's scope normalized.
 | DirectorySwapLedgerTests.test_required_ledger_failure_does_not_swap | differential "run, ledger append fails", "resume delivers the record" |
 | DirectorySwapLedgerTests.test_policy_change_is_refused_and_the_stable_tree_stays | differential "resume after the ledger actor changed" |
 | DirectorySwapLedgerTests.test_rollback_correction_is_idempotent | differential "rollback a ledger run", "rollback a ledger run again", "ledger records so far" (one correction pair naming the finished record) |
+| DirectorySwapLedgerTests.test_a_run_whose_finished_record_waits_says_so_once | differential "run, the finished record waits", "resume delivers the finished record" |
+| DirectorySwapLedgerTests.test_a_correction_the_ledger_refused_says_to_roll_back_again | differential "rollback, the ledger refuses the correction", "rollback again delivers the correction" |
+| DirectorySwapLedgerTests.test_a_rollback_whose_records_wait_says_to_roll_back_again_once | differential "run, an optional ledger", "rollback, the correction records wait", "rollback again delivers the waiting records", "ledger records after the rollback cases" |
 | DirectorySwapLedgerTests.test_generation_pointer_schema_is_not_applied | differential "resume a generation-pointer record", "status of a generation-pointer record" |
 
 ## tests/test_ledger_policy.py

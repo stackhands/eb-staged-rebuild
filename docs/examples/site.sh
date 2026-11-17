@@ -33,8 +33,8 @@ ANCHORS=$SITE/ledger-anchors
 HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
-robot userns no-easyconfig ledger-setup backfill ledger-run ledger-rollback
-build-events anchor project"
+robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
+ledger-rollback build-events anchor project"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -112,6 +112,7 @@ case_resume() {
 }
 
 case_rollback() {
+    step 2 eb-staged-rebuild rollback --state-root "$STATE" example-2
     step 0 eb-staged-rebuild rollback --state-root "$STATE" example-3
     step 0 eb-staged-rebuild status --state-root "$STATE" example-3
     step 0 ls -A "$SITE/software/Example"
@@ -149,16 +150,23 @@ case_lock() {
 }
 
 case_robot() {
-    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+    step 0 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
         --run-id example-robot -- Example-1.0-GCCcore-15.2.0.eb --robot
+    step 0 ls -A "$SITE/software" "$SITE/software/.locks"
 }
 
 case_userns() {
-    STATUS=1 run_example example-userns --backend userns
+    run_example example-userns --backend userns
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
 }
 
 case_no-easyconfig() {
     step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" --dry-run
+}
+
+case_not-installed() {
+    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --module Example/2.0-GCCcore-15.2.0 -- Example-1.0-GCCcore-15.2.0.eb
 }
 
 case_ledger-setup() {

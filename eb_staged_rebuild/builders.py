@@ -65,12 +65,42 @@ def ensure_rebuild(args):
     return list(args) + ["--rebuild"]
 
 
-def child_env(base, software, modules, live_modules):
+def modules_suffix(args, env):
+    """Return the suffix EasyBuild adds to its module install path.
+
+    The last ``--suffix-modules-path`` that :func:`filter_eb_args` keeps,
+    else ``EASYBUILD_SUFFIX_MODULES_PATH`` in ``env``, else ``all``, as
+    EasyBuild reads them. One set in a configuration file is not seen.
+    """
+    suffix = env.get("EASYBUILD_SUFFIX_MODULES_PATH", "all")
+    args = filter_eb_args(args)
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg.startswith("--suffix-modules-path="):
+            suffix = arg.split("=", 1)[1]
+        elif arg == "--suffix-modules-path" and index + 1 < len(args):
+            index += 1
+            suffix = args[index]
+        index += 1
+    return suffix
+
+
+def module_path(modules, suffix):
+    """Return the directory of module files that EasyBuild puts on ``MODULEPATH`` for ``modules``."""
+    if suffix.startswith("/"):
+        return suffix
+    return os.path.join(modules, suffix) if suffix else modules
+
+
+def child_env(base, software, modules, live_modules, eb_args):
     """Return the environment EasyBuild runs with.
 
     It is the caller's, without EasyBuild's install-path variables, with
     ``EASYBUILD_INSTALLPATH_SOFTWARE`` and ``EASYBUILD_INSTALLPATH_MODULES`` set to ``software``
-    and ``modules``, and with ``live_modules`` put first on ``MODULEPATH`` when it is not on it.
+    and ``modules``, and with the module files of ``live_modules``, ``all`` under it
+    unless ``eb_args`` or ``base`` give EasyBuild another suffix, put first on ``MODULEPATH``
+    when they are not on it.
     """
     env = dict(base)
     for key in (
@@ -83,7 +113,7 @@ def child_env(base, software, modules, live_modules):
         env.pop(key, None)
     env["EASYBUILD_INSTALLPATH_SOFTWARE"] = os.fspath(software)
     env["EASYBUILD_INSTALLPATH_MODULES"] = os.fspath(modules)
-    live = os.fspath(live_modules)
+    live = module_path(os.fspath(live_modules), modules_suffix(eb_args, base))
     parts = [part for part in env.get("MODULEPATH", "").split(":") if part]
     if live not in parts:
         env["MODULEPATH"] = ":".join([live, *parts]) if parts else live
@@ -109,7 +139,7 @@ def installpath_command(ctx):
         f"--installpath-modules={modules}",
         *ensure_rebuild(filter_eb_args(ctx.eb_args)),
     ]
-    env = child_env(os.environ, software, modules, ctx.modules)
+    env = child_env(os.environ, software, modules, ctx.modules, ctx.eb_args)
     return cmd, env, software, modules
 
 
@@ -126,7 +156,7 @@ def bwrap_command(ctx):
         "--bwrap-options=--die-with-parent",
         *ensure_rebuild(filter_eb_args(ctx.eb_args)),
     ]
-    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules)
+    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
     return cmd, env
 
 
@@ -151,6 +181,19 @@ def userns_command(ctx):
     return command, env, software, modules
 
 
+def _dry_run_env(ctx):
+    """Return the environment of a dry run: the build's, with basic output.
+
+    With rich, EasyBuild wraps its output at the console width and, once
+    ``FORCE_COLOR`` is set and not empty, colours it through a pipe too.
+    ``EASYBUILD_OUTPUT_STYLE=basic``, which EasyBuild reads since 4.5.0,
+    asks for neither; ``--output-style`` among the build's arguments wins.
+    """
+    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
+    env["EASYBUILD_OUTPUT_STYLE"] = "basic"
+    return env
+
+
 def dry_run_command(ctx):
     """List the modules the build replaces, without installing.
 
@@ -163,8 +206,27 @@ def dry_run_command(ctx):
         "--dry-run",
         *ensure_rebuild(filter_eb_args(ctx.eb_args)),
     ]
-    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules)
-    return cmd, env
+    return cmd, _dry_run_env(ctx)
+
+
+def extended_dry_run_command(ctx):
+    """Name each module the build installs, without installing.
+
+    The dry run's arguments, with ``--extended-dry-run`` for ``--dry-run``:
+    EasyBuild resolves the dependencies as the build does and goes through
+    each easyconfig it would build, which ``--stop=fetch`` ends after its
+    first step. EasyBuild 5.4.2 creates the install lock of each in
+    ``.locks`` under the live software tree and, in this mode, does not
+    remove it; ``--ignore-locks`` takes none.
+    """
+    cmd = [
+        ctx.eb_executable,
+        "--extended-dry-run",
+        *ensure_rebuild(filter_eb_args(ctx.eb_args)),
+        "--stop=fetch",
+        "--ignore-locks",
+    ]
+    return cmd, _dry_run_env(ctx)
 
 
 def _signal_group(child, signum):

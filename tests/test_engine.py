@@ -1,10 +1,14 @@
 """End-to-end transaction tests, including every recorded fault point."""
 
+import contextlib
+import io
 import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
+from eb_staged_rebuild import cli
 from eb_staged_rebuild.engine import Spec, resume, rollback, run
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
@@ -99,6 +103,20 @@ def _spec(
 def _payload(path):
     with open(os.path.join(path, "PAYLOAD"), encoding="utf-8") as handle:
         return handle.read()
+
+
+def _main(argv, env=None):
+    """Run the command line with the variables of the grace period and the state root unset unless ``env`` sets them."""
+    out, err = io.StringIO(), io.StringIO()
+    with mock.patch.dict(os.environ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+        os.environ.pop("EB_STAGED_REBUILD_STATE_ROOT", None)
+        os.environ.update(env or {})
+        try:
+            code = cli.main(argv)
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue(), err.getvalue()
 
 
 class TransactionTests(unittest.TestCase):
@@ -213,6 +231,25 @@ class TransactionTests(unittest.TestCase):
                         )
                     self.assert_old_live(installed)
 
+    def test_an_installed_tool_ignores_the_fail_hook(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.dict(
+            os.environ, {"EB_STAGED_REBUILD_FAIL_AT": "build.start"}
+        ):
+            software, modules, state, installed, builder = _fixture(root)
+            result = run(_spec(software, modules, state, builder))
+            self.assertEqual(result.returncode, 0, result.message)
+            self.assert_new_live(installed)
+
+    def test_the_fail_hook_fails_each_step_it_names(self):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(
+            FaultInjector, "failing", frozenset({"build.start"})
+        ):
+            software, modules, state, installed, builder = _fixture(root)
+            with self.assertRaises(OSError) as caught:
+                run(_spec(software, modules, state, builder))
+            self.assertEqual(str(caught.exception), "[Errno 5] injected failure at build.start")
+            self.assert_old_live(installed)
+
     def test_failed_build_never_touches_live_tree(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, state, installed, _builder = _fixture(root)
@@ -272,6 +309,23 @@ class TransactionTests(unittest.TestCase):
                 run(spec)
             self.assertIn("escapes", str(caught.exception))
 
+    def test_a_module_that_is_no_directory_is_refused_for_what_it_is(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            open(os.path.join(software, "demo", "file"), "w").close()
+            os.mkfifo(os.path.join(software, "demo", "fifo"))
+            for rel, what in (("demo/2", "missing"), ("demo/file", "a file"), ("demo/fifo", "a special file")):
+                with self.subTest(rel=rel):
+                    spec = _spec(software, modules, state, builder)
+                    spec.module_rels = [rel]
+                    with self.assertRaises(Refused) as caught:
+                        run(spec)
+                    self.assertEqual(
+                        str(caught.exception),
+                        f"{os.path.join(software, rel)} is {what}, not an existing rebuild directory",
+                    )
+            self.assert_old_live(installed)
+
     def test_symlinked_state_root_is_refused(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, _state, installed, builder = _fixture(root)
@@ -296,6 +350,41 @@ class RollbackTests(unittest.TestCase):
             journal = load_journal(journal_path(state, "run1"))
             self.assertEqual(_payload(journal["modules_plan"][0]["retired"]), "v1\n")
             self.assertEqual(rollback(state, "run1").returncode, 0)
+
+    def test_a_run_a_later_run_replaced_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            row = installed["demo/1"]
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            later = installpath_builder(
+                [{"rel": "demo/1", "payload": "v2\n", "module_rel": "all/demo/1.lua", "name": "demo"}]
+            )
+            self.assertEqual(run(_spec(software, modules, state, later, run_id="run2")).returncode, 0)
+            with open(row["module"], encoding="utf-8") as handle:
+                module_text = handle.read()
+            with self.assertRaisesRegex(Refused, "holds the tree of run run2; roll back run2 first"):
+                rollback(state, "run1")
+            self.assertEqual(_payload(row["install"]), "v2\n")
+            with open(row["module"], encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), module_text)
+            self.assertEqual(load_journal(journal_path(state, "run1"))["state"], "complete")
+            self.assertEqual(rollback(state, "run2").returncode, 0)
+            self.assertEqual(_payload(row["install"]), "v1\n")
+            self.assertEqual(rollback(state, "run1").returncode, 0)
+            TransactionTests().assert_old_live(installed)
+            for run_id in ("run1", "run2"):
+                self.assertEqual(load_journal(journal_path(state, run_id))["state"], "rolled_back")
+
+    def test_a_live_tree_the_run_did_not_publish_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            row = installed["demo/1"]
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            os.unlink(os.path.join(row["install"], ".eb-staged-rebuild-complete"))
+            with self.assertRaisesRegex(Refused, "is not the tree it published"):
+                rollback(state, "run1")
+            self.assertEqual(_payload(row["install"]), "v1\n")
+            self.assertEqual(load_journal(journal_path(state, "run1"))["state"], "complete")
 
     def test_every_rollback_failure_restores_published_tree(self):
         with tempfile.TemporaryDirectory() as root:
@@ -345,6 +434,170 @@ class GarbageCollectionTests(unittest.TestCase):
             self.assertEqual(later[0]["action"], "remove")
             self.assertFalse(os.path.exists(retired))
             TransactionTests().assert_new_live(installed)
+
+    @staticmethod
+    def _gc(state, *args, env=None):
+        code, out, _ = _main(["gc", "--state-root", state, "--dry-run", *args], env)
+        return code, out
+
+    def _published(self, root, grace_hours):
+        software, modules, state, installed, builder = _fixture(root)
+        spec = _spec(software, modules, state, builder)
+        spec.grace_hours = grace_hours
+        self.assertEqual(run(spec).returncode, 0)
+        return state, load_journal(journal_path(state, "run1"))["modules_plan"][0]["retired"]
+
+    def test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            remove = (0, f"remove: {retired} (previous live tree)\n")
+            keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
+            self.assertEqual(self._gc(state), remove)
+            self.assertEqual(self._gc(state, "--grace-hours", "1"), keep)
+            self.assertEqual(self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "1"}), remove)
+
+    def test_a_longer_grace_period_of_the_run_outlasts_the_default(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 2)
+            keep = (0, f"keep: {retired} (within grace (previous live tree))\n")
+            self.assertEqual(self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}), keep)
+            self.assertEqual(self._gc(state, "--grace-hours", "0"), (0, f"remove: {retired} (previous live tree)\n"))
+
+    def test_a_recorded_grace_period_that_is_not_hours_is_not_used(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            path = journal_path(state, "run1")
+            for value in (-5, float("nan"), "0", True, None):
+                with self.subTest(value=value):
+                    with open(path, encoding="utf-8") as handle:
+                        journal = json.load(handle)
+                    journal["grace_hours"] = value
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(journal, handle)
+                    self.assertEqual(
+                        self._gc(state),
+                        (0, f"keep: {retired} (within grace (previous live tree))\n"),
+                    )
+                    self.assertEqual(
+                        self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}),
+                        (0, f"remove: {retired} (previous live tree)\n"),
+                    )
+
+    def test_gc_refuses_a_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for args, text in (
+                (["--grace-hours", "-5"], "-5"),
+                (["--grace-hours=-5"], "-5"),
+                (["--grace-hours", "nan"], "nan"),
+                (["--grace-hours", "inf"], "inf"),
+                (["--grace-hours=-inf"], "-inf"),
+            ):
+                with self.subTest(args=args):
+                    code, out, err = _main(["gc", "--state-root", state, "--dry-run", *args])
+                    self.assertEqual(
+                        (code, out, err.splitlines()[-1:]),
+                        (2, "", [f"eb-staged-rebuild gc: error: argument --grace-hours: not a number of hours, 0 or more: '{text}'"]),
+                    )
+
+    def test_gc_refuses_an_environment_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for text in ("-5", "nan", "inf"):
+                with self.subTest(text=text):
+                    self.assertEqual(
+                        _main(["gc", "--state-root", state, "--dry-run"], {"EB_STAGED_REBUILD_GRACE_HOURS": text}),
+                        (2, "", f"eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: '{text}'\n"),
+                    )
+
+    def test_run_refuses_a_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, _ = _fixture(root)
+            argv = ["run", "--software", software, "--modules", modules, "--state-root", state, "--dry-run"]
+            code, out, err = _main([*argv, "--grace-hours", "-5", "--", "demo-1.eb"])
+            self.assertEqual(
+                (code, out, err.splitlines()[-1:]),
+                (2, "", ["eb-staged-rebuild run: error: argument --grace-hours: not a number of hours, 0 or more: '-5'"]),
+            )
+            self.assertEqual(
+                _main([*argv, "--", "demo-1.eb"], {"EB_STAGED_REBUILD_GRACE_HOURS": "nan"}),
+                (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: 'nan'\n"),
+            )
+            self.assertFalse(os.path.exists(state))
+
+    def test_gc_refuses_an_environment_grace_period_that_is_not_a_number(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for text, shown in (("abc", "'abc'"), ("", "''"), ("5h", "'5h'"), ("it's", '"it\'s"')):
+                with self.subTest(text=text):
+                    self.assertEqual(
+                        _main(["gc", "--state-root", state, "--dry-run"], {"EB_STAGED_REBUILD_GRACE_HOURS": text}),
+                        (2, "", f"eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: {shown}\n"),
+                    )
+
+    def test_run_refuses_an_environment_grace_period_that_is_not_a_number(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, _ = _fixture(root)
+            argv = ["run", "--software", software, "--modules", modules, "--state-root", state, "--dry-run"]
+            self.assertEqual(
+                _main([*argv, "--", "demo-1.eb"], {"EB_STAGED_REBUILD_GRACE_HOURS": "abc"}),
+                (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'abc'\n"),
+            )
+            self.assertFalse(os.path.exists(state))
+
+
+class StateRootVariableTests(unittest.TestCase):
+    def test_every_command_takes_the_state_root_from_the_environment(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            env = {"EB_STAGED_REBUILD_STATE_ROOT": state}
+            for argv in (
+                ["status"],
+                ["status", "run1"],
+                ["retire", "--module-file", installed["demo/1"]["module"], "--dry-run"],
+                ["gc", "--dry-run"],
+                ["resume", "run1"],
+            ):
+                with self.subTest(argv=argv):
+                    given = _main([argv[0], "--state-root", state, *argv[1:]])
+                    self.assertEqual(given[0], 0, given)
+                    self.assertEqual(_main(argv, env), given)
+            self.assertEqual(_main(["rollback", "run1"], env)[0], 0)
+            TransactionTests().assert_old_live(installed)
+
+    def test_the_option_wins_over_the_environment(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, builder = _fixture(root)
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            elsewhere = os.path.join(root, "elsewhere")
+            os.makedirs(elsewhere)
+            env = {"EB_STAGED_REBUILD_STATE_ROOT": elsewhere}
+            self.assertEqual(_main(["status"], env), (0, "no runs\n", ""))
+            code, out, _ = _main(["status", "--state-root", state], env)
+            self.assertEqual((code, out.splitlines()[0]), (0, "run1  complete  backend=installpath  modules=1/1"))
+
+    def test_without_the_variable_the_option_is_required(self):
+        for env in ({}, {"EB_STAGED_REBUILD_STATE_ROOT": ""}):
+            with self.subTest(env=env):
+                code, out, err = _main(["status"], env)
+                self.assertEqual(
+                    (code, out, err.splitlines()[-1:]),
+                    (2, "", ["eb-staged-rebuild status: error: the following arguments are required: --state-root"]),
+                )
+
+    def test_with_the_variable_the_usage_shows_the_option_as_optional(self):
+        code, out, err = _main(["rollback"], {"EB_STAGED_REBUILD_STATE_ROOT": "/nonexistent"})
+        lines = err.splitlines()
+        self.assertEqual(
+            (code, out, lines[:1], lines[-1:]),
+            (
+                2,
+                "",
+                ["usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]"],
+                ["eb-staged-rebuild rollback: error: the following arguments are required: run_id"],
+            ),
+        )
 
 
 if __name__ == "__main__":

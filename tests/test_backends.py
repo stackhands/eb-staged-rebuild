@@ -1,5 +1,6 @@
 """EasyBuild is replaced by tests/fake_eb.py. These tests exercise the real backends."""
 
+import contextlib
 import json
 import os
 import stat
@@ -8,8 +9,8 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from eb_staged_rebuild.builders import userns_command
-from eb_staged_rebuild.engine import Spec, run
+from eb_staged_rebuild.builders import child_env, userns_command
+from eb_staged_rebuild.engine import Spec, rollback, run
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.probe import probe_userns_sandbox, stage_paths_from_bwrap_info
 from eb_staged_rebuild.errors import Refused
@@ -17,6 +18,7 @@ from tests.support import PROBES, classic_install
 
 
 FAKE_EB = os.path.join(os.path.dirname(__file__), "fake_eb.py")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(path):
@@ -53,6 +55,8 @@ class FakeEbTests(unittest.TestCase):
         os.environ.pop("FAKE_EB_KEYS", None)
         os.environ.pop("FAKE_EB_OVERLAY", None)
         os.environ.pop("FAKE_EB_RECORD_PREFIX", None)
+        os.environ.pop("FAKE_EB_IDS", None)
+        os.environ.pop("FAKE_EB_MODULEPATH", None)
 
     def tearDown(self):
         os.environ.clear()
@@ -71,6 +75,28 @@ class FakeEbTests(unittest.TestCase):
             probes=probes or _probes((5, 4, 2), True),
             run_id="run1",
         )
+
+    def _relative_spec(self, backend):
+        return Spec(
+            software="software",
+            modules="modules",
+            state_root="state",
+            eb_args=["demo-1.eb"],
+            backend=backend,
+            module_rels=["demo/1"],
+            eb_executable=FAKE_EB,
+            probes=_probes((5, 4, 2), True),
+            run_id="run1",
+        )
+
+    def _assert_absolute_plans(self):
+        journal = json.loads(_read(os.path.join(self.state, "runs", "run1", "journal.json")))
+        for entry in journal["modules_plan"]:
+            for key in ("live_module", "backup", "prepared"):
+                self.assertTrue(os.path.isabs(entry[key]), f"{key}: {entry[key]}")
+        for entry in journal["links_plan"]:
+            self.assertTrue(os.path.isabs(entry["live_path"]), f"live_path: {entry['live_path']}")
+        return journal
 
     def _assert_live_untouched(self):
         self.assertEqual(os.lstat(self.install).st_ino, self.inode)
@@ -151,6 +177,67 @@ class FakeEbTests(unittest.TestCase):
             any(argument.startswith("--installpath-software=") for argument in commands[-1])
         )
 
+    def test_userns_build_runs_eb_as_the_caller(self):
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(probe.get("reason"))
+        ids = os.path.join(self.root, "ids.log")
+        os.environ["FAKE_EB_IDS"] = ids
+        result = run(self._spec("userns"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        self.assertEqual(_read(ids).splitlines()[-1], f"{os.getuid()} {os.getgid()}")
+
+    def test_eb_finds_the_live_module_files_on_modulepath(self):
+        record = os.path.join(self.root, "modulepath.log")
+        os.environ["FAKE_EB_MODULEPATH"] = record
+        os.environ["MODULEPATH"] = "/elsewhere/modules/all"
+        result = run(self._spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        live = os.path.join(self.modules, "all")
+        self.assertEqual(_read(record).splitlines(), [f"{live}:/elsewhere/modules/all"] * 2)
+
+    def test_relative_trees_reach_easybuild_as_absolute_paths(self):
+        record = os.path.join(self.root, "modulepath.log")
+        os.environ["FAKE_EB_MODULEPATH"] = record
+        os.environ["MODULEPATH"] = "/elsewhere/modules/all"
+        with contextlib.chdir(self.root):
+            live = os.path.join(os.getcwd(), "modules", "all")
+            result = run(self._relative_spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        self.assertEqual(_read(record).splitlines(), [f"{live}:/elsewhere/modules/all"] * 2)
+        self._assert_absolute_plans()
+
+    def test_userns_mounts_relative_trees_by_absolute_path(self):
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(probe.get("reason"))
+        # The sandbox helper runs as python -m eb_staged_rebuild.userns_sandbox,
+        # which finds an uninstalled package outside the checkout only here.
+        os.environ["PYTHONPATH"] = REPO
+        with contextlib.chdir(self.root):
+            here = os.getcwd()
+            result = run(self._relative_spec("userns"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        command = self._assert_absolute_plans()["eb_command"]
+        mounts = [command[i + 1] for i, argument in enumerate(command) if argument == "--read-only"]
+        self.assertEqual(mounts, [os.path.join(here, "software"), os.path.join(here, "modules")])
+
+    def test_rollback_from_elsewhere_after_a_run_on_relative_trees(self):
+        with contextlib.chdir(self.root):
+            result = run(self._relative_spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        elsewhere = os.path.join(self.root, "elsewhere")
+        os.makedirs(elsewhere)
+        with contextlib.chdir(elsewhere):
+            result = rollback(self.state, "run1")
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_live_untouched()
+        self.assertEqual(_read(self.module), self.v0)
+
     def test_easybuild_53_layout_without_stage_keys(self):
         os.environ["FAKE_EB_KEYS"] = "legacy"
         result = run(self._spec("bwrap", _probes((5, 3, 1), False)))
@@ -228,6 +315,38 @@ class FakeEbTests(unittest.TestCase):
         self.assertIn(self.software, command)
         self.assertIn(self.modules, command)
         self.assertIn("eb_staged_rebuild.userns_sandbox", command)
+
+
+class ChildEnvTests(unittest.TestCase):
+    def _modulepath(self, base, eb_args=()):
+        env = child_env(base, "/gen/software", "/gen/modules", "/live/modules", list(eb_args))
+        return env.get("MODULEPATH")
+
+    def test_the_live_module_files_go_first_on_modulepath(self):
+        self.assertEqual(self._modulepath({"MODULEPATH": "/m"}, ["demo-1.eb"]), "/live/modules/all:/m")
+        self.assertEqual(self._modulepath({"PATH": "/bin"}), "/live/modules/all")
+        self.assertEqual(self._modulepath({"MODULEPATH": "/live/modules/all:/m"}), "/live/modules/all:/m")
+
+    def test_the_suffix_is_the_one_easybuild_reads(self):
+        mods = {"MODULEPATH": "/m", "EASYBUILD_SUFFIX_MODULES_PATH": "mods"}
+        self.assertEqual(self._modulepath(mods), "/live/modules/mods:/m")
+        self.assertEqual(
+            self._modulepath({"MODULEPATH": "/m", "EASYBUILD_SUFFIX_MODULES_PATH": ""}), "/live/modules:/m"
+        )
+        self.assertEqual(
+            self._modulepath(
+                mods, ["demo-1.eb", "--suffix-modules-path", "one", "--suffix-modules-path=/abs/two"]
+            ),
+            "/abs/two:/m",
+        )
+        self.assertEqual(
+            self._modulepath({"MODULEPATH": "/m"}, ["--suffix-modules-path", "one"]), "/live/modules/one:/m"
+        )
+        # EasyBuild never sees this one: filter_eb_args drops it as the value of --prefix.
+        self.assertEqual(
+            self._modulepath({"MODULEPATH": "/m"}, ["--prefix", "--suffix-modules-path=x"]),
+            "/live/modules/all:/m",
+        )
 
 
 class BwrapInfoTests(unittest.TestCase):

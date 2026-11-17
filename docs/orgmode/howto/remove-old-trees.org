@@ -11,7 +11,8 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
 
 - The state root, =/opt/site/.eb-staged-rebuild= for the site of [[file:rebuild.org][Rebuild an installed module]].
 - The longest time a job runs at the site, with a margin: the grace period has to cover a job that started just before a tree was replaced.
-  The default is 144 hours, which assumes jobs of up to 120 hours and adds a day; give =--grace-hours= or =EB_STAGED_REBUILD_GRACE_HOURS= the site's own value.
+  The default is 144 hours, which assumes jobs of up to 120 hours and adds a day; give =run --grace-hours= or =EB_STAGED_REBUILD_GRACE_HOURS= the site's own value.
+  Each run records it, and =gc= keeps the run's trees that long.
 
 ** Steps
 
@@ -46,10 +47,10 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
    keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (within grace (rolled-back candidate))
    #+end_example
 
-   Every tree is younger than 144 hours, and is kept.
+   Every tree is younger than the 144 hours its run recorded, and is kept.
    The grace period of a tree starts when its run published, or when it was rolled back.
-3. Remove the trees older than the site's grace period.
-   With =--grace-hours 0=, as here, that is every tree; look first, then remove them:
+3. Remove the trees whose grace period is over.
+   =gc --grace-hours= gives every tree the same grace period instead of its run's; with =--grace-hours 0=, as here, every tree is past it. Look first, then remove them:
 
    #+begin_src bash
    eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0 --dry-run

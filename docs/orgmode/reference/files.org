@@ -8,7 +8,7 @@ What eb-staged-rebuild writes, and where: in the state root, beside each install
 
 ** The state root
 
-The state root is =--state-root=, or for =run= =EB_STAGED_REBUILD_STATE_ROOT=, or else =.eb-staged-rebuild= beside the software tree.
+The state root is =--state-root=, or =EB_STAGED_REBUILD_STATE_ROOT=, or else, for =run=, =.eb-staged-rebuild= beside the software tree.
 It has to be on the filesystem of the software tree, and its path must not pass through a symbolic link.
 
 | Path                               | What it holds                                                                                                                                                                                   |

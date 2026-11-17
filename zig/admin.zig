@@ -533,10 +533,24 @@ fn emptyDir(c: *Ctx, fd: sys.fd_t, dev: u64) void {
     }
 }
 
+/// _run_grace: the grace period in hours that the run recorded, or
+/// `default`. A recorded value is used only when it is a number of hours,
+/// at least 0.
+fn runGrace(j: Py, default: f64) f64 {
+    const hours: f64 = switch (pyfmt.get(j, "grace_hours") orelse return default) {
+        .int => |n| @floatFromInt(n),
+        .float => |f| f,
+        else => return default,
+    };
+    return if (hours >= 0) hours else default;
+}
+
 /// gc: remove each hidden tree whose grace period is over and, with
 /// `include_failed`, the staged tree of a failed run that published
-/// nothing; with `dry_run`, only list them. Returns the exit status.
-pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64) u8 {
+/// nothing; with `dry_run`, only list them. `grace_hours` applies to every
+/// tree, or with `run_grace` only to the trees whose run recorded no grace
+/// period and to retired module files. Returns the exit status.
+pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64, run_grace: bool) u8 {
     const a = c.a;
     const now = nowSeconds();
     const l = lock(c, state_root_in, lock_timeout);
@@ -549,6 +563,7 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
     for (journals, 0..) |j_in, ji| {
         var j = j_in;
         if (eqlStr(pyfmt.get(j, "kind"), "retire")) continue;
+        const tree_grace = (if (run_grace) runGrace(j, grace_hours) else grace_hours) * seconds_per_hour;
         var changed = false;
         const plan_v = pyfmt.get(j, "modules_plan");
         if (!pyfmt.truthy(plan_v)) continue;
@@ -582,7 +597,7 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
                 actions.append(a, .{ .path = retired, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
                 continue;
             }
-            if (now - w < grace) {
+            if (now - w < tree_grace) {
                 actions.append(a, .{ .path = retired, .action = "keep", .reason = a.print("within grace ({s})", .{why}) catch why }) catch oom();
                 continue;
             }
@@ -634,4 +649,24 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
     }
     for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
     return 0;
+}
+
+test "runGrace uses the hours a run recorded, when they are a number at least 0" {
+    const Case = struct { value: ?Py, want: f64 };
+    const cases = [_]Case{
+        .{ .value = .{ .float = 0 }, .want = 0 },
+        .{ .value = .{ .int = 2 }, .want = 2 },
+        .{ .value = .{ .float = 2.5 }, .want = 2.5 },
+        .{ .value = .{ .float = -5 }, .want = 144 },
+        .{ .value = .{ .int = -1 }, .want = 144 },
+        .{ .value = .{ .float = std.math.nan(f64) }, .want = 144 },
+        .{ .value = .{ .bool = true }, .want = 144 },
+        .{ .value = Py.s("0"), .want = 144 },
+        .{ .value = .null, .want = 144 },
+        .{ .value = null, .want = 144 },
+    };
+    for (cases) |case| {
+        const j: Py = if (case.value) |v| .{ .dict = &.{.{ .key = "grace_hours", .value = v }} } else .{ .dict = &.{} };
+        try std.testing.expectEqual(case.want, runGrace(j, 144));
+    }
 }

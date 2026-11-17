@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -34,15 +35,36 @@ def _state_root(value, software):
     return os.path.join(os.path.dirname(os.path.abspath(software)), ".eb-staged-rebuild")
 
 
+def _is_hours(value):
+    return math.isfinite(value) and value >= 0
+
+
+def _hours(text):
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {text!r}") from None
+    if not _is_hours(value):
+        raise argparse.ArgumentTypeError(f"not a number of hours, 0 or more: {text!r}")
+    return value
+
+
 def _grace(value):
     if value is not None:
         return value
-    return float(
-        os.environ.get(
-            "EB_STAGED_REBUILD_GRACE_HOURS",
-            str(DEFAULT_GRACE_HOURS),
-        )
-    )
+    text = os.environ.get("EB_STAGED_REBUILD_GRACE_HOURS", str(DEFAULT_GRACE_HOURS))
+    try:
+        hours = float(text)
+    except ValueError:
+        raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number: {text!r}") from None
+    if not _is_hours(hours):
+        raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {text!r}")
+    return hours
+
+
+def _add_state_root(parser):
+    default = os.environ.get("EB_STAGED_REBUILD_STATE_ROOT") or None
+    parser.add_argument("--state-root", default=default, required=default is None)
 
 
 def _add_common(parser):
@@ -79,7 +101,7 @@ def _parser():
             "then the unsandboxed install-path fallback"
         ),
     )
-    run_p.add_argument("--grace-hours", type=float, default=None)
+    run_p.add_argument("--grace-hours", type=_hours, default=None)
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--module", action="append", default=[], dest="module_rels", metavar="NAME/VERSION")
     run_p.add_argument("--run-id", default=None)
@@ -96,18 +118,18 @@ def _parser():
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
-    resume_p.add_argument("--state-root", required=True)
+    _add_state_root(resume_p)
     resume_p.add_argument("--lock-timeout", type=float, default=None)
     resume_p.add_argument("run_id")
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
-    back_p.add_argument("--state-root", required=True)
+    _add_state_root(back_p)
     back_p.add_argument("--lock-timeout", type=float, default=None)
     back_p.add_argument("run_id")
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
-    gc_p.add_argument("--state-root", required=True)
-    gc_p.add_argument("--grace-hours", type=float, default=None)
+    _add_state_root(gc_p)
+    gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
     gc_p.add_argument(
@@ -120,14 +142,14 @@ def _parser():
         "retire",
         help="move a module file out of the module tree after its package is published elsewhere",
     )
-    retire_p.add_argument("--state-root", required=True)
+    _add_state_root(retire_p)
     retire_p.add_argument("--module-file", required=True, help="module file to retire")
     retire_p.add_argument("--reason", default=None)
     retire_p.add_argument("--dry-run", action="store_true")
     retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
-    status_p.add_argument("--state-root", required=True)
+    _add_state_root(status_p)
     status_p.add_argument("run_id", nargs="?")
 
     resolve_p = sub.add_parser("resolve", help="print the install path a module file names")
@@ -217,6 +239,7 @@ def _dispatch(args):
             dry_run=args.dry_run,
             include_failed=args.include_failed,
             lock_timeout=args.lock_timeout,
+            run_grace=args.grace_hours is None,
         )
         for action in actions:
             print(f"{action['action']}: {action['path']} ({action['reason']})")

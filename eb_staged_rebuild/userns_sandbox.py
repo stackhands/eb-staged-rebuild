@@ -1,4 +1,5 @@
-"""Enter a user/mount-namespace sandbox and make the live trees read-only."""
+"""Enter a user/mount-namespace sandbox, make the live trees read-only, and
+run the command as the caller."""
 
 import argparse
 import ctypes
@@ -14,12 +15,18 @@ MS_REMOUNT = 1 << 5
 MS_BIND = 1 << 12
 MS_REC = 1 << 14
 MS_PRIVATE = 1 << 18
+# Linux UAPI include/uapi/linux/sched.h.
+CLONE_NEWUSER = 0x10000000
 # GNU timeout and container runtimes conventionally reserve 125 for setup errors.
 SANDBOX_SETUP_EXIT = 125
 
 
+def _libc():
+    return ctypes.CDLL(None, use_errno=True)
+
+
 def _mount(source, target, flags):
-    libc = ctypes.CDLL(None, use_errno=True)
+    libc = _libc()
     mount = libc.mount
     mount.argtypes = [
         ctypes.c_char_p,
@@ -48,6 +55,47 @@ def _protect(path):
     _mount(path, path, MS_BIND | MS_REMOUNT | MS_RDONLY)
 
 
+def _parent_id(map_path, inner):
+    """The id of the parent namespace that ``inner`` maps to in a uid_map or gid_map."""
+    with open(map_path, encoding="ascii") as handle:
+        for line in handle:
+            try:
+                first, parent, count = (int(field) for field in line.split())
+            except ValueError:
+                break
+            if first <= inner < first + count:
+                return parent + inner - first
+    raise RuntimeError(f"{map_path} does not map {inner}")
+
+
+def _write_proc(path, text):
+    with open(path, "w", encoding="ascii") as handle:
+        handle.write(text)
+
+
+def _drop_to_caller():
+    """Become the caller's uid and gid again, in a nested user namespace.
+
+    ``unshare --map-root-user`` makes the caller uid 0, which the mounts need
+    and which EasyBuild refuses to run as. The nested namespace maps the
+    caller's ids onto this namespace's 0, so the command runs as the caller
+    and, after ``exec``, without capabilities. The read-only mounts belong to
+    this namespace, which the command cannot change.
+    """
+    uid, gid = os.getuid(), os.getgid()
+    caller_uid = _parent_id("/proc/self/uid_map", uid)
+    caller_gid = _parent_id("/proc/self/gid_map", gid)
+    libc = _libc()
+    libc.unshare.argtypes = [ctypes.c_int]
+    libc.unshare.restype = ctypes.c_int
+    if libc.unshare(CLONE_NEWUSER) != 0:
+        error = ctypes.get_errno() or errno.EIO
+        raise OSError(error, f"unshare a user namespace: {os.strerror(error)}")
+    _write_proc("/proc/self/setgroups", "deny")
+    _write_proc("/proc/self/uid_map", f"{caller_uid} {uid} 1\n")
+    _write_proc("/proc/self/gid_map", f"{caller_gid} {gid} 1\n")
+
+
 def _probe():
     # The mount disappears with this private namespace. Trying to remove its
     # mountpoint before namespace exit would correctly fail with EBUSY.
@@ -57,10 +105,12 @@ def _probe():
         with open(os.path.join(root, "must-fail"), "w", encoding="utf-8"):
             pass
     except OSError as error:
-        if error.errno == errno.EROFS:
-            return 0
-        raise
-    raise RuntimeError("read-only bind mount remained writable")
+        if error.errno != errno.EROFS:
+            raise
+    else:
+        raise RuntimeError("read-only bind mount remained writable")
+    _drop_to_caller()
+    return 0
 
 
 def _parser():
@@ -75,7 +125,8 @@ def main(argv=None):
     """Run the user-namespace sandbox and return its exit status.
 
     The mounts are made private, each ``--read-only`` path is mounted read-only, and the command
-    runs. With ``--probe``, the sandbox only checks that a read-only mount refuses a write.
+    runs as the caller. With ``--probe``, the sandbox only checks that a read-only mount refuses a
+    write and that it can become the caller again.
     """
     args = _parser().parse_args(argv)
     try:
@@ -89,6 +140,7 @@ def main(argv=None):
             command = command[1:]
         if not command:
             raise RuntimeError("no sandbox command was supplied")
+        _drop_to_caller()
         os.execvpe(command[0], command, os.environ)
     except (OSError, RuntimeError) as error:
         print(f"eb-staged-rebuild user namespace: {error}", file=sys.stderr)

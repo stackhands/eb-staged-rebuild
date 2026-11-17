@@ -543,12 +543,13 @@ fn append(a: Allocator, envp: common.proc.Envp, config: Py, record_path: []const
     }) };
 }
 
-/// _pending_message: "N ledger event(s) not acknowledged (ERROR); run
-/// resume", with the error of the first pending event.
-pub fn pendingMessage(a: Allocator, left: []const Py) []const u8 {
+/// _pending_message: "N ledger event(s) not acknowledged (ERROR); RETRY",
+/// with the error of the first pending event and the command that delivers
+/// it, such as "run resume".
+pub fn pendingMessage(a: Allocator, left: []const Py, retry: []const u8) []const u8 {
     var e: std.ArrayList(u8) = .empty;
     pyfmt.str(&e, a, pyfmt.get(left[0], "error")) catch oom();
-    return a.print("{d} ledger event(s) not acknowledged ({s}); run resume", .{ left.len, e.items }) catch "";
+    return a.print("{d} ledger event(s) not acknowledged ({s}); {s}", .{ left.len, e.items, retry }) catch "";
 }
 
 test "parseSummary" {

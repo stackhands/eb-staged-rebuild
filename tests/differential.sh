@@ -111,6 +111,10 @@ for c in run resume rollback status gc retire; do compare "${c} -h" "${c}" -h; d
 zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")
 if "${TOOL_BIN}" --version | grep -qF -- "${zon_version}"; then echo "same version as build.zig.zon"; else echo "DIFF version: build.zig.zon says ${zon_version}"; diffs=$((diffs + 1)); fi
 compare "unknown command" bogus
+compare "a negative number for a command" -5
+compare "a dash for a command" -
+compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
+compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
@@ -286,11 +290,113 @@ compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run again" rollback --state-root @ROOT@/state r5
 # The module list from eb --dry-run alone: wrapped as rich wraps it off a
-# terminal, and with --robot listing installed dependencies as [x].
+# terminal, and with --robot listing installed dependencies as [x]. The
+# dependencies marked [ ] are kept only if eb --extended-dry-run builds them.
 compare_admin "run, wrapped dry-run lines" env FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id w1 --skip-live-check -- demo-1.eb
 compare_admin "rollback the wrapped run" rollback --state-root @ROOT@/state w1
 compare_admin "run, --robot with installed dependencies" env FAKE_EB_DEPS=M4/1.4.20,GCCcore/15.2.0 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d1 --skip-live-check -- demo-1.eb --robot
 compare_admin "rollback the --robot run" rollback --state-root @ROOT@/state d1
+compare_admin "run, --robot with dependencies eb would not build" env FAKE_EB_DEPS=GCCcore/15.2.0 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d2 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the run with unbuilt dependencies" rollback --state-root @ROOT@/state d2
+compare_admin "run, --robot, wrapped extended dry-run lines" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d3 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the wrapped --robot run" rollback --state-root @ROOT@/state d3
+compare_admin "run, --robot with a missing dependency eb would build" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d4 --skip-live-check -- demo-1.eb --robot
+compare_admin "run, --robot, the extended dry run fails" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_XFAIL=31 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d5 --skip-live-check -- demo-1.eb --robot
+# With rich, EasyBuild colours its output once FORCE_COLOR is set and not
+# empty, even to 0: the dry runs get EASYBUILD_OUTPUT_STYLE=basic, the
+# build keeps the caller's style, and escape sequences that reach the
+# module preflight all the same, as with --output-style=rich, are left out.
+compare_admin "run, --robot with FORCE_COLOR=0" env FAKE_EB_RICH=1 FORCE_COLOR=0 TERM=xterm-256color EASYBUILD_OUTPUT_STYLE=rich FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_STYLE=@ROOT@/styles @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c1 --skip-live-check -- demo-1.eb --robot
+compare_admin "the output style each eb run got" env cat @ROOT@/styles
+compare_admin "remove the record of output styles" env rm @ROOT@/styles
+compare_admin "rollback the run with FORCE_COLOR=0" rollback --state-root @ROOT@/state c1
+compare_admin "run, --robot, --output-style=rich with FORCE_COLOR=1" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c2 --skip-live-check -- demo-1.eb --robot --output-style=rich
+compare_admin "rollback the run with --output-style=rich" rollback --state-root @ROOT@/state c2
+compare_admin "run, --module, --robot with FORCE_COLOR=1 and a missing dependency eb would build" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c3 --skip-live-check --module demo/1 -- demo-1.eb --robot
+# EasyBuild finds the dependencies installed in the live tree by their module
+# files: all/ under --modules, or the suffix EasyBuild reads.
+compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the MODULEPATH run" rollback --state-root @ROOT@/state m1
+compare_admin "run, MODULEPATH with the suffix EasyBuild reads" env MODULEPATH=/elsewhere/modules/all EASYBUILD_SUFFIX_MODULES_PATH=mods FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m2 --skip-live-check --module demo/1 -- demo-1.eb --suffix-modules-path one
+compare_admin "rollback the run with a modules suffix" rollback --state-root @ROOT@/state m2
+# Relative trees reach EasyBuild, the sandbox and the journal as absolute
+# paths, so the run can be rolled back from any directory.
+compare_admin "run, relative trees" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend installpath --eb @ROOT@/eb --run-id rel1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run on relative trees from another directory" env -C @ROOT@/state @CMD@ rollback --state-root @ROOT@/state rel1
+compare_admin "run --dry-run, userns, relative trees" run --software software --modules modules --state-root state --backend userns --dry-run -- demo-1.eb
+compare_admin "run, userns, relative trees" env FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend userns --eb @ROOT@/eb --run-id rel2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the userns run on relative trees" rollback --state-root state rel2
+# EB_STAGED_REBUILD_FAIL_AT is a test hook that neither tool reads.
+compare_admin "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" env EB_STAGED_REBUILD_FAIL_AT=build.invoke @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with the test hook set" rollback --state-root @ROOT@/state f1
+# A rollback needs the run's tree live: a later run is rolled back first.
+compare_admin "run, an earlier run" env FAKE_EB_PAYLOAD=earlier @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, a later run" env FAKE_EB_PAYLOAD=later @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the earlier run while the later one is live" rollback --state-root @ROOT@/state o1
+compare_admin "rollback the later run" rollback --state-root @ROOT@/state o2
+compare_admin "move the marker of the earlier run away" env mv @ROOT@/software/demo/1/.eb-staged-rebuild-complete @ROOT@/marker
+compare_admin "rollback, the live tree has no marker of the run" rollback --state-root @ROOT@/state o1
+compare_admin "put the marker back" env mv @ROOT@/marker @ROOT@/software/demo/1/.eb-staged-rebuild-complete
+compare_admin "rollback the earlier run after the later one" rollback --state-root @ROOT@/state o1
+# gc keeps a tree for the grace period its run recorded. --grace-hours
+# replaces it, EB_STAGED_REBUILD_GRACE_HOURS does not, and a recorded value
+# that is not a number of hours, at least 0, is not used.
+compare_admin "run, a grace period of 0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g1 --skip-live-check --grace-hours 0 --module demo/1 -- demo-1.eb
+compare_admin "gc, the run's grace period" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of the run's" gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, the environment does not replace the run's" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "record a grace period below 0" env python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["grace_hours"] = -5; json.dump(d, open(p, "w"))' @ROOT@/state/runs/g1/journal.json
+compare_admin "gc, a recorded grace period below 0" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+# A grace period given as an option or in EB_STAGED_REBUILD_GRACE_HOURS must
+# be a number of hours, 0 or more. A word that looks like a negative number
+# is an option's value, as argparse takes it.
+compare_admin "gc, --grace-hours below 0" gc --state-root @ROOT@/state --grace-hours -5 --dry-run
+compare_admin "gc, --grace-hours=-5" gc --state-root @ROOT@/state --grace-hours=-5 --dry-run
+compare_admin "gc, --grace-hours -1e3" gc --state-root @ROOT@/state --grace-hours -1e3 --dry-run
+compare_admin "gc, --grace-hours nan" gc --state-root @ROOT@/state --grace-hours nan --dry-run
+compare_admin "gc, --grace-hours inf" gc --state-root @ROOT@/state --grace-hours inf --dry-run
+compare_admin "gc, --grace-hours -inf" gc --state-root @ROOT@/state --grace-hours -inf --dry-run
+compare_admin "gc, --grace-hours -0" gc --state-root @ROOT@/state --grace-hours -0 --dry-run
+compare_admin "gc, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, nan in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=nan @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, inf and white space in the environment" env $'EB_STAGED_REBUILD_GRACE_HOURS= inf\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=5h @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, an empty grace period in the environment" env EB_STAGED_REBUILD_GRACE_HOURS= @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that needs quoting" env $'EB_STAGED_REBUILD_GRACE_HOURS=it\'s\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, a bad --lock-timeout before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --lock-timeout x --dry-run
+compare_admin "gc, --lock-timeout -5" gc --state-root @ROOT@/state --lock-timeout -5 --dry-run
+compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --grace-hours -5 --dry-run -- demo-1.eb
+compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=abc @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
+compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
+compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with a grace period of -0 hours" rollback --state-root @ROOT@/state g2
+# EB_STAGED_REBUILD_STATE_ROOT is the default of --state-root for every
+# command: --state-root wins, an empty value is no default, and the usage
+# shows the option in brackets.
+compare_admin "run, for the state root from the environment" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id s1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "status, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status s1
+compare_admin "resume, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume s1
+compare_admin "gc, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --dry-run
+compare_admin "retire --dry-run, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire --module-file @ROOT@/modules/all/demo/1.lua --dry-run
+compare_admin "rollback, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback s1
+compare_admin "status, --state-root instead of the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/nostate @CMD@ status --state-root @ROOT@/state s1
+compare_admin "status, an empty state root in the environment" env EB_STAGED_REBUILD_STATE_ROOT= @CMD@ status
+compare_admin "status --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --help
+compare_admin "status, an unknown option with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --nope
+compare_admin "resume --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume --help
+compare_admin "rollback, no run id with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback
+compare_admin "gc, bad grace with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --grace-hours x
+compare_admin "retire, no module file with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire
+# A module to rebuild has to be an installed directory; the refusal says
+# what the path is instead, as "run, no installed target" does for one
+# that is missing.
+compare_admin "put a file where an installation would be" env touch @ROOT@/software/demo/file
+compare_admin "run, --module names a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id n2 --skip-live-check --module demo/file -- demo-1.eb
+compare_admin "remove the file" env rm @ROOT@/software/demo/file
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
@@ -321,6 +427,26 @@ ledger_restore
 compare_admin "run, the build changes the ledger policy" env FAKE_EB_LEDGER_EDIT=@ROOT@/ledger.json @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r15 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
 ledger_restore
 compare_admin "ledger records after the policy cases" env cat @ROOT@/ledger.jsonl
+# A correction the ledger did not acknowledge is delivered by rollback, not
+# resume: refused before anything changes when the ledger is required, rolled
+# back with its records waiting when it is not. The line is printed once.
+for impl in py zig; do
+    echo fail-before > "${work}/${impl}/plan4"
+    printf 'fail-before\nfail-before\n' > "${work}/${impl}/plan5"
+    printf 'ok\nfail-before\n' > "${work}/${impl}/plan6"
+done
+compare_admin "run, a ledger run to roll back" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r16 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the ledger refuses the correction" env FAKE_LEDGER_PLAN=@ROOT@/plan4 @CMD@ rollback --state-root @ROOT@/state r16
+compare_admin "rollback again delivers the correction" rollback --state-root @ROOT@/state r16
+ledger_edit required false
+compare_admin "run, an optional ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r17 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the correction records wait" env FAKE_LEDGER_PLAN=@ROOT@/plan5 @CMD@ rollback --state-root @ROOT@/state r17
+compare_admin "rollback again delivers the waiting records" rollback --state-root @ROOT@/state r17
+ledger_restore
+compare_admin "run, the finished record waits" env FAKE_LEDGER_PLAN=@ROOT@/plan6 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r18 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume delivers the finished record" resume --state-root @ROOT@/state r18
+compare_admin "rollback the run whose finished record waited" rollback --state-root @ROOT@/state r18
+compare_admin "ledger records after the rollback cases" env cat @ROOT@/ledger.jsonl
 # A generation-pointer record (schema 3) is not applied as a directory swap.
 for impl in py zig; do
     mkdir -p "${work}/${impl}/state/runs/foreign"
@@ -349,6 +475,7 @@ compare_admin "run, bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROO
 compare_admin "run, bwrap, 5.3 layout without stage keys" ${bw} FAKE_EB_VERSION=5.3.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b2 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, unknown release without stage keys" ${bw} FAKE_EB_VERSION=5.5.0 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b3 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap, 5.4.1 without stage keys" ${bw} FAKE_EB_VERSION=5.4.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b7 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, --robot leaves no mount point behind" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b9 --skip-live-check -- demo-1.eb --robot
 compare_admin "run, bwrap, overlay" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_OVERLAY=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, bwrap probe fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b5 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, auto prefers bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --run-id b6 --skip-live-check --module demo/1 -- demo-1.eb

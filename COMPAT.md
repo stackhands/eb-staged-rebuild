@@ -21,6 +21,7 @@ for whole runs, the sha256 of module text that names each fixture's own path.
 | `--help` text | wrapped to the terminal width (`COLUMNS`) | the 80-column text |
 | `--version` | `eb-staged-rebuild VERSION` | `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`, `COMMIT` from `-Dcommit` (`unknown` without it); the first two words are unchanged |
 | usage lines and argparse errors | as the running Python's argparse prints them, which changes between releases | as Python 3.14 prints them |
+| a word that starts with `-` and looks like a number, such as `-5` or `-1e3` | a value, not an option, when the running Python's argparse takes it for a negative number: Python 3.12 does for `-5` and `-.5`, not `-1e3` | a value when `-` is followed by a digit or by `.` and a digit, as Python 3.14 decides |
 | a module file or journal that is not UTF-8 | a Python traceback, exit 1 | `eb-staged-rebuild: PATH is not UTF-8 text`, exit 2 for `resolve`; `journal cannot be read: PATH: not UTF-8 text`, exit 2 for `status` |
 | a journal that is not valid JSON | `journal cannot be read: PATH: ` and the JSON decoder's message | the same start, then `not valid JSON` |
 | a journal value that `status` cannot format (for example a `null` status) | a Python traceback, exit 1 | `Traceback: TypeError: ...` on stderr, exit 1 |
