@@ -17,6 +17,7 @@ const fsx = common.fsx;
 const oom = @import("oom.zig").oom;
 const Allocator = std.mem.Allocator;
 
+/// Refused, with the reason in the caller's `why`, or out of memory.
 pub const Error = error{ Refused, OutOfMemory };
 
 fn pathChar(c: u8) bool {
@@ -25,6 +26,8 @@ fn pathChar(c: u8) bool {
 
 const skip_name = ".eb-staged-rebuild-complete";
 
+/// A prefix to rewrite: `old`, the generation prefix the build recorded,
+/// and `new`, the stable prefix.
 pub const Pair = struct { old: []const u8, new: []const u8 };
 
 fn partsOf(a: Allocator, path: []const u8) []const []const u8 {

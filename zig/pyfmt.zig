@@ -56,6 +56,8 @@ pub fn reprStr(out: *std.ArrayList(u8), a: Allocator, s: []const u8) Allocator.E
     try out.append(a, q);
 }
 
+/// repr(v): None, True and False, quoted text, and lists and dicts, as
+/// Python prints them.
 pub fn repr(out: *std.ArrayList(u8), a: Allocator, v: Py) Allocator.Error!void {
     switch (v) {
         .null => try out.appendSlice(a, "None"),
@@ -107,6 +109,7 @@ pub fn truthy(v: ?Py) bool {
     };
 }
 
+/// Out of memory, or TypeError for a value Python would not format.
 pub const FormatError = Allocator.Error || error{TypeError};
 
 /// f"{v:<width}": text, int, float and bool take a width; None, lists and
@@ -125,6 +128,7 @@ pub fn leftPad(out: *std.ArrayList(u8), a: Allocator, v: ?Py, width: usize) Form
     if (chars < width) try out.appendNTimes(a, ' ', width - chars);
 }
 
+/// The value of `key` in a dict, or null.
 pub fn get(v: Py, key: []const u8) ?Py {
     if (v != .dict) return null;
     for (v.dict) |e| if (std.mem.eql(u8, e.key, key)) return e.value;

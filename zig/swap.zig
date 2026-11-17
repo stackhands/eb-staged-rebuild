@@ -13,13 +13,19 @@ const sys = common.sys;
 const atomic = common.atomic;
 const Allocator = std.mem.Allocator;
 
+/// The suffix of the hold name, `<staged>.fallback-old`, at which the
+/// three-rename fallback keeps the live tree between its renames.
 pub const fallback_hold_suffix = ".fallback-old";
 
+/// How a swap was made: one renameat2 RENAME_EXCHANGE, or three renames.
 pub const Method = enum { @"renameat2-exchange", @"rename-fallback" };
 
 /// Why a swap stopped; set before an error is returned.
 pub const Why = struct { msg: []const u8 = "" };
 
+/// Refused: the two paths are not sibling real directories; Failed: the
+/// exchange or a rename failed, and the names are as they were;
+/// NeedsIntervention: the names could not be put back.
 pub const Error = error{ Refused, NeedsIntervention, Failed };
 
 fn fail(a: Allocator, why: *Why, comptime kind: Error, comptime f: []const u8, args: anytype) Error {
@@ -53,6 +59,7 @@ pub const Ops = struct {
 
 var test_ops: Ops = .{};
 const real_ops: Ops = .{};
+/// The calls in use: replaceable in a test build, the real ones otherwise.
 pub const ops = if (atomic.replaceable) &test_ops else &real_ops;
 
 fn realExchange(first: [:0]const u8, second: [:0]const u8) linux.E {

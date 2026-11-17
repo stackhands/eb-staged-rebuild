@@ -13,6 +13,9 @@ const fsx = common.fsx;
 const state = common.state;
 const Allocator = std.mem.Allocator;
 
+/// The lock's own errors, Unsafe for a symbolic link in the state root's
+/// path, and Gate for a `.lock` that is not a regular file with one hard
+/// link.
 pub const Error = state.RootLock.AcquireError || error{ Unsafe, Gate };
 
 fn isLink(path: []const u8) bool {

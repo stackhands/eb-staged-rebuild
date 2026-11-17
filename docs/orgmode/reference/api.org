@@ -8,6 +8,7 @@ The API pages are generated from the code on every build, so they match the comm
 A declaration's doc comment is its description.
 
 - [[file:api/zig/index.md][Zig API]]: every =pub= declaration, one page per source file, read with the compiler's own parser by =docs/tools/zig_api.zig=, each linked to its source line at that commit.
+  =oom.zig=, which the other files import for its one function, and =aclmodel.zig=, which only the test builds use, have no page of their own.
 - [[autodoc:/][Zig autodoc]]: the same declarations in the browser =zig build docs= makes, with search and source views.
 
 #+begin_export rst

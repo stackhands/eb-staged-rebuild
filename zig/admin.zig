@@ -19,6 +19,9 @@ const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
 
+/// The grace period in hours when neither --grace-hours nor
+/// EB_STAGED_REBUILD_GRACE_HOURS gives one: the Python tool's
+/// DEFAULT_GRACE_HOURS, a job of up to 120 hours and a day more.
 pub const default_grace_hours: f64 = 120 + 24;
 const seconds_per_hour: f64 = 3600;
 
@@ -31,6 +34,7 @@ fn log(comptime f: []const u8, args: anytype) void {
     cli.out("eb-staged-rebuild: " ++ f ++ "\n", args);
 }
 
+/// The time in seconds since the epoch, as Python's time.time().
 pub fn nowSeconds() f64 {
     var ts: linux.timespec = undefined;
     _ = linux.clock_gettime(.REALTIME, &ts);
@@ -61,6 +65,8 @@ pub fn abspath(a: Allocator, p: []const u8) []const u8 {
     return a.print("/{s}", .{joined}) catch full;
 }
 
+/// Whether `child` is `parent` or a path under it, both made absolute as
+/// abspath makes them; symbolic links are not followed.
 pub fn isWithin(a: Allocator, child: []const u8, parent: []const u8) bool {
     const c = abspath(a, child);
     const p = abspath(a, parent);
@@ -128,11 +134,15 @@ fn failStep(ctx: ?*anyopaque, step: []const u8) bool {
     return false;
 }
 
+/// What a command hands down: the allocator, the environment, and the
+/// fault hooks the tests reach by name.
 pub const Ctx = struct {
     a: Allocator,
     env: probe.Env,
     pause: PauseCtx,
 
+    /// The fault hooks: pause at EB_STAGED_REBUILD_PAUSE_AT and, in the
+    /// -Dtest-ops artifact only, fail at EB_STAGED_REBUILD_FAIL_AT.
     pub fn faults(c: *Ctx) atomic.Faults {
         return .{ .ctx = &c.pause, .reach_fn = reachStep, .fail_fn = if (atomic.replaceable) failStep else null };
     }
@@ -275,6 +285,9 @@ fn move(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8) 
     atomic.fsyncDir(dirname(source)) catch {};
 }
 
+/// retire: move a module file aside under a retire journal, and leave its
+/// software directory in place; with `dry_run`, only say what would be
+/// retired. Returns the exit status.
 pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reason: ?[]const u8, dry_run: bool, lock_timeout: ?f64) u8 {
     const a = c.a;
     const state_root = abspath(a, state_root_in);
@@ -340,6 +353,8 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
 
 // ---- rollback -------------------------------------------------------------
 
+/// rollback: hand a run journal to run.zig's rollbackRun, or move a
+/// retired module file back. Returns the exit status.
 pub fn rollback(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
     const a = c.a;
     const path = journalPath(a, state_root, run_id);
@@ -518,6 +533,9 @@ fn emptyDir(c: *Ctx, fd: sys.fd_t, dev: u64) void {
     }
 }
 
+/// gc: remove each hidden tree whose grace period is over and, with
+/// `include_failed`, the staged tree of a failed run that published
+/// nothing; with `dry_run`, only list them. Returns the exit status.
 pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64) u8 {
     const a = c.a;
     const now = nowSeconds();

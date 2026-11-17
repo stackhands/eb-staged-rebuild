@@ -20,9 +20,13 @@ const atomic = common.atomic;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
 
+/// The exit status of a run whose required ledger records are still
+/// pending.
 pub const pending_exit: u8 = 75;
 const output_limit = 64 * 1024;
 
+/// Refused or NeedsIntervention, with the reason in the caller's `why`, or
+/// out of memory.
 pub const Error = error{ Refused, NeedsIntervention, OutOfMemory };
 
 fn s(v: ?Py) []const u8 {
@@ -162,6 +166,7 @@ pub fn loadConfig(a: Allocator, path_in: []const u8, why: *[]const u8) Error!Py 
     return config;
 }
 
+/// Whether two values dump to the same sorted JSON.
 pub fn sameValue(a: Allocator, x: Py, y: Py) bool {
     const dx = json.dumps(a, x, 0, true) catch return false;
     const dy = json.dumps(a, y, 0, true) catch return false;
@@ -193,6 +198,7 @@ fn utc(a: Allocator, t: f64) []const u8 {
     return a.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{ day.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() }) catch "";
 }
 
+/// The `finished` records a rollback corrects, by module file.
 pub const Corrects = std.StringArrayHashMapUnmanaged(Py);
 
 /// publication_records: one record per published module file; with
@@ -254,6 +260,9 @@ fn outboxPath(a: Allocator, run_dir: []const u8) []const u8 {
     return std.fs.path.join(a, &.{ run_dir, "outbox.json" }) catch "";
 }
 
+/// load: the run's outbox, or an empty one when there is none yet; an
+/// outbox that cannot be read, or whose schema is not 1, needs
+/// intervention.
 pub fn load(a: Allocator, run_dir: []const u8, why: *[]const u8) Error!Py {
     const path = outboxPath(a, run_dir);
     if (fsx.statAt(fsx.cwd, path, false)) |_| {} else |_| return .{ .dict = try a.dupe(Py.Entry, &.{ .{ .key = "schema", .value = .{ .int = 1 } }, .{ .key = "events", .value = .{ .list = &.{} } } }) };
@@ -292,6 +301,7 @@ fn save(a: Allocator, run_dir: []const u8, data: Py, faults: atomic.Faults, step
     };
 }
 
+/// pending: the events of an outbox not yet acknowledged, in order.
 pub fn pendingEvents(a: Allocator, data: Py) []const Py {
     var out: std.ArrayList(Py) = .empty;
     const events = pyfmt.get(data, "events") orelse return &.{};
@@ -299,6 +309,8 @@ pub fn pendingEvents(a: Allocator, data: Py) []const Py {
     return out.items;
 }
 
+/// enqueue: add each record whose event id the outbox does not hold yet,
+/// as pending, and save the outbox when one was added.
 pub fn enqueue(a: Allocator, run_dir: []const u8, records: []const Py, faults: atomic.Faults, step: []const u8, why: *[]const u8) Error!void {
     const data = try load(a, run_dir, why);
     var events: std.ArrayList(Py) = .empty;
@@ -531,6 +543,8 @@ fn append(a: Allocator, envp: common.proc.Envp, config: Py, record_path: []const
     }) };
 }
 
+/// _pending_message: "N ledger event(s) not acknowledged (ERROR); run
+/// resume", with the error of the first pending event.
 pub fn pendingMessage(a: Allocator, left: []const Py) []const u8 {
     var e: std.ArrayList(u8) = .empty;
     pyfmt.str(&e, a, pyfmt.get(left[0], "error")) catch oom();

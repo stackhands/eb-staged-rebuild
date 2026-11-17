@@ -4,6 +4,8 @@
 const std = @import("std");
 const cli = @import("zig_common").cli;
 
+/// Print "eb-staged-rebuild: out of memory" on stderr and exit with status
+/// 1.
 pub fn oom() noreturn {
     cli.err("eb-staged-rebuild: out of memory\n", .{});
     std.process.exit(1);
