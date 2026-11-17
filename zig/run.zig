@@ -1484,6 +1484,7 @@ pub fn rollbackRun(r: *R) E!Result {
         }
     }
     if (!std.mem.eql(u8, r.str("state"), "complete")) return r.refuse("run {s} is {s}; only a complete run can roll back", .{ run_id, r.str("state") });
+    try checkLiveTrees(r);
     if (config) |c| if (finished.count() > 0) {
         const left = try record(r, c, try records(r, c, "started", &finished), "outbox.rollback_started");
         if (left.len > 0 and required(c)) {
@@ -1505,6 +1506,27 @@ pub fn rollbackRun(r: *R) E!Result {
     const m = try a.print("run {s} rolled back; replacement kept at its retired path", .{run_id});
     log("{s}", .{m});
     return recordRollback(r, config, &finished, started, m);
+}
+
+/// _check_live_trees: refuse to roll back a run whose tree is no longer the
+/// live one. Each live tree has to be the run's, or the run's tree has to be
+/// at its retired name already, where an exchange the journal did not
+/// record put it. A later run that replaced the tree is rolled back first.
+fn checkLiveTrees(r: *R) E!void {
+    const a = r.a;
+    const run_id = r.str("run_id");
+    for (r.list("modules_plan")) |m| {
+        const rel = s(pyfmt.get(m, "rel"));
+        const live = s(pyfmt.get(m, "live_software"));
+        const retired = s(pyfmt.get(m, "retired"));
+        try recoverPair(r, live, retired);
+        const live_run = treeRunId(a, live);
+        if (live_run != null and std.mem.eql(u8, live_run.?, run_id)) continue;
+        const retired_run = treeRunId(a, retired);
+        if (retired_run != null and std.mem.eql(u8, retired_run.?, run_id)) continue;
+        if (live_run) |other| return r.refuse("run {s} cannot roll back {s}: {s} holds the tree of run {s}; roll back {s} first", .{ run_id, rel, live, other, other });
+        return r.refuse("run {s} cannot roll back {s}: {s} is not the tree it published", .{ run_id, rel, live });
+    }
 }
 
 /// _record_rollback: finish the correction, or abort a publication that

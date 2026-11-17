@@ -51,6 +51,7 @@ The lists it copies are the NFSv4 list of IBM Storage Scale, =system.gpfs_nfs4_a
 *** Rollback
 
 =rollback= of a =complete= run does the same in reverse: it exchanges each hidden tree back into the stable path, last module first, puts back each module file from its backup, and removes the links the run made.
+First it checks, by the completion marker, that each stable path holds the tree the run published, and refuses before it changes or records anything when one does not: after a later run of the same installation, that later run is rolled back first.
 A failure part way exchanges back to the published state, and the rollback can run again.
 The tree the run published stays under its hidden name until =gc= removes it.
 With a ledger, the rollback adds a =correction= of each =finished= record.
@@ -68,7 +69,6 @@ With a ledger, the rollback adds a =correction= of each =finished= record.
 
 - Other programs do not take the state root's lock: one that reads the module files while a run publishes several of them can see some new and some old.
 - Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames.
-- A rollback checks that the run is =complete=, not that its tree is still the live one: after a later run of the same installation, roll back that later run first; [[file:../howto/roll-back.org][Put the previous installation back]] says what happens otherwise.
 - The copy of access-control lists has been tested on ext4 only.
 
 ** Further reading

@@ -112,6 +112,7 @@ case_resume() {
 }
 
 case_rollback() {
+    step 2 eb-staged-rebuild rollback --state-root "$STATE" example-2
     step 0 eb-staged-rebuild rollback --state-root "$STATE" example-3
     step 0 eb-staged-rebuild status --state-root "$STATE" example-3
     step 0 ls -A "$SITE/software/Example"

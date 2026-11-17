@@ -304,6 +304,15 @@ compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/else
 compare_admin "rollback the MODULEPATH run" rollback --state-root @ROOT@/state m1
 compare_admin "run, MODULEPATH with the suffix EasyBuild reads" env MODULEPATH=/elsewhere/modules/all EASYBUILD_SUFFIX_MODULES_PATH=mods FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m2 --skip-live-check --module demo/1 -- demo-1.eb --suffix-modules-path one
 compare_admin "rollback the run with a modules suffix" rollback --state-root @ROOT@/state m2
+# A rollback needs the run's tree live: a later run is rolled back first.
+compare_admin "run, an earlier run" env FAKE_EB_PAYLOAD=earlier @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, a later run" env FAKE_EB_PAYLOAD=later @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the earlier run while the later one is live" rollback --state-root @ROOT@/state o1
+compare_admin "rollback the later run" rollback --state-root @ROOT@/state o2
+compare_admin "move the marker of the earlier run away" env mv @ROOT@/software/demo/1/.eb-staged-rebuild-complete @ROOT@/marker
+compare_admin "rollback, the live tree has no marker of the run" rollback --state-root @ROOT@/state o1
+compare_admin "put the marker back" env mv @ROOT@/marker @ROOT@/software/demo/1/.eb-staged-rebuild-complete
+compare_admin "rollback the earlier run after the later one" rollback --state-root @ROOT@/state o1
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

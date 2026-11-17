@@ -157,6 +157,7 @@ Put back what the run =RUN_ID= replaced: the previous trees and module files of 
 
 The replacement stays at the hidden name =software/NAME/.VERSION.RUN_ID= until =gc= removes it.
 A run in any other state is refused, except one that is rolled back already: that prints so and exits 0.
+So is a run whose tree is no longer the one at the stable path, such as one a later run of the same installation replaced, before anything changes: roll back the later run first.
 
 *** gc
 

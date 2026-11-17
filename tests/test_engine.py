@@ -297,6 +297,41 @@ class RollbackTests(unittest.TestCase):
             self.assertEqual(_payload(journal["modules_plan"][0]["retired"]), "v1\n")
             self.assertEqual(rollback(state, "run1").returncode, 0)
 
+    def test_a_run_a_later_run_replaced_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            row = installed["demo/1"]
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            later = installpath_builder(
+                [{"rel": "demo/1", "payload": "v2\n", "module_rel": "all/demo/1.lua", "name": "demo"}]
+            )
+            self.assertEqual(run(_spec(software, modules, state, later, run_id="run2")).returncode, 0)
+            with open(row["module"], encoding="utf-8") as handle:
+                module_text = handle.read()
+            with self.assertRaisesRegex(Refused, "holds the tree of run run2; roll back run2 first"):
+                rollback(state, "run1")
+            self.assertEqual(_payload(row["install"]), "v2\n")
+            with open(row["module"], encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), module_text)
+            self.assertEqual(load_journal(journal_path(state, "run1"))["state"], "complete")
+            self.assertEqual(rollback(state, "run2").returncode, 0)
+            self.assertEqual(_payload(row["install"]), "v1\n")
+            self.assertEqual(rollback(state, "run1").returncode, 0)
+            TransactionTests().assert_old_live(installed)
+            for run_id in ("run1", "run2"):
+                self.assertEqual(load_journal(journal_path(state, run_id))["state"], "rolled_back")
+
+    def test_a_live_tree_the_run_did_not_publish_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            row = installed["demo/1"]
+            self.assertEqual(run(_spec(software, modules, state, builder)).returncode, 0)
+            os.unlink(os.path.join(row["install"], ".eb-staged-rebuild-complete"))
+            with self.assertRaisesRegex(Refused, "is not the tree it published"):
+                rollback(state, "run1")
+            self.assertEqual(_payload(row["install"]), "v1\n")
+            self.assertEqual(load_journal(journal_path(state, "run1"))["state"], "complete")
+
     def test_every_rollback_failure_restores_published_tree(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, state, _installed, builder = _fixture(root)

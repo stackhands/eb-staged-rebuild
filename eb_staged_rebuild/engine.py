@@ -1323,6 +1323,29 @@ def _restore_published_baseline(journal):
     _create_links(journal, silent)
 
 
+def _check_live_trees(journal):
+    """Refuse to roll back a run whose tree is no longer the live one.
+
+    Each live tree has to be the run's, or the run's tree has to be at its
+    retired name already, where an exchange the journal did not record put
+    it. A later run that replaced the tree is rolled back first.
+    """
+    run_id = journal["run_id"]
+    for mod in journal.get("modules_plan") or []:
+        recover_interrupted_swap(mod["live_software"], mod["retired"])
+        live_run = _tree_run_id(mod["live_software"])
+        if live_run == run_id or _tree_run_id(mod["retired"]) == run_id:
+            continue
+        if live_run is not None:
+            raise Refused(
+                f"run {run_id} cannot roll back {mod['rel']}: {mod['live_software']} holds the tree "
+                f"of run {live_run}; roll back {live_run} first"
+            )
+        raise Refused(
+            f"run {run_id} cannot roll back {mod['rel']}: {mod['live_software']} is not the tree it published"
+        )
+
+
 def _record_rollback(journal, faults, publisher, finished, started, now, message):
     """After the restore: finish the correction, or abort a publication that never finished."""
     if publisher is None:
@@ -1380,6 +1403,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
             return _record_rollback(journal, faults, publisher, finished, started, now, message)
         if journal["state"] != "complete":
             raise Refused(f"run {run_id} is {journal['state']}; only a complete run can roll back")
+        _check_live_trees(journal)
         if finished:
             records = publication_records(publisher.config, journal, "started", now(), corrects=finished)
             left = _record(journal, faults, publisher, records, "outbox.rollback_started")

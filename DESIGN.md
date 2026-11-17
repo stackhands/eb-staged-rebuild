@@ -136,7 +136,11 @@ old tree.
 
 `rollback` exchanges each retired directory back into the stable path in
 reverse order and restores module files. A failed rollback reverses its own
-completed operations, leaving the published tree live.
+completed operations, leaving the published tree live. Before any change, and
+before any ledger record, it checks every module: the stable path holds the
+run's tree, by its completion marker, or the run's tree is at the retired name
+already, where an exchange the journal did not record put it. Otherwise it
+refuses, so a later run of the same installation is rolled back first.
 
 `gc` only removes the hidden retired sibling recorded in a journal. It never
 removes the stable path. The default grace, 144 hours, is an assumed longest
