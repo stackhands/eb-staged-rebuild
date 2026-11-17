@@ -200,7 +200,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | TransactionTests.test_a_module_that_is_no_directory_is_refused_for_what_it_is | differential "run, no installed target", "run, --module names a file"; `zig/run.zig` test "notADirectory says what the path is instead" |
 | TransactionTests.test_symlinked_state_root_is_refused | differential "run, symlinked state root" |
 | RollbackTests.test_rollback_restores_exact_old_directory | differential "rollback the run", "rollback the run again" |
-| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback the earlier run after the later one" |
+| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback a run a later run replaced", "rollback the earlier run after the later one" |
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
@@ -215,10 +215,10 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
 | GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_that_is_not_a_number | differential "gc, a grace period in the environment that is not a number", "gc, an empty grace period in the environment", "gc, a grace period in the environment that needs quoting" |
 | GarbageCollectionTests.test_run_refuses_an_environment_grace_period_that_is_not_a_number | differential "run, a grace period in the environment that is not a number" |
-| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
+| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "verify, the state root from the environment", "list, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
 | StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
 | StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
-| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
+| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment", "verify --help, the state root from the environment", "list --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
 
 ### tests/test_retire.py
 
@@ -278,6 +278,16 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 |---|---|
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
+
+### tests/test_inuse.py
+
+The scan itself runs against both builds in `tests/test_generations_cli.py` (`GcCliTests`) and in
+differential "gc --check-in-use keeps a tree and a generation in use".
+
+| test | replacement |
+|---|---|
+| ParsingTests.test_mountinfo_fields_are_unescaped_and_a_trees_path_follows_the_mount_that_holds_it | `zig/inuse.zig` test "mountinfo fields are unescaped and a tree's path on its device follows the mount that holds it" |
+| ParsingTests.test_a_maps_line_names_the_file_after_its_first_five_fields | `zig/inuse.zig` test "a maps line names the file after its first five fields" |
 
 ### tests/test_prefix.py
 

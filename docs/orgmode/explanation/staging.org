@@ -20,7 +20,7 @@ Each run has a /generation/, =<state-root>/generations/RUN_ID=, and EasyBuild in
 The live tree is replaced only once the new one is complete:
 
 #+CAPTION: One run, from the build to the removal of the old tree.
-#+ATTR_RST: :alt Before the run the stable path is the installation jobs use. EasyBuild installs into the run's generation. If the build failed, the tree is incomplete or the live tree changed, the run fails and nothing live changes. Otherwise the new module file is prepared with root set to the stable path, and paths the build wrote into files are changed to it; the new tree moves beside the live one under a hidden name; renameat2 with RENAME_EXCHANGE swaps the two names; the new module file replaces the old one with one rename; the old tree waits under the hidden name until rollback swaps it back or gc removes it after the grace period
+#+ATTR_RST: :alt Before the run the stable path is the installation jobs use. EasyBuild installs into the run's generation. If the build failed, the tree is incomplete or the live tree changed, the run fails and nothing live changes. Otherwise the new module file is prepared with root set to the stable path. With --verify, if the new tree fails the checks before publication and --force is not given, the run stays built and nothing live changes. Otherwise paths the build wrote into files are changed to the stable path, and the new tree moves beside the live one under a hidden name; renameat2 with RENAME_EXCHANGE swaps the two names; the new module file replaces the old one with one rename; the old tree waits under the hidden name until rollback swaps it back or gc removes it after the grace period
 [[file:figures/staging.svg]]
 
 *** A complete tree, or nothing
@@ -29,6 +29,7 @@ Before the run builds, it records the live installation: the inode, size and SHA
 After the build, the run goes on only if EasyBuild exited 0, if the new installation directory holds what a finished build leaves, the easyconfig that EasyBuild copies into =easybuild/= at the end, and if the live tree still matches the record.
 Otherwise the run is =failed=, and the live tree and its module file are as they were; [[file:../howto/recover.org][Finish a run that failed or stopped]] continues from there.
 =--skip-live-check= drops the record and its check.
+A complete tree can still be one that jobs cannot use, so with =--verify=, before it publishes, the run also checks that the libraries of its programs are found, that no file names the build directory or a temporary directory, that Lmod loads its module file and that publishing would not change who may use it; [[file:../howto/verify-a-stage.org][Check a rebuild before it goes live]] covers a tree that fails.
 
 *** One name for the installation
 
@@ -50,7 +51,9 @@ Last, the new module file replaces the old one with a rename in the same directo
 
 A process that has a file of the old tree open keeps reading the old file after the exchange, from under the hidden name.
 On a network filesystem such as NFS, a file deleted on one machine can be gone for a process that has it open on another, so the old tree stays until the longest job could have finished: the /grace period/, 144 hours unless the site sets its own.
-Until =gc= removes it, =rollback= exchanges it back.
+After that, =gc --check-in-use= still keeps a tree that a process or a mount of its own machine uses, but the jobs of the other machines have only the grace period.
+Until =gc= removes it, =rollback= exchanges it back, and =gc --keep N= keeps the newest =N= of these trees however old they are.
+=list= prints the trees kept beside each installation and the run that published each; [[file:../reference/generations.org][The generations of an installation]] describes its output.
 
 The run's id in the hidden name, and in the completion stamp =.eb-staged-rebuild-complete= that the run writes into its new tree, is how a resumed run tells the new tree from the old one; [[file:journal.org][What the journal records]] has the rest.
 [[py:eb_staged_rebuild.engine.run]] and [[zig:eb-staged-rebuild.engine.run]] run all of this in the two builds.
@@ -74,7 +77,7 @@ The run's id in the hidden name, and in the completion stamp =.eb-staged-rebuild
 - A filesystem without =RENAME_EXCHANGE= gets three renames instead, and a moment in which the stable path is missing; a run killed in that moment leaves it missing until =resume= puts the names back.
 - The installation must exist already, as a real directory: the tool rebuilds, it does not make a first installation.
 - The old tree takes the space of a second installation until =gc= removes it.
-- =gc= does not look for open files, on this machine or any other: only the grace period keeps a tree that jobs still use.
+- =gc --check-in-use= looks for the processes and mounts of its own machine only, and without root for its own user's only: on the other machines, and without the option, only the grace period keeps a tree that jobs still use.
 - A binary whose generation path is shorter than the stable path cannot be changed, and the run fails; that happens with a state root whose path is much shorter than the software tree's.
 
 ** Further reading

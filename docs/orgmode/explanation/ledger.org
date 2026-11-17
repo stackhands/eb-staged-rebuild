@@ -31,6 +31,7 @@ A run with =--ledger-config= adds two records for each module file it publishes:
 Each names the module and the stable directory, =location=, which is the path the installation is used under; the generation and the hidden name are not the published place.
 Each also carries the SHA-256 of the new module file and of the one it replaced, the run id, and an =event_id= made of the state root, the run, the module file and the stage.
 A rollback adds a =correction= of each =finished= record, again as =started= and =finished=, with =corrects= set to the id of the record it corrects; a rollback of a run that recorded =started= and never =finished= adds an =aborted= record instead.
+A run that =--force= published past the failed checks of =--verify= says so in its =started=, =finished= and =aborted= records, whose =build.verify= holds the result of the checks, =forced=, and the number of problems of each check; its corrections do not.
 =retire= and =gc= add no records.
 
 *** Once, and in order

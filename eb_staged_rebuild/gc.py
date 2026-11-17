@@ -4,12 +4,18 @@ The clock starts at publish or rollback.  The default grace period, 144
 hours, assumes a longest job of 120 hours that nobody measured; operators
 must replace it with the site's longest job plus a safety margin.  Each run
 records its grace period, and its trees are kept that long unless gc is given
-one for every tree.  Cluster-wide ``lsof`` is not used.
+one for every tree.  With ``check_in_use``, a tree that this node shows in
+use is kept (see ``inuse``).  Cluster-wide ``lsof`` is not used, so jobs on
+other nodes are protected only by the grace period.  ``--keep N`` also keeps each install
+path's N newest generations that a rollback can switch back to, however old
+they are.
 
 A run's generation directory, ``<state-root>/generations/<run-id>``, holds only
 what publication left there: the published trees were moved out of it. gc
 removes it once every hidden tree of the run is settled: removed, or never made
 and past the grace period. A failed run counts only with ``include_failed``.
+With ``check_in_use``, a generation directory that this node shows in use is
+kept as a tree is.
 
 A module file moved aside by ``retire`` starts that same clock for the stable
 software directory the module named. gc reports that directory. It does not
@@ -25,11 +31,16 @@ from eb_staged_rebuild.atomicio import read_bytes
 from eb_staged_rebuild.cleanup import remove_generation_tree
 from eb_staged_rebuild.constants import SECONDS_PER_HOUR
 from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.generations import generations
+from eb_staged_rebuild.inuse import users
 from eb_staged_rebuild.journal import generation_root, journal_path, list_journals, save_journal
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.paths import abspath, is_within, lstat_kind
 from eb_staged_rebuild.retire import is_retire
+
+# The generations ``list`` shows that a rollback can still switch back to.
+RETURNABLE = ("replaced", "original", "unknown")
 
 
 def _retirement(journal, mod, include_failed):
@@ -65,22 +76,20 @@ def _finished_run(journal, include_failed):
     return None
 
 
-def _generation(state_root, journal, roots, include_failed, dry_run):
-    """Remove the generation of a run whose hidden trees are all settled."""
+def _generation(state_root, journal, roots, include_failed):
+    """What to do with the generation of a run whose hidden trees are all settled, or None."""
     what = _finished_run(journal, include_failed)
     if what is None:
-        return []
+        return None
     run_id = journal.get("run_id")
     if not isinstance(run_id, str) or run_id in ("", ".", "..") or "/" in run_id:
         raise Refused("refusing a journal whose run id is not a plain name")
     path = generation_root(state_root, run_id)
     if lstat_kind(path) != "dir":
-        return []
+        return None
     if _referenced(path, roots):
-        return [{"path": path, "action": "keep", "reason": "a live module resolves inside it"}]
-    if not dry_run:
-        remove_generation_tree(path, os.path.dirname(path))
-    return [{"path": path, "action": "remove", "reason": f"generation of a {what}"}]
+        return {"path": path, "action": "keep", "reason": "a live module resolves inside it"}
+    return {"path": path, "action": "remove", "reason": f"generation of a {what}"}
 
 
 def _safe_retired_path(mod):
@@ -206,16 +215,28 @@ def _retired_software(journals, roots, grace_hours, now):
     return actions
 
 
-def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace):
+def _ranks(journals):
+    """Each hidden tree a rollback can switch back to, by its place among its install path's, newest first."""
+    ranks = {}
+    for group in generations(journals):
+        returnable = [row["path"] for row in group["rows"] if row["state"] in RETURNABLE]
+        for rank, path in enumerate(returnable):
+            ranks[path] = rank
+    return ranks
+
+
+def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace, keep, check_in_use):
     state_root = abspath(state_root)
     journals = list_journals(state_root)
     roots = _live_roots(journals)
-    actions = []
+    ranks = _ranks(journals) if keep is not None else {}
+    planned = []
     for journal in journals:
         if is_retire(journal):
             continue
         hours = _run_grace(journal, grace_hours) if run_grace else grace_hours
-        changed = False
+        entries = []
+        removals = []
         plan = journal.get("modules_plan") or []
         if plan:
             settled = True
@@ -238,12 +259,12 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                     settled = False
                 continue
             if when is None:
-                actions.append({"path": retired, "action": "keep", "reason": why})
+                entries.append({"path": retired, "action": "keep", "reason": why})
                 settled = False
                 continue
             age = now - when
             if _referenced(retired, roots):
-                actions.append(
+                entries.append(
                     {
                         "path": retired,
                         "action": "keep",
@@ -252,8 +273,13 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                 )
                 settled = False
                 continue
+            rank = ranks.get(retired)
+            if rank is not None and rank < keep:
+                entries.append({"path": retired, "action": "keep", "reason": f"kept by --keep {keep}", "retired_at": when})
+                settled = False
+                continue
             if age < hours * SECONDS_PER_HOUR:
-                actions.append(
+                entries.append(
                     {
                         "path": retired,
                         "action": "keep",
@@ -263,22 +289,44 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                 )
                 settled = False
                 continue
-            actions.append(
-                {
-                    "path": retired,
-                    "action": "remove",
-                    "reason": why,
-                    "retired_at": when,
-                }
-            )
+            action = {
+                "path": retired,
+                "action": "remove",
+                "reason": why if rank is None else f"{why}, beyond --keep {keep}",
+                "retired_at": when,
+            }
+            entries.append(action)
+            removals.append((mod, action))
+        generation = _generation(state_root, journal, roots, include_failed) if settled else None
+        planned.append((journal, entries, removals, generation))
+    candidates = [action["path"] for _, _, removals, _ in planned for _, action in removals]
+    candidates += [generation["path"] for *_, generation in planned if generation and generation["action"] == "remove"]
+    used = users(candidates) if check_in_use else {}
+    actions = []
+    for journal, entries, removals, generation in planned:
+        changed = False
+        settled = True
+        for mod, action in removals:
+            if used.get(action["path"]):
+                action["action"] = "keep"
+                action["reason"] = f"in use on this node: {used[action['path']]}"
+                settled = False
+                continue
             if dry_run:
                 continue
-            remove_generation_tree(retired, os.path.dirname(retired))
+            remove_generation_tree(action["path"], os.path.dirname(action["path"]))
             mod["retired_removed_at"] = now
             changed = True
-        generation = _generation(state_root, journal, roots, include_failed, dry_run) if settled else []
-        actions.extend(generation)
-        generation_removed = not dry_run and any(action["action"] == "remove" for action in generation)
+        generation_removed = False
+        if generation is not None and settled:
+            if generation["action"] == "remove" and used.get(generation["path"]):
+                generation["action"] = "keep"
+                generation["reason"] = f"in use on this node: {used[generation['path']]}"
+            elif generation["action"] == "remove" and not dry_run:
+                remove_generation_tree(generation["path"], os.path.dirname(generation["path"]))
+                generation_removed = True
+            entries.append(generation)
+        actions.extend(entries)
         if generation_removed:
             journal["generation_removed_at"] = now
         if changed or generation_removed:
@@ -306,6 +354,8 @@ def collect(
     include_failed=False,
     lock_timeout=None,
     run_grace=False,
+    keep=None,
+    check_in_use=False,
 ):
     """Collect retired trees while holding the same lock as publish/rollback.
 
@@ -322,6 +372,8 @@ def collect(
             dry_run,
             include_failed,
             run_grace,
+            keep,
+            check_in_use,
         )
     finally:
         lock.release()

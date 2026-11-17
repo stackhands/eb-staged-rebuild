@@ -181,6 +181,7 @@ index	ts	action	target	module	actor
 5 of 5 records
 #+end_example
 
+A run that =--force= published past the failed checks of =--verify= says so in the =build.verify= of its records; [[file:../explanation/ledger.org][What the ledger records]] lists what each record carries.
 =docs/examples/site.sh= in the repository runs these steps as its cases =ledger-setup=, =ledger-run= and =ledger-rollback=.
 
 ** If it fails

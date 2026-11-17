@@ -2,7 +2,7 @@
 //! exchange the complete tree with the stable live directory.
 //!
 //! The commands of the Python tool in one static binary: probe, run,
-//! resume, rollback, gc, retire, status and resolve, and the
+//! resume, verify, rollback, gc, retire, status, list and resolve, and the
 //! ledger-maintenance and build-events commands of its other entry
 //! points. COMPAT.md lists where the two builds differ.
 const std = @import("std");
@@ -16,6 +16,7 @@ const ledger = @import("ledger.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
 const build_events = @import("build_events.zig");
+const generations = @import("generations.zig");
 const build_options = @import("build_options");
 
 const sys = common.sys;
@@ -29,11 +30,11 @@ const Py = json.Py;
 pub const version = build_options.version;
 const prog = "eb-staged-rebuild";
 
-const commands = [_][]const u8{ "probe", "run", "resume", "rollback", "gc", "retire", "status", "resolve" };
+const commands = [_][]const u8{ "probe", "run", "resume", "verify", "rollback", "gc", "retire", "status", "list", "resolve" };
 
 const top_usage =
     \\usage: eb-staged-rebuild [-h] [--version]
-    \\                         {probe,run,resume,rollback,gc,retire,status,resolve} ...
+    \\                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
     \\
 ;
 
@@ -43,17 +44,20 @@ const top_help = top_usage ++
     \\with the stable live directory.
     \\
     \\positional arguments:
-    \\  {probe,run,resume,rollback,gc,retire,status,resolve}
+    \\  {probe,run,resume,verify,rollback,gc,retire,status,list,resolve}
     \\    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
     \\                        EasyBuild
     \\    run                 build and atomically swap a staged tree
     \\    resume              continue a run after a crash
-    \\    rollback            restore the previous module files, or put a retired
-    \\                        module file back
+    \\    verify              check a built run's stage before it is published
+    \\    rollback            switch back to the previous generation or a named one,
+    \\                        or put a retired module file back
     \\    gc                  remove hidden retired siblings after the grace period
     \\    retire              move a module file out of the module tree after its
     \\                        package is published elsewhere
     \\    status              show run journals
+    \\    list                show each install path's live tree and the generations
+    \\                        kept beside it
     \\    resolve             print the install path a module file names
     \\
     \\options:
@@ -92,6 +96,14 @@ const status_options =
 ;
 const status_help = status_usage ++ status_options;
 const status_help_default = status_usage_default ++ status_options;
+const list_usage = "usage: eb-staged-rebuild list [-h] --state-root STATE_ROOT\n";
+const list_help = list_usage ++
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\
+;
 const resolve_usage = "usage: eb-staged-rebuild resolve [-h] module\n";
 const resolve_help = resolve_usage ++
     \\
@@ -178,7 +190,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
         };
         o.seen = true;
         if (!o.takes_value) {
-            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ o.name, arg[eq.? + 1 ..] });
+            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument {s}", .{ o.name, repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         if (eq) |e| {
@@ -536,6 +548,20 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     return 0;
 }
 
+fn cmdList(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+    const sr = StateRoot.of(env, list_usage, list_help);
+    var opts = [_]Opt{.{ .name = "state-root", .takes_value = true }};
+    var extra: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " list", &extra);
+    const state_root = opts[0].value orelse sr.default orelse
+        usageError(sr.usage, prog ++ " list", "the following arguments are required: --state-root", .{});
+    var all_extra = extra;
+    all_extra.appendSlice(a, pos) catch oom();
+    unrecognized(a, all_extra.items);
+    cli.put(1, generations.print(a, generations.collect(a, listJournals(a, state_root))));
+    return 0;
+}
+
 const retire_usage =
     \\usage: eb-staged-rebuild retire [-h] --state-root STATE_ROOT
     \\                                --module-file MODULE_FILE [--reason REASON]
@@ -557,25 +583,29 @@ const retire_help = retire_usage ++
 ;
 const rollback_usage =
     \\usage: eb-staged-rebuild rollback [-h] --state-root STATE_ROOT
-    \\                                  [--lock-timeout LOCK_TIMEOUT]
+    \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+    \\                                  [--latest]
     \\                                  run_id
     \\
 ;
 const rollback_help = rollback_usage ++
     \\
     \\positional arguments:
-    \\  run_id
+    \\  run_id                the run to roll back, unless --latest or --to is given
     \\
     \\options:
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --to GEN              roll back every run published over run GEN
+    \\  --latest              roll back the newest complete run
     \\
 ;
 const gc_usage =
     \\usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
     \\                            [--grace-hours GRACE_HOURS] [--dry-run]
     \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+    \\                            [--keep N] [--check-in-use]
     \\
 ;
 const gc_help = gc_usage ++
@@ -589,13 +619,17 @@ const gc_help = gc_usage ++
     \\  --include-failed      also remove the hidden trees and generation of a
     \\                        failed run that published nothing, after the grace
     \\                        period
+    \\  --keep N              keep each install path's N newest generations that
+    \\                        rollback can switch back to
+    \\  --check-in-use        keep a tree or generation that a process or a mount on
+    \\                        this node uses
     \\
 ;
 
 /// argparse type=float: Python float() of the text.
-fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
+fn floatArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
-    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
+    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: {s}", .{ name, repr(a, v) });
 }
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
@@ -610,7 +644,7 @@ fn isHours(hours: f64) bool {
 
 /// --grace-hours of run and gc: a float, and a number of hours, 0 or more.
 fn graceArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64 {
-    const hours = floatArg(usage, who, "grace-hours", v);
+    const hours = floatArg(a, usage, who, "grace-hours", v);
     if (!isHours(hours)) usageError(usage, who, "argument --grace-hours: not a number of hours, 0 or more: {s}", .{repr(a, v)});
     return hours;
 }
@@ -621,6 +655,19 @@ fn envGrace(a: Allocator, env: probe.Env) f64 {
     const hours = std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: {s}", .{repr(a, e)});
     if (!isHours(hours)) refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {s}", .{repr(a, e)});
     return hours;
+}
+
+/// cli.py's count type: ASCII digits only.
+fn countArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, v: []const u8) admin.Keep {
+    if (v.len == 0) usageError(usage, who, "argument --{s}: invalid count value: {s}", .{ name, repr(a, v) });
+    var value: u64 = 0;
+    for (v) |ch| {
+        if (!std.ascii.isDigit(ch)) usageError(usage, who, "argument --{s}: invalid count value: {s}", .{ name, repr(a, v) });
+        value = std.math.mul(u64, value, 10) catch std.math.maxInt(u64);
+        value = std.math.add(u64, value, ch - '0') catch std.math.maxInt(u64);
+    }
+    const trimmed = std.mem.trimStart(u8, v, "0");
+    return .{ .value = value, .text = if (trimmed.len == 0) "0" else trimmed };
 }
 
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
@@ -652,7 +699,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[4].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[4].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout);
 }
@@ -661,22 +708,25 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "to", .takes_value = true },
+        .{ .name = "latest", .takes_value = false },
     };
     const who = prog ++ " rollback";
     const sr = StateRoot.of(env, rollback_usage, rollback_help);
     var extra: std.ArrayList([]const u8) = .empty;
     const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
     const state_root = opts[0].value orelse sr.default;
+    // --latest and --to name the runs instead of the run id.
     var need: std.ArrayList([]const u8) = .empty;
     if (state_root == null) need.append(a, "--state-root") catch oom();
-    if (pos.len == 0) need.append(a, "run_id") catch oom();
+    if (pos.len == 0 and opts[2].value == null and !opts[3].seen) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
     var all_extra = extra;
-    for (pos[1..]) |p| all_extra.append(a, p) catch oom();
+    if (pos.len > 1) for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
-    return admin.rollback(&ctx, state_root.?, pos[0], timeout);
+    return admin.rollback(&ctx, state_root.?, if (pos.len > 0) pos[0] else null, opts[2].value, opts[3].seen, timeout);
 }
 
 fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
@@ -686,6 +736,8 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "dry-run", .takes_value = false },
         .{ .name = "lock-timeout", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
+        .{ .name = "keep", .takes_value = true },
+        .{ .name = "check-in-use", .takes_value = false },
     };
     const who = prog ++ " gc";
     const sr = StateRoot.of(env, gc_usage, gc_help);
@@ -697,10 +749,11 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[3].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[3].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const keep: ?admin.Keep = if (opts[5].value) |v| countArg(a, sr.usage, who, "keep", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
+    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, keep, opts[6].seen, timeout, opts[1].value == null);
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -711,8 +764,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " run";
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "verify", "force" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, false, false };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -755,7 +808,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         const k = hit orelse usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
         seen[k] = true;
         if (!takes[k]) {
-            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ names[k], arg[eq.? + 1 ..] });
+            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument {s}", .{ names[k], repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         var v: []const u8 = undefined;
@@ -770,9 +823,9 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         if (std.mem.eql(u8, names[k], "module")) modules_list.append(a, v) catch oom() else vals[k] = v;
     }
     if (vals[4]) |b| if (!engine_inList(&backends, b))
-        usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
+        usageError(run_usage, who, "argument --backend: invalid choice: {s} (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{repr(a, b)});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
-    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
+    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(a, run_usage, who, "lock-timeout", v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
     const modules = nonEmpty(vals[1]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_MODULES"));
@@ -788,6 +841,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
     const grace = grace_cli orelse envGrace(a, env);
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
+    if (seen[14] and !seen[13]) refuse("--force needs --verify; without it, nothing checks the stage before the swap", .{});
     return engine.run(a, env, .{
         .software = software.?,
         .modules = modules.?,
@@ -803,6 +857,8 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .lock_timeout = lock_timeout,
         .prepare_executable = vals[11],
         .ledger_config = vals[12],
+        .verify = seen[13],
+        .force = seen[14],
     });
 }
 
@@ -848,7 +904,8 @@ const StateRoot = struct {
 
 const resume_usage =
     \\usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
-    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+    \\                                [--force]
     \\                                run_id
     \\
 ;
@@ -861,6 +918,9 @@ const resume_help = resume_usage ++
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --verify              check the stage before the swap, as run --verify does
+    \\  --force               with --verify, publish a stage that fails; the journal
+    \\                        records it
     \\
 ;
 
@@ -868,6 +928,8 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "verify", .takes_value = false },
+        .{ .name = "force", .takes_value = false },
     };
     const who = prog ++ " resume";
     const sr = StateRoot.of(env, resume_usage, resume_help);
@@ -881,14 +943,54 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
-    const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
+    const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout, opts[2].seen, opts[3].seen) catch |err| switch (err) {
         error.OutOfMemory => refuse("out of memory", .{}),
         else => refuse("{s}", .{last_why}),
     };
     return res.code;
+}
+
+const verify_usage =
+    \\usage: eb-staged-rebuild verify [-h] --state-root STATE_ROOT
+    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                STAGE
+    \\
+;
+const verify_help = verify_usage ++
+    \\
+    \\positional arguments:
+    \\  STAGE                 the run id that names the stage
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\  --lock-timeout LOCK_TIMEOUT
+    \\
+;
+
+fn cmdVerify(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+    var opts = [_]Opt{
+        .{ .name = "state-root", .takes_value = true },
+        .{ .name = "lock-timeout", .takes_value = true },
+    };
+    const who = prog ++ " verify";
+    const sr = StateRoot.of(env, verify_usage, verify_help);
+    var extra: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    const state_root = opts[0].value orelse sr.default;
+    var need: std.ArrayList([]const u8) = .empty;
+    if (state_root == null) need.append(a, "--state-root") catch oom();
+    if (pos.len == 0) need.append(a, "STAGE") catch oom();
+    missing(a, sr.usage, who, need.items);
+    var all_extra = extra;
+    for (pos[1..]) |p| all_extra.append(a, p) catch oom();
+    unrecognized(a, all_extra.items);
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    var ctx = adminCtx(a, env);
+    return admin.verify(&ctx, state_root.?, pos[0], timeout);
 }
 
 // ---- probe -------------------------------------------------------------
@@ -962,6 +1064,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const rest = args[i + 1 ..];
     if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest);
     if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env);
+    if (std.mem.eql(u8, cmd, "list")) return cmdList(a, rest, env);
     if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env);
     if (std.mem.eql(u8, cmd, "ledger-maintenance")) return ledger.main(a, rest, .{ .envp = env.envp });
     if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env);
@@ -969,9 +1072,10 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env);
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
+    if (std.mem.eql(u8, cmd, "verify")) return cmdVerify(a, rest, env);
     if (std.mem.eql(u8, cmd, "build-events")) return build_events.main(a, rest, env);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
-    usageError(top_usage, prog, "argument command: invalid choice: '{s}' (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{cmd});
+    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'list', 'resolve')", .{repr(a, cmd)});
 }
 
 /// The message of the last refusal the engine returned as an error.
@@ -985,6 +1089,8 @@ test {
     _ = @import("livecheck.zig");
     _ = @import("discover.zig");
     _ = @import("builders.zig");
+    _ = @import("verify.zig");
+    _ = @import("inuse.zig");
     _ = admin;
     _ = engine;
     _ = ledger;
@@ -1003,15 +1109,24 @@ test "optionLike takes a negative number for a value, as argparse 3.14 does" {
 test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" {
     const expect = std.testing.expectEqualStrings;
     try expect(status_usage_default, status_help_default[0..status_usage_default.len]);
+    try expect("usage: eb-staged-rebuild list [-h] [--state-root STATE_ROOT]\n", StateRoot.bracketed(list_usage));
     try expect(
         \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
-        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+        \\                                [--force]
         \\                                run_id
         \\
     , StateRoot.bracketed(resume_usage));
     try expect(
+        \\usage: eb-staged-rebuild verify [-h] [--state-root STATE_ROOT]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                STAGE
+        \\
+    , StateRoot.bracketed(verify_usage));
+    try expect(
         \\usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]
-        \\                                  [--lock-timeout LOCK_TIMEOUT]
+        \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+        \\                                  [--latest]
         \\                                  run_id
         \\
     , StateRoot.bracketed(rollback_usage));
@@ -1019,6 +1134,7 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
         \\                            [--grace-hours GRACE_HOURS] [--dry-run]
         \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+        \\                            [--keep N] [--check-in-use]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(

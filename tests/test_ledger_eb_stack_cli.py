@@ -4,8 +4,10 @@ The same append, recovery and idempotence checks against a real eb-stack,
 driven through ``run``, ``resume`` and ``rollback``: the run is killed
 with SIGKILL after its first append returned and before the receipt was
 saved (EB_STAGED_REBUILD_PAUSE_AT="ledger.acked:*"), then resumed twice
-and rolled back twice. Runs the Python tool and, when TOOL_BIN is set, the
-program it names. Skipped unless EB_STACK_BIN is set.
+and rolled back twice. A run that ``run --verify`` refuses is then
+published with ``resume --force``, and its records carry ``build.verify``.
+Runs the Python tool and, when TOOL_BIN is set, the program it names.
+Skipped unless EB_STACK_BIN is set.
 
     EB_STACK_BIN=.../eb-stack TOOL_BIN=zig-out/bin/eb-staged-rebuild \\
         python3 -m unittest -v tests.test_ledger_eb_stack_cli
@@ -26,6 +28,7 @@ from tests.support import classic_install
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
+VERIFY_ENV = ("LMOD_CMD", "MODULEPATH", "LOADEDMODULES", "_LMFILES_", "EESSI_CVMFS_REPO", "EESSI_EPREFIX")
 
 
 def implementations():
@@ -117,6 +120,46 @@ class CliEbStackLedgerTests(base.RealEbStackLedgerTests):
                 tool("rollback", "--state-root", state, "run1")
                 self.assertEqual(len(self.entries(log)), 4)
                 self.assert_protocol(log, head, install)
+
+    def test_a_forced_publication_says_so_in_its_records(self):
+        extra = {"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}
+        for name, command in implementations():
+            with self.subTest(implementation=name), tempfile.TemporaryDirectory() as root:
+                args, state, install, log, head = self.cli_fixture(root)
+                args = ["run", "--verify", *args[1:]]
+                env = {key: value for key, value in os.environ.items()
+                       if key not in VERIFY_ENV and not key.startswith("EASYBUILD_")}
+                env.update(PYTHONPATH=REPO, FAKE_EB_PAYLOAD="v1\n", FAKE_EB_EXTRA=json.dumps(extra))
+
+                def tool(*words, rc=0):
+                    done = subprocess.run(command + list(words), env=env, cwd=root, capture_output=True, text=True)
+                    self.assertEqual(done.returncode, rc, done.stdout + done.stderr)
+
+                tool(*args, rc=2)
+                self.assertEqual(self.payload(install), "v0\n")
+                self.assertEqual(self.entries(log) if os.path.exists(log) else [], [])
+
+                tool("resume", "--state-root", state, "--force", "run1")
+                self.assertEqual(self.payload(install), "v1\n")
+                verify = load_journal(os.path.join(state, "runs", "run1", "journal.json"))["verify"]
+                self.assertEqual((verify["result"], verify["forced"], verify["checks"]["elf"]), ("fail", True, 1))
+                forced = {"result": "fail", "forced": True, "checks": verify["checks"]}
+                published = self.assert_protocol(log, head, install)
+                self.assertEqual(
+                    [(entry["stage"], entry["build"].get("verify")) for entry in published],
+                    [("started", forced), ("finished", forced)],
+                )
+
+                tool("rollback", "--state-root", state, "run1")
+                corrections = self.assert_protocol(log, head, install)[2:]
+                self.assertEqual([entry["action"] for entry in corrections], ["correction", "correction"])
+                self.assertEqual([entry["build"].get("verify") for entry in corrections], [None, None])
+
+                del env["FAKE_EB_EXTRA"]
+                tool(*["run2" if word == "run1" else word for word in args])
+                clean = self.assert_protocol(log, head, install)[4:]
+                self.assertEqual([(entry["stage"], entry["build"].get("verify")) for entry in clean],
+                                 [("started", None), ("finished", None)])
 
 
 if __name__ == "__main__":

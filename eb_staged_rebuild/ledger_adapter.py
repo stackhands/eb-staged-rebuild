@@ -47,8 +47,11 @@ def publication_records(config, journal, stage, now, corrects=None):
 
     ``corrects`` maps a module file to the ledger id of its ``finished``
     record; the records are then the ``correction`` stages of a rollback.
+    Otherwise, when ``--force`` published the run past a failed ``verify``,
+    ``build.verify`` holds that result, ``forced`` and each check's count.
     """
     scope = hashlib.sha256(journal["state_root"].encode("utf-8")).hexdigest()[:16]
+    forced = _forced_verify(journal)
     records = []
     for mod in journal["modules_plan"]:
         if "live_software" not in mod:
@@ -82,8 +85,18 @@ def publication_records(config, journal, stage, now, corrects=None):
         if corrects is not None:
             record["corrects"] = corrects[mod["rel"]]
             record["reason"] = f"run {journal['run_id']} was rolled back"
+        elif forced is not None:
+            record["build"]["verify"] = forced
         records.append(record)
     return records
+
+
+def _forced_verify(journal):
+    verify = journal.get("verify")
+    if not isinstance(verify, dict) or verify.get("forced") is not True:
+        return None
+    return {"result": verify.get("result"), "forced": True, "checks": verify.get("checks")}
+
 
 def load_config(path):
     """Read and check a ``--ledger-config`` file, and fill in its defaults."""

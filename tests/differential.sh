@@ -6,6 +6,9 @@
 #   TOOL_BIN=zig-out/bin/eb-staged-rebuild bash tests/differential.sh
 set -u
 : "${TOOL_BIN:?}"
+# verify loads module files with $LMOD_CMD and judges ELF objects against
+# EESSI; the cases that want either set it themselves.
+unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/esr-diff.XXXXXX")
 trap 'chmod -R u+rwX "${work}" 2>/dev/null; rm -rf -- "${work}"' EXIT
@@ -96,6 +99,23 @@ compare "status, other publication" status --state-root "${st}"
 echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
 compare "status, plan without a swap" status --state-root "${st}"
 rm -rf "${st}/runs/r4"
+# list skips entries without the paths it needs; these journals have no
+# software root.
+compare "list, journals without a software root" list --state-root "${st}"
+mkdir -p "${st}/runs/r5" "${work}/sw/demo/1" "${work}/sw/demo/.1.r5" "${work}/sw/demo/.1.r6"
+printf '{"run_id": "r5"}' > "${work}/sw/demo/.1.r5/.eb-staged-rebuild-complete"
+printf '{"run_id": 5}' > "${work}/sw/demo/.1.r6/.eb-staged-rebuild-complete"
+cat > "${st}/runs/r5/journal.json" <<JOURNAL
+{"schema": 2, "run_id": "r5", "state": "complete", "software": "${work}/sw", "verify": {"result": "fail", "forced": 1, "checks": {"elf": 2, "references": true, "modules": null, "access": "x"}},
+ "modules_plan": [{"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r5", "published_at": "soon"}, {"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r6"}, {"live_software": "", "retired": "x"}]}
+JOURNAL
+compare "list, odd values" list --state-root "${st}"
+sed -i 's/"published_at": "soon"/"published_at": 1.5e9/' "${st}/runs/r5/journal.json"
+compare "list, a published tree" list --state-root "${st}"
+rm -rf "${st}/runs/r5"
+compare "list, no runs dir" list --state-root "${work}/nostate"
+compare "list, no option" list
+compare "list, a positional" list --state-root "${st}" extra
 
 # Probe.
 compare "probe --json" probe --path "${work}/p" --json --eb missing-eb
@@ -110,7 +130,9 @@ if py_version=$(cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_r
 else
     echo "DIFF --version: '${py_version:-}' vs '${zig_version:-}'"; diffs=$((diffs + 1))
 fi
-for c in run resume rollback status gc retire; do compare "${c} -h" "${c}" -h; done
+for c in run resume verify rollback status list gc retire; do compare "${c} -h" "${c}" -h; done
+compare "verify, nothing" verify
+compare "verify, two stages" verify --state-root x a b
 # The version the binary reports is the one build.zig.zon declares.
 zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")
 if "${TOOL_BIN}" --version | grep -qF -- "${zon_version}"; then echo "same version as build.zig.zon"; else echo "DIFF version: build.zig.zon says ${zon_version}"; diffs=$((diffs + 1)); fi
@@ -119,6 +141,13 @@ compare "a negative number for a command" -5
 compare "a dash for a command" -
 compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
 compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
@@ -326,6 +355,7 @@ compare_admin "rollback the run again" rollback --state-root @ROOT@/state r2
 compare_admin "resume a rolled-back run" resume --state-root @ROOT@/state r2
 compare_admin "run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id r4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r5 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback a run a later run replaced" rollback --state-root @ROOT@/state r4
 compare_admin "status, ledger run" status --state-root @ROOT@/state r5
 compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
@@ -421,6 +451,8 @@ compare_admin "rollback the run with a grace period of -0 hours" rollback --stat
 compare_admin "run, for the state root from the environment" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id s1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status s1
 compare_admin "resume, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume s1
+compare_admin "verify, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify s1
+compare_admin "list, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list
 compare_admin "gc, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --dry-run
 compare_admin "retire --dry-run, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire --module-file @ROOT@/modules/all/demo/1.lua --dry-run
 compare_admin "rollback, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback s1
@@ -429,6 +461,8 @@ compare_admin "status, an empty state root in the environment" env EB_STAGED_REB
 compare_admin "status --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --help
 compare_admin "status, an unknown option with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --nope
 compare_admin "resume --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume --help
+compare_admin "verify --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify --help
+compare_admin "list --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list --help
 compare_admin "rollback, no run id with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback
 compare_admin "gc, bad grace with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --grace-hours x
 compare_admin "retire, no module file with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire
@@ -488,6 +522,13 @@ compare_admin "run, the finished record waits" env FAKE_LEDGER_PLAN=@ROOT@/plan6
 compare_admin "resume delivers the finished record" resume --state-root @ROOT@/state r18
 compare_admin "rollback the run whose finished record waited" rollback --state-root @ROOT@/state r18
 compare_admin "ledger records after the rollback cases" env cat @ROOT@/ledger.jsonl
+# A stage that run --verify refuses, then published with --force: its
+# started and finished records carry build.verify, the rollback's
+# corrections do not.
+compare_admin "run --verify, ledger, a stage that fails verify" env 'FAKE_EB_EXTRA={"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}' @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --verify --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume it with --force, ledger" resume --state-root @ROOT@/state --force f1
+compare_admin "rollback the forced ledger run" rollback --state-root @ROOT@/state f1
+compare_admin "ledger records after the forced run" env cat @ROOT@/ledger.jsonl
 # A generation-pointer record (schema 3) is not applied as a directory swap.
 for impl in py zig; do
     mkdir -p "${work}/${impl}/state/runs/foreign"
@@ -580,6 +621,94 @@ compare_admin "modes after a restricting prepare" env sh -c 'cd "$1" && find . -
 compare_admin "retire a published module" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "gc after a published module is retired" gc --state-root @ROOT@/state --grace-hours 0
 compare_admin "rollback the published module retire" rollback --state-root @ROOT@/state @RETIRE@
+# verify: a stage with a missing library, a build directory reference and a
+# link into an EasyBuild temporary directory. A run publishes it as before;
+# with --verify it is not published until it is forced, and a missing Lmod
+# refuses one until Lmod loads it from the stage.
+vx='{"elf": {"bin/demo": {"needed": ["libgone.so.1", "libdemo.so.1"], "runpath": "$ORIGIN/../lib"}, "lib/libdemo.so.1": {"wide": false, "machine": 3}}, "text": {"share/demo.pc": "prefix=@ROOT@/build/demo/1\n"}, "links": {"lib/libt.so": "/tmp/eb-abcd1234/libt.so"}}'
+vr='--software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --skip-live-check --module demo/1'
+# shellcheck disable=SC2086
+compare_admin "run, a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v0 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "a run without --verify writes no report" env ls @ROOT@/state/runs/v0
+compare_admin "rollback the run without --verify" rollback --state-root @ROOT@/state v0
+# shellcheck disable=SC2086
+compare_admin "run, --force without --verify" run ${vr} --force --run-id v9 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run --verify, verify fails" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --verify --run-id v1 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "the verify report" env cat @ROOT@/state/runs/v1/verify.json
+compare_admin "verify the refused stage" verify --state-root @ROOT@/state v1
+compare_admin "verify, no such run" verify --state-root @ROOT@/state nope
+compare_admin "verify a complete run" verify --state-root @ROOT@/state r2
+compare_admin "verify a retire record" verify --state-root @ROOT@/state @RETIRE@
+compare_admin "resume, the journal keeps --verify" resume --state-root @ROOT@/state v1
+compare_admin "resume --force" resume --state-root @ROOT@/state --force v1
+compare_admin "rollback the forced run" rollback --state-root @ROOT@/state v1
+compare_admin "resume --force, a run without --verify" resume --state-root @ROOT@/state --force r2
+compare_admin "resume --verify, a complete run" resume --state-root @ROOT@/state --verify r2
+for impl in py zig; do printf '#!/bin/sh\nexit 42\n' > "${work}/${impl}/prepare-later"; chmod +x "${work}/${impl}/prepare-later"; done
+# shellcheck disable=SC2086
+compare_admin "run, the prepare fails before a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v3 --prepare @ROOT@/prepare-later -- demo-1.eb --buildpath=@ROOT@/build
+for impl in py zig; do printf '#!/bin/sh\nexit 0\n' > "${work}/${impl}/prepare-later"; done
+compare_admin "resume --verify checks the stage" resume --state-root @ROOT@/state --verify v3
+compare_admin "a later resume checks it too" resume --state-root @ROOT@/state v3
+compare_admin "resume --force publishes it" resume --state-root @ROOT@/state --force v3
+compare_admin "rollback the run resumed with --verify" rollback --state-root @ROOT@/state v3
+# shellcheck disable=SC2086
+compare_admin "run --verify, Lmod missing" env LMOD_CMD=@ROOT@/no-lmod @CMD@ run ${vr} --verify --run-id v2 -- demo-1.eb
+compare_admin "verify with Lmod" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ verify --state-root @ROOT@/state v2
+compare_admin "resume the verified stage" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ resume --state-root @ROOT@/state v2
+compare_admin "rollback the verified run" rollback --state-root @ROOT@/state v2
+compare_admin "list every generation" list --state-root @ROOT@/state
+# rollback --latest, and rollback --to over more than one run. The
+# prepare-context run left the live tree group-only; verify refuses a stage
+# that would widen it.
+for impl in py zig; do chmod 755 "${work}/${impl}/software/demo/1"; done
+for g in g1 g2 g3; do
+    # shellcheck disable=SC2086
+    compare_admin "run, generation ${g}" env FAKE_EB_MODULE_NOTE="${g}" @CMD@ run ${vr} --run-id "${g}" -- demo-1.eb
+done
+compare_admin "rollback, no run id" rollback --state-root @ROOT@/state
+compare_admin "rollback, a run id and --to" rollback --state-root @ROOT@/state --to g1 g2
+compare_admin "rollback, a run id and --latest" rollback --state-root @ROOT@/state --latest g2
+compare_admin "rollback, --latest and --to" rollback --state-root @ROOT@/state --latest --to g1
+compare_admin "rollback, --to without a value" rollback --state-root @ROOT@/state --to
+compare_admin "rollback, two run ids" rollback --state-root @ROOT@/state g2 g3
+compare_admin "rollback --to, no such run" rollback --state-root @ROOT@/state --to nope
+compare_admin "rollback --to a retire record" rollback --state-root @ROOT@/state --to @RETIRE@
+compare_admin "rollback --to a rolled-back run" rollback --state-root @ROOT@/state --to v1
+compare_admin "rollback --to over two runs" rollback --state-root @ROOT@/state --to g1
+compare_admin "rollback --to the live run" rollback --state-root @ROOT@/state --to g1
+compare_admin "list after rollback --to" list --state-root @ROOT@/state
+compare_admin "rollback --latest" rollback --state-root @ROOT@/state --latest
+# shellcheck disable=SC2086
+compare_admin "run, generation l1" run ${vr} --run-id l1 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, a ledger generation" run ${vr} --run-id l2 --ledger-config @ROOT@/ledger.json -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, generation l3" run ${vr} --run-id l3 -- demo-1.eb
+compare_admin "rollback --to over a ledger run" rollback --state-root @ROOT@/state --to l1
+compare_admin "rollback --latest, no complete run" rollback --latest --state-root @ROOT@/empty
+# gc --keep, and with --check-in-use a tree and a generation kept because a
+# process on this node has them open: one holder opens the same paths in
+# both copies, so both name its pid. Without the option gc does not look.
+compare_admin "gc --keep within grace" gc --state-root @ROOT@/state --keep 2 --dry-run
+compare_admin "gc --keep past grace, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --keep, not a count" gc --state-root @ROOT@/state --keep x
+compare_admin "gc --keep, negative" gc --state-root @ROOT@/state --keep=-1
+compare_admin "gc --keep, a negative number as the next word" gc --state-root @ROOT@/state --keep -1
+compare_admin "gc --keep, a value with a quote" gc --state-root @ROOT@/state --keep "a'b"
+ready="${work}/holder-ready"
+python3 -c 'import os, sys, time; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[2:]]; open(sys.argv[1], "w").close(); time.sleep(600)' \
+    "${ready}" "${work}/py/software/demo/.1.l2" "${work}/zig/software/demo/.1.l2" \
+    "${work}/py/state/generations/l1" "${work}/zig/state/generations/l1" &
+holder=$!
+for _ in $(seq 600); do [ -e "${ready}" ] && break; sleep 0.1; done
+compare_admin "gc --keep, a tree in use without --check-in-use, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --check-in-use keeps a tree and a generation in use" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --check-in-use
+kill "${holder}"
+wait "${holder}" 2>/dev/null
+compare_admin "gc --keep once the tree is free" gc --state-root @ROOT@/state --keep 1 --grace-hours 0
+compare_admin "list after gc --keep" list --state-root @ROOT@/state
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.

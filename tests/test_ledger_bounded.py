@@ -68,13 +68,22 @@ class BoundedOutputTests(unittest.TestCase):
         subprocess.run(["rm", "-rf", str(self.root)], check=False)
 
     def helper(self, body):
-        """A python helper whose prologue records its pid and defines ``noise``."""
+        """A python helper whose prologue records its pid and defines ``noise``.
+
+        The tests read a file as soon as it exists, and the group can be
+        killed between creating a file and writing it, so each is written
+        under a temporary name and renamed into place.
+        """
         prologue = textwrap.dedent(f"""\
             import os, signal, sys, time
             from pathlib import Path
             ROOT = Path({str(self.root)!r})
+            def publish(name, text):
+                part = ROOT / (name + ".part")
+                part.write_text(text)
+                os.replace(part, ROOT / name)
             def mark(name):
-                (ROOT / (name + ".pid")).write_text(str(os.getpid()))
+                publish(name + ".pid", str(os.getpid()))
             def noise(streams, total, rest=60, pause=0):
                 chunk = b"n" * 65536
                 written = 0
@@ -82,7 +91,7 @@ class BoundedOutputTests(unittest.TestCase):
                     for fd in streams:
                         os.write(fd, chunk)
                     written += len(chunk)
-                    (ROOT / "written").write_text(str(written))
+                    publish("written", str(written))
                     time.sleep(pause)
                 time.sleep(rest)
             mark("leader")

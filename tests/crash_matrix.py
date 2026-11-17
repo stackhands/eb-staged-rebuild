@@ -7,20 +7,24 @@ resumed. Both must leave the same live tree, the same module file and the
 same journal state; a run must end either with the old tree untouched or
 fully published. The same is done for rollback of a complete run.
 
-Five fixtures: one module; two modules (lib/1 and app/1); one module
+Six fixtures: one module; two modules (lib/1 and app/1); one module
 whose build leaves the installation and module tree read-only, which is
 published with its modes and is not built again once the build was
 journalled; one module with
 a --prepare policy that counts its invocations, which must run once,
 or twice when the kill falls after it exited and before the journal
-recorded it; and one module forced onto the
+recorded it; one module run with --verify, whose stage is checked
+before the swap, also by the resume; and one module forced onto the
 ordinary-rename fallback. Run and rollback take the swap method from the
 journal's recorded rename_exchange probe, so the fallback fixture stops a
 run at build.start, records the probe as failed, and kills the resumed
 run or a later rollback at each fallback rename. A retire of the first
-fixture's module file, with a module class link and a default link to it,
-and a rollback of one, are killed at every step they reach and then
-rolled back; the module file and both links must end as they began.
+fixture's module file, with a module class link and a default link to
+it, and a rollback of one, are killed at every step they reach and then
+rolled back; the module file and both links must end as they began. A
+rollback --to over two runs is killed at every step it reaches, on one
+module, two modules and the fallback, and run again; it must end with
+each tree where it belongs.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 tests/crash_matrix.py
 """
@@ -45,11 +49,12 @@ FALLBACK = ("live-to-hold", "staged-to-live", "hold-to-staged")
 
 
 class Fixture:
-    def __init__(self, name, rels, prepare=False, seal=False):
+    def __init__(self, name, rels, prepare=False, seal=False, verify=False):
         self.name = name
         self.rels = rels
         self.prepare = prepare
         self.seal = seal
+        self.verify = verify
 
     def build(self, root):
         for rel in self.rels:
@@ -87,16 +92,18 @@ class Fixture:
         ]
         if self.prepare:
             args += ["--prepare", f"{root}/prepare"]
+        if self.verify:
+            args.append("--verify")
         for rel in self.rels:
             args += ["--module", rel]
         return args + ["--", "demo-1.eb"]
 
-    def spec(self, root, faults=None):
+    def spec(self, root, faults=None, run_id="r1"):
         return Spec(
             software=f"{root}/software", modules=f"{root}/modules", state_root=f"{root}/state",
             eb_args=["demo-1.eb"], backend="installpath", eb_executable=f"{root}/eb",
-            module_rels=list(self.rels), run_id="r1", faults=faults,
-            prepare_executable=f"{root}/prepare" if self.prepare else None,
+            module_rels=list(self.rels), run_id=run_id, faults=faults,
+            prepare_executable=f"{root}/prepare" if self.prepare else None, verify=self.verify,
         )
 
 
@@ -104,6 +111,7 @@ ONE = Fixture("one module", ["demo/1"])
 TWO = Fixture("two modules", ["lib/1", "app/1"])
 PREPARE = Fixture("prepare", ["demo/1"], prepare=True)
 SEALED = Fixture("sealed", ["demo/1"], seal=True)
+VERIFY = Fixture("verify", ["demo/1"], verify=True)
 
 
 def unseal(root):
@@ -221,10 +229,10 @@ def kill_at(impl, fixture, args, step, root):
     return "killed"
 
 
-def finish(impl, fixture, args, root):
-    return subprocess.run(
-        command(impl) + args, env=env_for(fixture, root, None, ""), cwd=root, capture_output=True, text=True,
-    ).returncode
+def finish(impl, fixture, args, root, **extra):
+    env = env_for(fixture, root, None, "")
+    env.update(extra)
+    return subprocess.run(command(impl) + args, env=env, cwd=root, capture_output=True, text=True).returncode
 
 
 def journal_file(root, run_id):
@@ -420,6 +428,118 @@ def retire_fixture(root):
         os.symlink(target.replace("W", root, 1) if target.startswith("W/") else target, path)
 
 
+OVER = ("r1", "r2", "r3")
+
+
+def steps_rollback_to(fixture, fallback):
+    """Every fault step one Python rollback --to r1 reaches over r2 and r3."""
+    root = tempfile.mkdtemp(prefix="crash-tosteps-")
+    try:
+        fixture.build(root)
+        for run_id in OVER:
+            spec = fixture.spec(root, run_id=run_id)
+            env = dict(fixture.env(root), FAKE_EB_MODULE_NOTE=run_id)
+            assert with_env(env, lambda: run(spec)).returncode == 0
+        if fallback:
+            without_exchange(root, OVER[-1])
+        faults = FaultInjector()
+        assert rollback(f"{root}/state", to="r1", faults=faults).returncode == 0
+        return list(dict.fromkeys(faults.reached))
+    finally:
+        remove(root)
+
+
+def tree_run(path):
+    stamp = os.path.join(path, ".eb-staged-rebuild-complete")
+    if not os.path.exists(stamp):
+        return None
+    with open(stamp) as handle:
+        return json.load(handle)["run_id"]
+
+
+def trees(fixture, root):
+    """The run marker of every live and hidden tree of each install path."""
+    found = {}
+    for rel in fixture.rels:
+        name = rel.split("/")[0]
+        parent = os.path.join(root, "software", name)
+        for entry in sorted(os.listdir(parent)):
+            found[f"{name}/{entry}"] = tree_run(os.path.join(parent, entry))
+    return found
+
+
+def module_texts(fixture, root):
+    texts = []
+    for rel in fixture.rels:
+        name, version = rel.split("/")
+        with open(os.path.join(root, "modules", "all", name, f"{version}.lua")) as handle:
+            texts.append(handle.read().replace(root, "W"))
+    return texts
+
+
+def to_outcome(fixture, root):
+    states = {}
+    for run_id in OVER:
+        with open(journal_file(root, run_id)) as handle:
+            journal = json.load(handle)
+        plan = journal.get("modules_plan") or []
+        states[run_id] = [journal["state"], journal.get("rollback_to"), [mod.get("status") for mod in plan]]
+    return {"states": states, "trees": trees(fixture, root), "modules": module_texts(fixture, root)}
+
+
+def to_expected(fixture):
+    """What rollback --to r1 over r2 and r3 must end with.
+
+    Every live tree is r1's, each hidden tree holds the run that names it
+    (the first holds the original), and r2 and r3 are rolled back.
+    """
+    trees_after = {}
+    for rel in fixture.rels:
+        name, version = rel.split("/")
+        trees_after.update({f"{name}/{version}": "r1", f"{name}/.{version}.r1": None})
+        trees_after.update({f"{name}/.{version}.{run_id}": run_id for run_id in OVER[1:]})
+    states = {"r1": ["complete", None, ["published"] * len(fixture.rels)]}
+    states.update({run_id: ["rolled_back", "r1", ["restored"] * len(fixture.rels)] for run_id in OVER[1:]})
+    return trees_after, states
+
+
+def published_over(impl, fixture, root, fallback):
+    """Publish r1, r2 and r3, each with its own module file; r1's module files."""
+    fixture.build(root)
+    for run_id in OVER:
+        assert finish(impl, fixture, fixture.run_args(root, run_id), root, FAKE_EB_MODULE_NOTE=run_id) == 0
+        if run_id == "r1":
+            modules = module_texts(fixture, root)
+    if fallback:
+        without_exchange(root, OVER[-1])
+    return modules
+
+
+def rollback_to_matrix(fixture, fallback=False):
+    """rollback --to r1 over r2 and r3, killed at every step, then run again.
+
+    It must end as to_expected says, with the module files r1 published.
+    """
+    label = fixture.name + (", rename fallback" if fallback else "")
+    expected, states = to_expected(fixture)
+    failures = total = 0
+    for step in steps_rollback_to(fixture, fallback):
+        def body(impl, root):
+            modules = published_over(impl, fixture, root, fallback)
+            args = ["rollback", "--state-root", f"{root}/state", "--to", "r1"]
+            how = kill_at(impl, fixture, args, step, root)
+            rc = finish(impl, fixture, args, root)
+            return {"kill": how, "rollback_rc": rc, "published_modules": modules, **to_outcome(fixture, root)}
+        results = each_impl("crash-to", body)
+        final = results["py"]
+        ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["rollback_rc"] == 0
+        ok = ok and final["trees"] == expected and final["states"] == states
+        ok = ok and final["modules"] == final["published_modules"]
+        failures += report(f"{label}: rollback --to killed at {step}", results, ok)
+        total += 1
+    return failures, total
+
+
 def retire_steps():
     """Fault steps one Python retire reaches, then one rollback of it."""
     from eb_staged_rebuild.retire import retire
@@ -526,11 +646,14 @@ def main():
         print("set TOOL_BIN", file=sys.stderr)
         return 2
     failures = total = 0
-    for fixture in (ONE, TWO, PREPARE, SEALED):
+    for fixture in (ONE, TWO, PREPARE, SEALED, VERIFY):
         f, t = run_matrix(fixture)
         failures, total = failures + f, total + t
     f, t = fallback_matrix()
     failures, total = failures + f, total + t
+    for fixture, fallback in ((ONE, False), (TWO, False), (ONE, True)):
+        f, t = rollback_to_matrix(fixture, fallback)
+        failures, total = failures + f, total + t
     f, t = retire_matrix()
     failures, total = failures + f, total + t
     print(f"{total - failures} of {total} cases match")

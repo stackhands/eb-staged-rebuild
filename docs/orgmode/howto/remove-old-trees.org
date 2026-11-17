@@ -6,6 +6,7 @@
 
 Free the space of the installations that rebuilds and rollbacks replaced, once no job can still be using them.
 Each one stays beside the stable directory under a hidden name, =software/NAME/.VERSION.RUN_ID=, and =gc= removes those whose grace period is over.
+With =--keep=, it keeps the newest trees that =rollback --to= can return to, and with =--check-in-use=, a tree that a process of its own machine still uses.
 
 ** Before you start
 
@@ -13,6 +14,7 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
 - The longest time a job runs at the site, with a margin: the grace period has to cover a job that started just before a tree was replaced.
   The default is 144 hours, which assumes jobs of up to 120 hours and adds a day; give =run --grace-hours= or =EB_STAGED_REBUILD_GRACE_HOURS= the site's own value.
   Each run records it, and =gc= keeps the run's trees that long.
+- How many earlier installations to keep for =rollback --to= however old they are, if any: =--keep= takes that number.
 
 ** Steps
 
@@ -59,11 +61,17 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
 
    #+begin_example
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1 (previous live tree)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-1 (generation of a complete run)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (previous live tree)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-2 (generation of a complete run)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-3 (generation of a rolled-back run)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-1 (previous live tree)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-1 (generation of a complete run)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (previous live tree)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-2 (generation of a complete run)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-3 (generation of a rolled-back run)
    #+end_example
 
 ** Check that it worked
@@ -84,13 +92,130 @@ With =--include-failed=, it removes the generation of a failed run that publishe
 The journals themselves stay, and =status= still lists the runs.
 =docs/examples/site.sh= in the repository runs these steps as its case =gc=.
 
+** Keep the trees to roll back to
+
+=--keep N= keeps, for each installation, the =N= newest trees that =rollback --to= can return to, however old they are; =gc= decides the other trees as it does without =--keep=.
+
+1. See the trees of the installation:
+
+   #+begin_src bash
+   eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+   #+end_src
+
+   #+begin_example
+   Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+     live         2026-11-17T16:14:08Z  example-9  verify -
+     replaced     2026-11-17T16:13:52Z  example-8  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9
+     rolled back  2026-11-17T16:13:37Z  example-7  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7
+     rolled back  2026-11-17T16:13:21Z  example-6  verify pass  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+     rolled back  2026-11-17T16:13:05Z  example-5  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+     rolled back  2026-11-17T16:12:49Z  example-4  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4
+     replaced     2026-11-17T16:12:31Z  example-userns  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-8
+     replaced     2026-11-17T16:12:29Z  example-robot  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns
+     replaced     2026-11-17T16:11:51Z  example-2  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot
+   #+end_example
+
+   Here =example-9= was published over =example-8=, and =example-8= over the tree of =example-userns=, which the last rollback of [[file:roll-back.org][Put the previous installation back]] had made live again.
+   The =replaced= trees are the ones that =rollback --to= can return to; the =rolled back= ones do not count.
+2. See what =gc --keep 1= would do, now and once the grace period is over:
+
+   #+begin_src bash
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --keep 1 --dry-run
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --keep 1 --grace-hours 0 --dry-run
+   #+end_src
+
+   #+begin_example
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4 (within grace (rolled-back candidate))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5 (within grace (rolled-back candidate))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6 (within grace (rolled-back candidate))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7 (within grace (rolled-back candidate))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-8 (within grace (previous live tree))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9 (kept by --keep 1)
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot (within grace (previous live tree))
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns (within grace (previous live tree))
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-4 (generation of a rolled-back run)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-5 (generation of a rolled-back run)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-6 (generation of a rolled-back run)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7 (rolled-back candidate)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-7 (generation of a rolled-back run)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-8 (previous live tree, beyond --keep 1)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-8 (generation of a complete run)
+   keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9 (kept by --keep 1)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot (previous live tree, beyond --keep 1)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-robot (generation of a complete run)
+   remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns (previous live tree, beyond --keep 1)
+   remove: /opt/site/.eb-staged-rebuild/generations/example-userns (generation of a complete run)
+   #+end_example
+
+   The tree of =example-8=, at the hidden name of =example-9=, stays however old it is.
+   The trees of =example-userns=, =example-robot= and =example-2= are beyond =--keep 1=, and go with the rolled-back trees once their grace period is over.
+   Each run whose hidden trees all go loses its generation with them; =example-9= keeps its generation while =--keep= keeps its tree.
+3. Run the command without =--dry-run= to remove them, as the next section does with =--check-in-use=.
+
+** When a job still uses a tree
+
+With =--check-in-use=, before it removes a tree or a generation, =gc= looks for a process or a mount of its own machine that uses it, and keeps it when it finds one.
+Without it, =gc= goes by the grace period and =--keep= alone.
+Here a process on login1 still had its working directory in the tree of =example-userns=:
+
+#+begin_src bash
+eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --keep 1 --grace-hours 0 --check-in-use
+#+end_src
+
+#+begin_example
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4 (rolled-back candidate)
+remove: /opt/site/.eb-staged-rebuild/generations/example-4 (generation of a rolled-back run)
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5 (rolled-back candidate)
+remove: /opt/site/.eb-staged-rebuild/generations/example-5 (generation of a rolled-back run)
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6 (rolled-back candidate)
+remove: /opt/site/.eb-staged-rebuild/generations/example-6 (generation of a rolled-back run)
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7 (rolled-back candidate)
+remove: /opt/site/.eb-staged-rebuild/generations/example-7 (generation of a rolled-back run)
+keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-8 (in use on this node: pid 2490983 has its working directory in it)
+keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9 (kept by --keep 1)
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot (previous live tree, beyond --keep 1)
+remove: /opt/site/.eb-staged-rebuild/generations/example-robot (generation of a complete run)
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns (previous live tree, beyond --keep 1)
+remove: /opt/site/.eb-staged-rebuild/generations/example-userns (generation of a complete run)
+#+end_example
+
+=gc= removed the rolled-back trees and the two older trees beyond =--keep 1= with the generations of their runs, and kept the tree in use, and with it the generation of =example-8=, whose journal names that tree.
+Once the process had ended, the same command removed both:
+
+#+begin_example
+remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-8 (previous live tree, beyond --keep 1)
+remove: /opt/site/.eb-staged-rebuild/generations/example-8 (generation of a complete run)
+keep: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9 (kept by --keep 1)
+#+end_example
+
+The installation is left with its live tree, and the one tree that a rollback can return to:
+
+#+begin_src bash
+eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+#+end_src
+
+#+begin_example
+Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+  live         2026-11-17T16:14:08Z  example-9  verify -
+  replaced     2026-11-17T16:13:52Z  example-8  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-9
+#+end_example
+
+The check sees this machine only, and without root your own processes only: a job on another node, or another user's, has only the grace period.
+[[file:../reference/generations.org][The generations of an installation]] lists what the check looks at, and what it cannot see.
+=docs/examples/site.sh= runs the steps of this section and the one before as its case =gc-keep=, after it publishes =example-8= and =example-9=.
+
 ** If it fails
 
-| Message                                                                                             | Cause                                                                                | What to do                                                                                                                             |
-|-----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------|
-| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | A run, a rollback or =retire= is using the state root, and =--lock-timeout= ran out. | Run =gc= when it is done, or give =--lock-timeout= more seconds.                                                                       |
-| =keep: PATH (a live module resolves inside it)=                                                     | A module file of a run still names a directory inside the hidden tree.               | Find the module file with =resolve=; the tree is removed once nothing names it.                                                        |
-| =manual: PATH (ready to remove by hand after ...)=                                                  | A retired module file named this stable directory, and its grace period is over.     | Remove it by hand once nothing uses it, as in [[file:retire.org][Retire a module file that another stack provides]]; =gc= never removes a stable directory. |
+| Message                                                                                             | Cause                                                                                            | What to do                                                                                                                                                  |
+|-----------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | A run, a rollback or =retire= is using the state root, and =--lock-timeout= ran out.             | Run =gc= when it is done, or give =--lock-timeout= more seconds.                                                                                            |
+| =keep: PATH (a live module resolves inside it)=                                                     | A module file of a run still names a directory inside the hidden tree.                           | Find the module file with =resolve=; the tree is removed once nothing names it.                                                                             |
+| =keep: PATH (in use on this node: USE)=                                                             | With =--check-in-use=: a process or a mount of this machine uses the tree, and =USE= says which. | Let the job finish, or end the process or the mount, and run =gc= again.                                                                                    |
+| =eb-staged-rebuild gc: error: argument --keep: invalid count value: 'VALUE'=, exit 2                | =--keep= takes a whole number of trees.                                                          | Give a number, such as =--keep 2=.                                                                                                                          |
+| =manual: PATH (ready to remove by hand after ...)=                                                  | A retired module file named this stable directory, and its grace period is over.                 | Remove it by hand once nothing uses it, as in [[file:retire.org][Retire a module file that another stack provides]]; =gc= never removes a stable directory. |
 
 Here another process holds the lock while =gc= waits 0.2 seconds for it, as =site.sh= does in its case =lock=:
 
@@ -107,4 +232,5 @@ eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-sta
 - [[file:roll-back.org][Put the previous installation back]], which needs the hidden tree
 - [[file:retire.org][Retire a module file that another stack provides]]
 - [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]], for why the old tree is kept
+- [[file:../reference/generations.org][The generations of an installation]], for every reason =gc= gives
 - [[file:../reference/cli.org][The eb-staged-rebuild command]]

@@ -34,7 +34,7 @@ HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
-ledger-rollback build-events anchor project"
+ledger-rollback build-events anchor project verify list rollback-to gc-keep"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -287,6 +287,58 @@ case_project() {
         --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
     step 0 ls -A "$HISTORY" "$HISTORY/packages"
     step 0 cat "$HISTORY/packages/Example.md"
+}
+
+case_verify() {
+    # The builder's EasyBuild configuration leaves the new tree readable by
+    # its owner only.
+    export EASYBUILD_UMASK=077
+    STATUS=2 run_example example-6 --verify
+    unset EASYBUILD_UMASK
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
+    step 1 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 cat "$STATE/runs/example-6/verify.json"
+    step 0 chmod -R go+rX "$STATE/generations/example-6/software/Example/1.0-GCCcore-15.2.0"
+    step 0 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_list() {
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+}
+
+case_rollback-to() {
+    run_example example-7
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --latest
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-5
+    step 2 eb-staged-rebuild rollback --state-root "$STATE" --to example-7
+}
+
+case_gc-keep() {
+    local tree=$SITE/software/Example/.1.0-GCCcore-15.2.0.example-8 job
+    run_example example-8
+    run_example example-9
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --dry-run
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --dry-run
+    # A job on this machine with its working directory in the tree that
+    # example-8 replaced.
+    (cd "$tree" && exec sleep 600) &
+    job=$!
+    until [ "$(readlink "/proc/$job/cwd")" = "$tree" ]; do
+        kill -0 "$job"
+        sleep 0.1
+    done
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
+    kill "$job"
+    wait "$job" || true
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
+    step 0 eb-staged-rebuild list --state-root "$STATE"
 }
 
 clean() {
