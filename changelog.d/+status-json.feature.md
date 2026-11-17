@@ -1,0 +1,1 @@
+`status --json` prints one JSON document of the journals: each run's state, backend, message and module plan, or a retire record's module file and software directory. With no journal the document is `{"runs": []}`. The text is unchanged without the option. Both the Python tool and the binary.

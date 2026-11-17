@@ -150,6 +150,7 @@ def _parser():
 
     status_p = sub.add_parser("status", help="show run journals")
     _add_state_root(status_p)
+    status_p.add_argument("--json", action="store_true", help="print one JSON document")
     status_p.add_argument("run_id", nargs="?")
 
     resolve_p = sub.add_parser("resolve", help="print the install path a module file names")
@@ -259,6 +260,9 @@ def _dispatch(args):
             journals = [journal for journal in journals if journal.get("run_id") == args.run_id]
             if not journals:
                 raise Refused(f"no journal for {args.run_id}")
+        if args.json:
+            print(json.dumps({"runs": [_status_view(journal) for journal in journals]}, indent=2, sort_keys=True))
+            return 0
         if not journals:
             print("no runs")
             return 0
@@ -282,6 +286,44 @@ def _dispatch(args):
                 )
         return 0
     raise Refused(f"unknown command {args.command}")
+
+
+def _status_view(journal):
+    """The fields ``status`` prints, as one object of the JSON document.
+
+    A retire record keeps the run, its state, the module file and the software
+    directory it left in place. Any other journal keeps the backend, the
+    message, and one object per planned module. A missing kind is ``rebuild``.
+    """
+    if journal.get("kind") == "retire":
+        return {
+            "kind": "retire",
+            "module_path": journal.get("module_path"),
+            "run_id": journal.get("run_id"),
+            "software_dir": journal.get("software_dir"),
+            "state": journal.get("state"),
+        }
+    modules = journal.get("modules_plan") or []
+    published = sum(1 for mod in modules if mod.get("status") == "published")
+    kind = journal.get("kind") or "rebuild"
+    return {
+        "backend": journal.get("backend"),
+        "kind": kind,
+        "message": journal.get("message"),
+        "modules": [
+            {
+                "live_software": mod.get("live_software"),
+                "rel": mod.get("rel"),
+                "retired": mod.get("retired"),
+                "status": mod.get("status"),
+            }
+            for mod in modules
+        ],
+        "modules_published": published,
+        "modules_total": len(modules),
+        "run_id": journal.get("run_id"),
+        "state": journal.get("state"),
+    }
 
 
 def _print_probe(report):
