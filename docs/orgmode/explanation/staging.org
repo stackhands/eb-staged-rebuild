@@ -20,7 +20,7 @@ Each run has a /generation/, =<state-root>/generations/RUN_ID=, and EasyBuild in
 The live tree is replaced only once the new one is complete:
 
 #+CAPTION: One run, from the build to the removal of the old tree.
-#+ATTR_RST: :alt Before the run the stable path is the installation jobs use. EasyBuild installs into the run's generation. If the build failed, the tree is incomplete or the live tree changed, the run fails and nothing live changes. Otherwise the new module file is prepared with root set to the stable path, and paths the build wrote into files are changed to it; the new tree moves beside the live one under a hidden name; renameat2 with RENAME_EXCHANGE swaps the two names; the new module file replaces the old one with one rename; the old tree waits under the hidden name until rollback swaps it back or gc removes it after the grace period
+#+ATTR_RST: :alt Before the run the stable path is the installation jobs use. EasyBuild installs into the run's generation. If the build failed, the tree is incomplete or the live tree changed, the run fails and nothing live changes. Otherwise the new module file is prepared with root set to the stable path. With --verify, if the new tree fails the checks before publication and --force is not given, the run stays built and nothing live changes. Otherwise paths the build wrote into files are changed to the stable path, and the new tree moves beside the live one under a hidden name; renameat2 with RENAME_EXCHANGE swaps the two names; the new module file replaces the old one with one rename; the old tree waits under the hidden name until rollback swaps it back or gc removes it after the grace period
 [[file:figures/staging.svg]]
 
 *** A complete tree, or nothing
@@ -29,6 +29,7 @@ Before the run builds, it records the live installation: the inode, size and SHA
 After the build, the run goes on only if EasyBuild exited 0, if the new installation directory holds what a finished build leaves, the easyconfig that EasyBuild copies into =easybuild/= at the end, and if the live tree still matches the record.
 Otherwise the run is =failed=, and the live tree and its module file are as they were; [[file:../howto/recover.org][Finish a run that failed or stopped]] continues from there.
 =--skip-live-check= drops the record and its check.
+A complete tree can still be one that jobs cannot use, so with =--verify=, before it publishes, the run also checks that the libraries of its programs are found, that no file names the build directory or a temporary directory, that Lmod loads its module file and that publishing would not change who may use it; [[file:../howto/verify-a-stage.org][Check a rebuild before it goes live]] covers a tree that fails.
 
 *** One name for the installation
 

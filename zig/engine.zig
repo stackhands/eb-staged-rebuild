@@ -43,6 +43,8 @@ pub const Spec = struct {
     lock_timeout: ?f64 = null,
     prepare_executable: ?[]const u8 = null,
     ledger_config: ?[]const u8 = null,
+    verify: bool = false,
+    force: bool = false,
 };
 
 // ---- eb arguments, as builders.py shapes them -----------------------------

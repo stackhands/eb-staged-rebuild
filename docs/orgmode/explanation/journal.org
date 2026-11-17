@@ -18,7 +18,7 @@ Whoever comes next has to know what the run had done, which of two trees is the 
 
 Each run writes =<state-root>/runs/RUN_ID/journal.json=, and replaces the whole file after each step, by a rename in the same directory, so a reader always finds a complete journal.
 The run id is the one =--run-id= gives, which must not be taken already, or else the time the run started, in UTC, and the number of its process, =YYYYMMDD-HHMMSS-PID=, with =-1=, =-2= and so on added while that name is taken.
-The journal holds what the run was given and what it found: the trees, the backend, the EasyBuild command, the grace period that =gc= keeps the previous tree for, the probes, the record of the live tree, with =bwrap= the mount points to remove after the build, the ledger configuration; and, for each module file, the stable directory, the new tree and its hidden name, the backup, the SHA-256 of the old and new module file, and how far its publication got.
+The journal holds what the run was given and what it found: the trees, the backend, the EasyBuild command, the grace period that =gc= keeps the previous tree for, the probes, the record of the live tree, with =bwrap= the mount points to remove after the build, the ledger configuration, with =--verify= the directories and EESSI roots that the checks before the swap judge the generation against and their last result; and, for each module file, the stable directory, the new tree and its hidden name, the backup, the SHA-256 of the old and new module file, and how far its publication got.
 =gc= records =retired_removed_at= when it removes a hidden tree and =generation_removed_at= when every hidden tree is settled and it removes the run's generation.
 A later =resume= that rebuilds the run recreates the generation and clears =generation_removed_at=.
 =status= prints the journal of every run, or of one; [[file:../reference/files.org][Files]] lists what is in it.
@@ -38,7 +38,7 @@ What =resume= does follows from the state:
 | =complete=                      | delivers ledger records that are still pending, and otherwise says the run is complete |
 | =rolled_back=                   | refuses: start a new run                                                               |
 
-A run that a preparation program or a pending ledger record stopped stays =built=, and =resume= runs that step again.
+A run that a preparation program, the checks of =--verify= or a pending ledger record stopped stays =built=, and =resume= runs that step again.
 [[py:eb_staged_rebuild.engine.resume]] and [[zig:eb-staged-rebuild.engine.run_mod.resumeRun]] decide.
 
 *** Which tree is which

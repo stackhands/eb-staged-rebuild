@@ -34,7 +34,7 @@ HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
-ledger-rollback build-events anchor project"
+ledger-rollback build-events anchor project verify"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -287,6 +287,21 @@ case_project() {
         --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
     step 0 ls -A "$HISTORY" "$HISTORY/packages"
     step 0 cat "$HISTORY/packages/Example.md"
+}
+
+case_verify() {
+    # The builder's EasyBuild configuration leaves the new tree readable by
+    # its owner only.
+    export EASYBUILD_UMASK=077
+    STATUS=2 run_example example-6 --verify
+    unset EASYBUILD_UMASK
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
+    step 1 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 cat "$STATE/runs/example-6/verify.json"
+    step 0 chmod -R go+rX "$STATE/generations/example-6/software/Example/1.0-GCCcore-15.2.0"
+    step 0 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
 }
 
 clean() {

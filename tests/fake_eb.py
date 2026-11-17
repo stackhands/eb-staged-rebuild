@@ -46,33 +46,48 @@ def _write(path, data):
     os.replace(tmp, path)
 
 
-def _elf_rpath(rpath):
-    """A tiny ELF64 whose DT_RPATH is ``rpath``, readable by ``readelf -d``."""
+def elf_bytes(needed=(), rpath=None, runpath=None, interp=None, machine=62, wide=True, little=True):
+    """A tiny ELF shared object with these dynamic entries, readable by ``readelf -d``.
+
+    Its one PT_LOAD maps the whole file, so the dynamic string table is found
+    the way the loader finds it; ``interp`` adds a PT_INTERP.
+    """
     import struct
 
-    dynstr = b"\x00" + rpath.encode("utf-8") + b"\x00"
-    dyn_off = 176
-    str_off = 240
-    file_size = str_off + len(dynstr)
-    ident = b"\x7fELF" + bytes([2, 1, 1, 0, 0]) + b"\x00" * 7
-    ehdr = ident + struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, 0, 64, 0, 0, 64, 56, 2, 0, 0, 0)
-
-    def phdr(p_type, p_flags, p_offset, p_vaddr, p_filesz, p_memsz, p_align):
-        return struct.pack("<IIQQQQQQ", p_type, p_flags, p_offset, p_vaddr, p_vaddr, p_filesz, p_memsz, p_align)
-
+    order = "<" if little else ">"
+    dynstr = b"\x00"
+    tags = []
+    for tag, value in [(1, name) for name in needed] + [(15, rpath), (29, runpath)]:
+        if value is not None:
+            tags.append((tag, len(dynstr)))
+            dynstr += value.encode("utf-8") + b"\x00"
+    ehsize, phsize, dynsize = (64, 56, 16) if wide else (52, 32, 8)
+    count = 3 if interp is not None else 2
+    interp_off = ehsize + phsize * count
+    interp_bytes = b"" if interp is None else interp.encode("utf-8") + b"\x00"
+    dyn_off = (interp_off + len(interp_bytes) + 7) // 8 * 8
     load_vaddr = 0x400000
-    load = phdr(1, 6, 0, load_vaddr, file_size, file_size, 0x1000)
-    dynamic = phdr(2, 6, dyn_off, load_vaddr + dyn_off, 64, 64, 8)
+    entries = [t for t in tags if t[0] == 1] + [(5, None), (10, len(dynstr))] + [t for t in tags if t[0] != 1] + [(0, 0)]
+    str_off = dyn_off + dynsize * len(entries)
+    file_size = str_off + len(dynstr)
+    ident = b"\x7fELF" + bytes([2 if wide else 1, 1 if little else 2, 1, 0, 0]) + b"\x00" * 7
+    head = "HHIQQQIHHHHHH" if wide else "HHIIIIIHHHHHH"
+    ehdr = ident + struct.pack(order + head, 3, machine, 1, 0, ehsize, 0, 0, ehsize, phsize, count, 0, 0, 0)
+
+    def phdr(p_type, p_offset, p_vaddr, p_filesz, p_align):
+        if wide:
+            return struct.pack(order + "IIQQQQQQ", p_type, 6, p_offset, p_vaddr, p_vaddr, p_filesz, p_filesz, p_align)
+        return struct.pack(order + "IIIIIIII", p_type, p_offset, p_vaddr, p_vaddr, p_filesz, p_filesz, 6, p_align)
+
+    table = phdr(1, 0, load_vaddr, file_size, 0x1000) + phdr(2, dyn_off, load_vaddr + dyn_off, dynsize * len(entries), 8)
+    if interp is not None:
+        table += phdr(3, interp_off, load_vaddr + interp_off, len(interp_bytes), 1)
     dyns = b"".join(
-        struct.pack("<QQ", tag, val)
-        for tag, val in (
-            (5, load_vaddr + str_off),
-            (10, len(dynstr)),
-            (15, 1),
-            (0, 0),
-        )
+        struct.pack(order + ("qQ" if wide else "iI"), tag, load_vaddr + str_off if value is None else value)
+        for tag, value in entries
     )
-    return ehdr + load + dynamic + dyns + dynstr
+    padding = b"\x00" * (dyn_off - interp_off - len(interp_bytes))
+    return ehdr + table + interp_bytes + padding + dyns + dynstr
 
 
 def _record_prefix(generation, root):
@@ -81,14 +96,40 @@ def _record_prefix(generation, root):
         return
     _write(os.path.join(generation, "lib", "pkgconfig", "demo.pc"), f"prefix={root}\n")
     _write(os.path.join(generation, "bin", "demo"), f"#!{root}/bin/python\n")
-    library = os.path.join(generation, "lib", "libdemo.so")
-    os.makedirs(os.path.dirname(library), exist_ok=True)
-    tmp = library + ".tmp"
+    _write_bytes(os.path.join(generation, "lib", "libdemo.so"), elf_bytes(rpath=f"{root}/lib"))
+
+
+def _write_bytes(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
     with open(tmp, "wb") as handle:
-        handle.write(_elf_rpath(f"{root}/lib"))
+        handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, library)
+    os.replace(tmp, path)
+
+
+def _extra(generation, root):
+    """FAKE_EB_EXTRA: JSON naming more of the installation, by path inside it.
+
+    "elf" maps a path to elf_bytes() keyword arguments, "text" to its content
+    and "links" to a symbolic link's target; "modes" then sets modes. "@ROOT@"
+    in any string is the installation's path as the module file names it.
+    """
+    raw = os.environ.get("FAKE_EB_EXTRA")
+    if not raw:
+        return
+    spec = json.loads(raw.replace("@ROOT@", root))
+    for rel, kwargs in (spec.get("elf") or {}).items():
+        _write_bytes(os.path.join(generation, rel), elf_bytes(**kwargs))
+    for rel, text in (spec.get("text") or {}).items():
+        _write(os.path.join(generation, rel), text)
+    for rel, target in (spec.get("links") or {}).items():
+        path = os.path.join(generation, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.symlink(target, path)
+    for rel, mode in (spec.get("modes") or {}).items():
+        os.chmod(os.path.join(generation, rel), mode)
 
 
 def _lua(root):
@@ -120,6 +161,7 @@ def _write_tree(software, modules, root_in_module, rel=None):
     _write(os.path.join(generation, "PAYLOAD"), _payload())
     _write(os.path.join(generation, "easybuild", "demo-1.eb"), "name = 'demo'\n")
     _record_prefix(generation, root_in_module)
+    _extra(generation, root_in_module)
     module = os.path.join(modules, "all", rel + ".lua")
     _write(module, _lua(root_in_module))
     # FAKE_EB_ACL: hex bytes of a POSIX access ACL set on the written module.

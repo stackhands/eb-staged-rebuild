@@ -58,6 +58,7 @@ from eb_staged_rebuild.paths import (
 )
 from eb_staged_rebuild.probe import probe_all, stage_paths_from_bwrap_info
 from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
+from eb_staged_rebuild.verify import context as verify_context, verify_stage
 
 import re
 
@@ -92,6 +93,8 @@ class Spec:
     prepare_executable: str = None
     ledger_config: str = None
     ledger_policy: dict = None
+    verify: bool = False
+    force: bool = False
 
 
 @dataclass
@@ -1113,11 +1116,47 @@ def _record_finished(spec, journal, faults, publisher, message):
     return Result(code, journal["run_id"], "complete", message, _command_text(journal))
 
 
+def _verify_trees(journal):
+    """Each module's staged tree: at its stage name, or at its hidden name after a restored publish."""
+    trees = []
+    for mod in journal.get("modules_plan") or []:
+        if lstat_kind(mod["staged"]) == "dir":
+            trees.append(abspath(mod["staged"]))
+        elif lstat_kind(mod["retired"]) == "dir" and _tree_run_id(mod["retired"]) == journal["run_id"]:
+            trees.append(abspath(mod["retired"]))
+        else:
+            raise Refused(f"the staged tree of {mod['rel']} is missing: {mod['staged']}")
+    return trees
+
+
+def _verify_gate(spec, journal, faults):
+    """Whether the stage may be published: it passes verify, or --force overrides a failure."""
+    record = verify_stage(journal, _verify_trees(journal), faults, _clock(spec))
+    failed = record["result"] != "pass"
+    record["forced"] = failed and spec.force
+    journal["verify"] = record
+    journal["updated_at"] = record["at"]
+    if failed and not spec.force:
+        journal["message"] = (
+            "verify failed; the live directory was not swapped. Fix the stage and resume "
+            f"{journal['run_id']}, or resume it with --force to publish it anyway"
+        )
+    else:
+        journal["message"] = ""
+    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.verified")
+    if failed:
+        _log(f"verify failed; publishing run {journal['run_id']} anyway (--force)" if spec.force else journal["message"])
+    return not failed or spec.force
+
+
 def _publish_recorded(spec, journal, faults):
     """Swap only after a required ledger has acknowledged every started record."""
     rc = _prepare_publication(spec, journal, faults)
     if rc != 0:
         return Result(rc, journal["run_id"], "failed", journal["message"], _command_text(journal))
+    gated = journal["state"] == "built" and journal.get("verify_before_swap")
+    if gated and not _verify_gate(spec, journal, faults):
+        return Result(2, journal["run_id"], "failed", journal["message"], _command_text(journal))
     publisher = _publisher(journal)
     if publisher is not None:
         _validate_publication_set(journal)
@@ -1166,7 +1205,7 @@ def _run_locked(spec, faults, journal, fresh_build):
 
 def _blank_journal(spec, run_id, probes, rels, left_out):
     now = _clock(spec)()
-    return {
+    journal = {
         "schema": SCHEMA,
         "run_id": run_id,
         "state": "created",
@@ -1199,6 +1238,11 @@ def _blank_journal(spec, run_id, probes, rels, left_out):
         "retired_at": None,
         "generation_removed_at": None,
     }
+    if spec.verify:
+        journal["verify_before_swap"] = True
+        journal["verify_context"] = verify_context(spec.eb_args, os.environ)
+        journal["verify"] = None
+    return journal
 
 
 def _select_backend(spec, probes):
@@ -1216,7 +1260,11 @@ def _select_backend(spec, probes):
 
 
 def run(spec):
-    """Build into a new generation, then swap it with the live directory."""
+    """Build into a new generation, then swap it with the live directory.
+
+    With ``spec.verify``, the stage is checked first, and a generation that
+    fails is not swapped in unless ``spec.force`` is set.
+    """
     _check_roots(spec)
     spec.software = abspath(spec.software)
     spec.modules = abspath(spec.modules)
@@ -1285,20 +1333,35 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
     )
 
 
-def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeout=None):
-    """Continue a run. A finished run is a no-op. A rolled-back run is refused."""
+def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeout=None, verify=False, force=False):
+    """Continue a run. A finished run is a no-op. A rolled-back run is refused.
+
+    A run started with ``--verify``, or resumed with ``verify``, has its stage
+    checked before the swap; the journal keeps that, with the directories the
+    checks judge the stage against, so a later resume checks it the same way.
+    With ``force`` as well, a stage that fails is published anyway, and the
+    journal records that it was forced.
+    """
     path = journal_path(state_root, run_id)
     journal = load_journal(path)
     if journal.get("kind") == "retire":
         raise Refused(f"run {run_id} is a retire record; rollback restores the module file")
     faults = faults or FaultInjector()
     spec = _spec_from_journal(journal, builder, faults, clock, lock_timeout)
+    spec.force = force
     _check_roots(spec)
     lock = FileLock(spec.state_root)
     lock.acquire(lock_timeout)
     try:
         journal = load_journal(path)
         state = journal["state"]
+        if force and not (verify or journal.get("verify_before_swap")):
+            raise Refused(f"--force needs --verify; run {run_id} does not check its stage before the swap")
+        if verify and not journal.get("verify_before_swap") and state in ("created", "building", "failed", "built"):
+            journal["verify_before_swap"] = True
+            journal["verify_context"] = verify_context(spec.eb_args, os.environ)
+            save_journal(path, journal, faults, "journal.verify_before_swap")
+        spec.verify = bool(journal.get("verify_before_swap"))
         published = [mod for mod in journal.get("modules_plan") or [] if mod.get("status") == "published"]
         if state == "complete":
             message = f"run {run_id} is already complete"
@@ -1316,6 +1379,26 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
             _log(f"resume {run_id} from {state}: publishing")
             return _publish_recorded(spec, journal, faults)
         raise NeedsIntervention(f"run {run_id} is in an unknown state {state}")
+    finally:
+        lock.release()
+
+
+def verify(state_root, run_id, clock=None, lock_timeout=None):
+    """Check a built run's stage and record the result. Nothing is published."""
+    path = journal_path(state_root, run_id)
+    lock = FileLock(state_root)
+    lock.acquire(lock_timeout)
+    try:
+        journal = load_journal(path)
+        if journal.get("kind") == "retire":
+            raise Refused(f"run {run_id} is a retire record; it has no stage to verify")
+        if journal["state"] != "built":
+            raise Refused(f"run {run_id} is {journal['state']}; only a built run has a stage to verify")
+        faults = FaultInjector()
+        record = verify_stage(journal, _verify_trees(journal), faults, clock or time.time)
+        journal["verify"] = record
+        save_journal(path, journal, faults, "journal.verified")
+        return Result(0 if record["result"] == "pass" else 1, run_id, journal["state"], record["result"])
     finally:
         lock.release()
 

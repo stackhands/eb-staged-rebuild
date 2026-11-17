@@ -5,7 +5,8 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--module NAME/VERSION] [--run-id RUN_ID]
                              [--lock-timeout LOCK_TIMEOUT] [--skip-live-check]
                              [--prepare PREPARE]
-                             [--ledger-config LEDGER_CONFIG]
+                             [--ledger-config LEDGER_CONFIG] [--verify]
+                             [--force]
                              ...
 
 positional arguments:
@@ -34,3 +35,7 @@ options:
   --ledger-config LEDGER_CONFIG
                         JSON eb-stack ledger configuration; started records
                         precede the directory swap
+  --verify              check the stage before the swap, and do not publish
+                        one that fails
+  --force               with --verify, publish a stage that fails; the journal
+                        records it

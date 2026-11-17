@@ -18,8 +18,9 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
-                      [--ledger-config FILE] -- EASYCONFIG [EB-ARGUMENT...]
-eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
+                      [--ledger-config FILE] [--verify] [--force] -- EASYCONFIG [EB-ARGUMENT...]
+eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] [--verify] [--force] RUN_ID
+eb-staged-rebuild verify --state-root DIR [--lock-timeout SECONDS] STAGE
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
                      [--lock-timeout SECONDS]
@@ -36,17 +37,18 @@ The binary's help, from =eb-staged-rebuild --help=; the Python package's can wra
 
 #+begin_example
 usage: eb-staged-rebuild [-h] [--version]
-                         {probe,run,resume,rollback,gc,retire,status,resolve} ...
+                         {probe,run,resume,verify,rollback,gc,retire,status,resolve} ...
 
 Build EasyBuild software in a staged tree, then exchange the complete tree
 with the stable live directory.
 
 positional arguments:
-  {probe,run,resume,rollback,gc,retire,status,resolve}
+  {probe,run,resume,verify,rollback,gc,retire,status,resolve}
     probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
                         EasyBuild
     run                 build and atomically swap a staged tree
     resume              continue a run after a crash
+    verify              check a built run's stage before it is published
     rollback            restore the previous module files, or put a retired
                         module file back
     gc                  remove hidden retired siblings after the grace period
@@ -65,6 +67,7 @@ options:
 The first argument is the command, and =COMMAND --help= prints that command's options.
 For =run=, every argument after =--= goes to EasyBuild: the easyconfig, and any of =eb='s own options.
 For =resume=, =rollback= and =status=, =RUN_ID= names a run, or a retire record, in the state root.
+For =verify=, =STAGE= names a =built= run.
 
 ** Options
 
@@ -125,6 +128,8 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--skip-live-check= | Do not record the live directories at the start, and do not refuse one that changed during the build.                                                                                                  |
 | =--prepare=         | The absolute path of a program to run with the path of =prepare-context.json=, after the build and before the exchange; a status other than 0 stops the run with that status.                          |
 | =--ledger-config=   | A JSON file that names an eb-stack ledger to record each publication in.                                                                                                                               |
+| =--verify=          | Check the generation as =verify= does before the exchange, and publish it only when it passes; the journal records that the run checks, so =resume= checks it too.                                     |
+| =--force=           | With =--verify=: publish the generation even when it fails the checks; the journal records that it was forced. Refused without =--verify=.                                                             |
 
 Once it has checked them, =run= makes a relative =--software=, =--modules= or =--state-root= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
@@ -133,6 +138,8 @@ When the dry run marks =[ ]= (not installed) a module that =--module= does not n
 Both dry runs get =EASYBUILD_OUTPUT_STYLE=basic=, so that EasyBuild with rich neither wraps nor colours their output, and =run= ignores the ANSI escape sequences that an =--output-style= after =--= brings back.
 The arguments after =--= reach EasyBuild with =--rebuild= added, unless they hold =--rebuild=, =--force= or =-f=.
 These options would point EasyBuild at the live tree, and are dropped: =--prefix=, =--installpath=, =--installpath-software=, =--installpath-modules=, =--subdir-software=, =--subdir-modules=, =--bwrap=, =--disable-bwrap=, =--bwrap-installpath=, =--bwrap-options= and =--remove-ghost-install-dirs=.
+With =--verify=, after the build and the =--prepare= program, =run= checks the generation as =verify= does, and publishes it only when it passes, or with =--force=; one that fails leaves the run =built=, and the command exits 2.
+Without =--verify=, nothing checks the generation before the exchange.
 EasyBuild's output and the program's own lines, each starting =eb-staged-rebuild:=, go to stdout; a refusal goes to stderr.
 
 *** resume
@@ -143,10 +150,26 @@ Continue the run =RUN_ID= after a failed build, a crash or a lost machine.
 |------------------+-------------------------------------------------------------------------------------------------------------------|
 | =--state-root=   | The state root that holds the run; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required. |
 | =--lock-timeout= | Seconds to wait for the state root's lock; without it the wait has no limit.                                      |
+| =--verify=       | As for =run=: check the generation before publishing it, in this and each later =resume=.                         |
+| =--force=        | As for =run=: publish a generation that fails the checks. Refused for a run that does not check.                  |
 
 A run that is =created=, =building= or =failed= builds its generation again, and one that is =built= or =publishing= publishes the generation it has.
+The generation of a =built= run that =run --verify= started, or that this or an earlier =resume= gave =--verify=, is checked first; a =publishing= one is not checked again.
 A =complete= run prints that it is complete and delivers any ledger record still pending.
 A =rolled_back= run, and a retire record, are refused.
+
+*** verify
+
+Check the generation of the =built= run =STAGE= as =run --verify= does before it publishes, record the result in its journal and in =runs/STAGE/verify.json=, and publish nothing.
+A run started without =--verify= can be checked too.
+
+| Option           | Meaning                                                                                                           |
+|------------------+-------------------------------------------------------------------------------------------------------------------|
+| =--state-root=   | The state root that holds the run; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required. |
+| =--lock-timeout= | Seconds to wait for the state root's lock; without it the wait has no limit.                                      |
+
+It exits 0 when the generation passes, and 1 when it fails.
+[[file:verify.org][The checks before publication]] lists the checks, the report and the lines printed.
 
 *** rollback
 
@@ -271,15 +294,15 @@ On success the command prints one JSON object on stdout.
 
 ** Environment
 
-| Variable                         | Used by                                               | Meaning                                                                                          |
-|----------------------------------+-------------------------------------------------------+--------------------------------------------------------------------------------------------------|
-| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=                                                 | The default of =--software=.                                                                     |
-| =EASYBUILD_INSTALLPATH_MODULES=  | =run=                                                 | The default of =--modules=.                                                                      |
-| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=, =resume=, =rollback=, =gc=, =retire=, =status= | The default of =--state-root=, unless it is empty.                                               |
-| =EB_STAGED_REBUILD_EB=           | =probe=, =run=                                        | The default of =--eb=.                                                                           |
-| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=                                           | The default of =--grace-hours=, a number 0 or more; =gc= uses it only where no run recorded one. |
+| Variable                         | Used by                                                         | Meaning                                                                                          |
+|----------------------------------+-----------------------------------------------------------------+--------------------------------------------------------------------------------------------------|
+| =EASYBUILD_INSTALLPATH_SOFTWARE= | =run=                                                           | The default of =--software=.                                                                     |
+| =EASYBUILD_INSTALLPATH_MODULES=  | =run=                                                           | The default of =--modules=.                                                                      |
+| =EB_STAGED_REBUILD_STATE_ROOT=   | =run=, =resume=, =verify=, =rollback=, =gc=, =retire=, =status= | The default of =--state-root=, unless it is empty.                                               |
+| =EB_STAGED_REBUILD_EB=           | =probe=, =run=                                                  | The default of =--eb=.                                                                           |
+| =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=                                                     | The default of =--grace-hours=, a number 0 or more; =gc= uses it only where no run recorded one. |
 
-[[file:environment.org][Environment variables]] also lists what reaches EasyBuild.
+[[file:environment.org][Environment variables]] also lists =LMOD_CMD=, with which the checks before publication load the new module files, the variables a run records for those checks, and what reaches EasyBuild.
 
 ** Exit status
 
@@ -287,6 +310,7 @@ On success the command prints one JSON object on stdout.
 |--------+----------------------------------------------------------------------------------------------------------------------------------|
 |      0 | Done, or nothing to do.                                                                                                          |
 |      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                             |
+|      1 | =verify=: the generation fails a check.                                                                                          |
 |      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.                   |
 |     75 | A ledger did not acknowledge a record; the message ends with the command that delivers it, =run resume= or =run rollback again=. |
 |      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.                   |
@@ -298,6 +322,7 @@ On success the command prints one JSON object on stdout.
 | File                                                | Use                                                                 |
 |-----------------------------------------------------+---------------------------------------------------------------------|
 | =<state-root>/runs/RUN_ID/journal.json=             | The journal of a run or retire record.                              |
+| =<state-root>/runs/RUN_ID/verify.json=              | The result of the last check of the run's generation.               |
 | =<state-root>/generations/RUN_ID/=                  | The generation: the tree EasyBuild built, and its module files. =gc= removes it once the run's hidden trees are settled. |
 | =<state-root>/.lock=, =<state-root>/.lock.posix=    | The lock of the state root.                                         |
 | =software/NAME/.VERSION.RUN_ID=                     | The previous tree after a run, or the replacement after a rollback. |
