@@ -383,6 +383,19 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | PrepareBarrierTests.test_incomplete_second_generation_prevents_first_publication | differential "run, prepare barrier, second generation incomplete", "module files after the barrier" |
 | PrepareBarrierTests.test_unreadable_second_generation_prevents_first_publication | differential "run, prepare barrier, second generation unreadable", "module files after the barrier" |
 
+### tests/test_site_hooks.py
+
+These tests cover the Python EasyBuild hook file (`eb_staged_rebuild/site_hooks.py`).
+The Zig build does not load that hook module; it documents and validates the same
+site variables through CLI/docs tests and integration coverage.
+
+| test | replacement |
+|---|---|
+| SiteHookTests.test_an_install_outside_the_prefix_is_named | no command-line form: this checks the Python hook helper `outside_prefix`; the site-prefix behaviour it guards is exercised by differential "run, no installed target" and the integration tests that rebuild stagedemo via `TOOL_BIN` |
+| SiteHookTests.test_the_prefix_check_is_off_until_a_prefix_is_set | no command-line form: this checks Python hook dispatch in `pre_install_hook`; the same site variables are covered by CliDocTests.test_docs_name_every_cli_option and `tests/test_easybuild_integration_cli.py` |
+| SiteHookTests.test_the_footer_and_the_rpath_wait_for_their_variables | no command-line form: this checks Python hook helpers (`pre_module_hook`, `pre_build_hook`); the binary-facing behaviour is covered by `tests/test_easybuild_integration_cli.py` and differential CLI/doc checks |
+| SiteHookTests.test_the_how_to_names_the_hook_file | docs coverage only: CliDocTests.test_docs_name_every_cli_option (docs include the hook variables) |
+
 ### tests/test_easybuild_integration.py
 
 | test | replacement |
