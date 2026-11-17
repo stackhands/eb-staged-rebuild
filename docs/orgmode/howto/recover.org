@@ -201,3 +201,4 @@ Example 1.0
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:roll-back.org][Put the previous installation back]]
 - [[file:../explanation/journal.org][What the journal records]], for each state and what =resume= does from it
+- [[file:../reference/exit-status.org][Exit status]]

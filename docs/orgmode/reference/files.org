@@ -1,0 +1,130 @@
+#+TITLE: Files
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Files
+
+What eb-staged-rebuild writes, and where: in the state root, beside each installation and module file, and in the directories of =build-events= and =ledger-maintenance=.
+
+** The state root
+
+The state root is =--state-root=, or for =run= =EB_STAGED_REBUILD_STATE_ROOT=, or else =.eb-staged-rebuild= beside the software tree.
+It has to be on the filesystem of the software tree, and its path must not pass through a symbolic link.
+
+| Path                               | What it holds                                                                                                                                                                                   |
+|------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =.lock=                            | The =flock= of the state root, mode =0600=. The process that holds the lock writes its process id into it.                                                                                      |
+| =.lock.posix=                      | The POSIX record lock, mode =0600=.                                                                                                                                                             |
+| =runs/RUN_ID/journal.json=         | The journal of the run =RUN_ID=.                                                                                                                                                                |
+| =runs/RUN_ID/prepared/MODULE_FILE= | Each new module file, such as =prepared/all/Example/1.0-GCCcore-15.2.0.lua=, written after the build with the owner, group, mode and ACL of the live one, or of the generation's for a new one. |
+| =runs/RUN_ID/backups/MODULE_FILE=  | Each module file the run replaced, saved before it is replaced; =rollback= writes it back.                                                                                                      |
+| =runs/RUN_ID/prepare-context.json= | With =--prepare=: the run id, the live and staged trees and, for each module file, its stable, staged and hidden paths and its prepared file, for the program.                                  |
+| =runs/RUN_ID/outbox.json=          | With =--ledger-config=: the run's ledger records, each with its state, the attempts, the last error and the receipt.                                                                            |
+| =runs/RUN_ID/events/NNNN.json=     | The bytes of each record, as =eb-stack ledger append= reads them.                                                                                                                               |
+| =generations/RUN_ID/=              | The generation: =software/= and =modules/=, as EasyBuild installed them, and =bwrap_info.json= with the =bwrap= backend. Each =software/NAME/VERSION= moves out when the run publishes.         |
+| =runs/retire-STAMP/journal.json=   | The record of a =retire=.                                                                                                                                                                       |
+| =retired/STAMP/PATH=               | The module file =retire= moved, under its absolute path, until a =rollback= puts it back.                                                                                                       |
+
+=gc= removes neither the journals nor the generations.
+
+The state root of the example site, after the run =example-2= with =--prepare=:
+
+#+begin_src bash
+ls -A /opt/site/.eb-staged-rebuild /opt/site/.eb-staged-rebuild/runs/example-2 /opt/site/.eb-staged-rebuild/generations/example-2
+#+end_src
+
+#+begin_example
+/opt/site/.eb-staged-rebuild:
+.lock
+.lock.posix
+generations
+runs
+
+/opt/site/.eb-staged-rebuild/generations/example-2:
+bwrap_info.json
+modules
+software
+
+/opt/site/.eb-staged-rebuild/runs/example-2:
+backups
+journal.json
+prepare-context.json
+prepared
+#+end_example
+
+** Beside the installation
+
+| Path                                                | What it holds                                                                                                                                                   |
+|-----------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =software/NAME/VERSION/.eb-staged-rebuild-complete= | The completion marker, written into the new tree before it is published: the run, the stable and staged paths, the module file and the SHA-256 of its new text. |
+| =software/NAME/.VERSION.RUN_ID=                     | The other tree of the run: the previous one after the run, and the run's own after a rollback, until =gc= removes it.                                           |
+| =software/NAME/.VERSION.RUN_ID.fallback-old=        | The previous tree, for as long as the three renames that stand in for an exchange take, on a filesystem that cannot exchange.                                   |
+
+The marker of the run =example-2=:
+
+#+begin_src bash
+cat /opt/site/software/Example/1.0-GCCcore-15.2.0/.eb-staged-rebuild-complete
+#+end_src
+
+#+begin_example
+{
+  "live": "/opt/site/software/Example/1.0-GCCcore-15.2.0",
+  "module": "all/Example/1.0-GCCcore-15.2.0.lua",
+  "run_id": "example-2",
+  "sha256": "400e56c26dd10f9eb8b0e6b616582cc694614b6758dfddb9849268315e2b4761",
+  "staged": "/opt/site/.eb-staged-rebuild/generations/example-2/software/Example/1.0-GCCcore-15.2.0"
+}
+#+end_example
+
+** Beside the module file
+
+| Path                           | What it holds                                                                                                                                                                                          |
+|--------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =modules/all/NAME/VERSION.lua= | The module file, replaced by a rename once the trees are exchanged, so a reader sees the old text or the new.                                                                                          |
+| =.VERSION.lua.new=             | The new text, mode =0600= until it has the metadata of the old file, for the moment before the rename. One left behind by a crash is removed by the next write, when it is a regular file of the user. |
+
+The same goes for a Tcl module file, with its own name.
+Symbolic links that EasyBuild made in the generation's module tree, such as the categories of a module naming scheme, are made in the live module tree as well when the name is free.
+
+** build-events
+
+=<outbox>/OPERATION/= holds one operation:
+
+| Path                   | What it holds                                                                                           |
+|------------------------+---------------------------------------------------------------------------------------------------------|
+| =.lock=, =.lock.posix= | The lock of the operation, as for a state root.                                                         |
+| =operation.json=       | The metadata and the configuration the operation was recorded with, its phase and the command's result. |
+| =outbox.json=          | The records, as for a run.                                                                              |
+| =events/=              | The bytes of each record.                                                                               |
+| =head.json=            | The head that eb-stack signed after the last record it acknowledged for this operation.                 |
+
+The operation of the example site:
+
+#+begin_src bash
+ls -A /opt/site/build-events/example-1.0-zen4-5
+#+end_src
+
+#+begin_example
+.lock
+.lock.posix
+events
+head.json
+operation.json
+outbox.json
+#+end_example
+
+** ledger-maintenance
+
+| Path                                  | What it holds                                                                          |
+|---------------------------------------+----------------------------------------------------------------------------------------|
+| =<anchors>/YYYY-MM-DD.head.json=      | The anchor of a day: a head eb-stack signed, which =anchor= never replaces.            |
+| =<anchors>/.lock=, =.lock.posix=      | The lock of the directory of anchors.                                                  |
+| =<out>/index.json=, =<out>/index.md=  | The packages of a history from =project=, with the number of their modules and events. |
+| =<out>/packages/NAME.json=, =NAME.md= | The history of one package: its modules, events and problems.                          |
+
+** See also
+
+- [[file:../explanation/journal.org][What the journal records]]
+- [[file:../explanation/locking.org][How runs keep out of each other's way]]
+- [[file:../explanation/publication.org][How a rebuild is published]]
+- [[file:cli.org][The eb-staged-rebuild command]]

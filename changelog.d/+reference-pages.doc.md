@@ -1,0 +1,1 @@
+Reference pages for the configuration files (the ledger configuration, the `build-events` configuration and metadata, and the backfill manifest), the environment variables, the exit statuses of every command, `build-events` and `ledger-maintenance` included, and the files the tool writes in the state root, beside an installation and for the ledger.

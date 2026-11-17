@@ -53,7 +53,7 @@ The run records =started= before it exchanges the directories and =finished= aft
    }
    #+end_example
 
-   =actor=, =stack= and =target= go into every record; Configuration files lists every key.
+   =actor=, =stack= and =target= go into every record; [[file:../reference/configuration.org][Configuration files]] lists every key.
 4. Run the rebuild with =--ledger-config=:
 
    #+begin_src bash
@@ -202,3 +202,4 @@ With ="required": false= in the configuration, a run whose =started= record was 
 - [[file:anchor.org][Anchor the ledger once a day]]
 - [[file:package-history.org][Write the history of each package]]
 - [[file:../explanation/ledger.org][What the ledger records]]
+- [[file:../reference/configuration.org][Configuration files]]

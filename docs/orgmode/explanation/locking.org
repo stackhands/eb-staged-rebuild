@@ -50,3 +50,4 @@ A command that finds the lock taken waits for it, or for =--lock-timeout= second
 
 - [[file:journal.org][What the journal records]] covers what each command writes under the lock.
 - [[file:publication.org][How a rebuild is published]] covers the steps a run takes while it holds the lock.
+- [[file:../reference/files.org][Files]] lists the lock files with the rest of the state root.

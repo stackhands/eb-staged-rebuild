@@ -70,4 +70,5 @@ Only the fields of that metadata go into the records: never the command, its arg
 
 - [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]] sets up a ledger and records a run and its rollback.
 - [[file:../howto/build-events.org][Record any build command in the ledger]], [[file:../howto/backfill.org][Record software installed before the ledger]], [[file:../howto/anchor.org][Anchor the ledger once a day]] and [[file:../howto/package-history.org][Write the history of each package]] cover the other sources and readers.
+- [[file:../reference/configuration.org][Configuration files]] lists the keys of the ledger configuration, of =build-events= and of a backfill manifest.
 - [[https://github.com/stackhands/eb-stack][stackhands/eb-stack]] is the ledger's own project.

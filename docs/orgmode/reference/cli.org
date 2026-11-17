@@ -263,6 +263,8 @@ On success the command prints one JSON object on stdout.
 | =EB_STAGED_REBUILD_EB=           | =probe=, =run= | The default of =--eb=.          |
 | =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=    | The default of =--grace-hours=. |
 
+[[file:environment.org][Environment variables]] also lists what reaches EasyBuild.
+
 ** Exit status
 
 | Status | Meaning                                                                                                                |
@@ -272,6 +274,8 @@ On success the command prints one JSON object on stdout.
 |      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.         |
 |     75 | A required ledger did not acknowledge a record, and the command stopped before its next change; run it again to go on. |
 |      N | =run= and =resume=: EasyBuild, or the =--prepare= program, exited with the status N, and nothing live changed.         |
+
+[[file:exit-status.org][Exit status]] gives the statuses of each command, =build-events= and =ledger-maintenance= included.
 
 ** Files
 
@@ -283,9 +287,12 @@ On success the command prints one JSON object on stdout.
 | =software/NAME/.VERSION.RUN_ID=                     | The previous tree after a run, or the replacement after a rollback. |
 | =software/NAME/VERSION/.eb-staged-rebuild-complete= | What the run published, written before the exchange.                |
 
+[[file:files.org][Files]] describes each of them.
+
 ** See also
 
 - [[file:../tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]]
 - [[file:../howto/rebuild.org][Rebuild an installed module]]
 - [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]]
+- [[file:configuration.org][Configuration files]], for =--ledger-config=, =build-events= and the backfill manifest
 - [[py:eb_staged_rebuild.cli.main]] and the rest of the [[file:api.org][API]]

@@ -104,4 +104,5 @@ total 4
 
 - [[file:remove-old-trees.org][Remove the trees a rebuild left behind]], for the =manual= line
 - [[file:roll-back.org][Put the previous installation back]]
+- [[file:../reference/files.org][Files]], for =retired/= and the record
 - [[file:../reference/cli.org][The eb-staged-rebuild command]]

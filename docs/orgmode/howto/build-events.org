@@ -45,7 +45,7 @@ The records carry the metadata you write for the operation, and nothing of the c
    }
    #+end_example
 
-   The command hashes the easyconfig before it runs, and the module file after; Configuration files lists every key.
+   The command hashes the easyconfig before it runs, and the module file after; [[file:../reference/configuration.org][Configuration files]] lists every key.
 2. Run the build command after =--=:
 
    #+begin_src bash
@@ -185,4 +185,5 @@ With the ledger required, which is the default, a =started= record that was not 
 
 - [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], which =run --ledger-config= does without a wrapper
 - [[file:package-history.org][Write the history of each package]]
+- [[file:../reference/exit-status.org][Exit status]]
 - [[file:../explanation/ledger.org][What the ledger records]]

@@ -10,7 +10,7 @@ Give a rebuilt installation and its module file the ownership, modes or access-c
 
 - A rebuild that works without this, as in [[file:rebuild.org][Rebuild an installed module]].
 - A program that sets the permissions, run as the account that runs the rebuild.
-  It gets one argument, the path of a JSON file, =prepare-context.json=, that names each staged tree and each prepared module file; Files lists its keys.
+  It gets one argument, the path of a JSON file, =prepare-context.json=, that names each staged tree and each prepared module file; [[file:../reference/files.org][Files]] lists its keys.
   It must leave each tree complete and exit 0, and it must not move or remove anything.
 
 ** Steps
@@ -200,3 +200,4 @@ cat /opt/site/.eb-staged-rebuild/runs/example-2/prepare-context.json
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:recover.org][Finish a run that failed or stopped]]
 - [[file:../explanation/publication.org][How a rebuild is published]], for what the program's changes reach
+- [[file:../reference/files.org][Files]], for =prepare-context.json=

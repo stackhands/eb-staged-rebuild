@@ -43,7 +43,7 @@ Each observation becomes a =finding= record, stamped with the time it was made; 
    }
    #+end_example
 
-   =manifest_id= names this manifest for good; Configuration files lists every key.
+   =manifest_id= names this manifest for good; [[file:../reference/configuration.org][Configuration files]] lists every key.
 2. Take its SHA-256, which pins the manifest to these bytes:
 
    #+begin_src bash
@@ -99,4 +99,5 @@ Running the same command again appends nothing: each observation is acknowledged
 
 - [[file:package-history.org][Write the history of each package]], where the =finding= starts each package
 - [[file:anchor.org][Anchor the ledger once a day]]
+- [[file:../reference/configuration.org][Configuration files]], for the manifest
 - [[file:../explanation/ledger.org][What the ledger records]]

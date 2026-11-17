@@ -1,0 +1,51 @@
+#+TITLE: Exit status
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Exit status
+
+The status each command exits with, and what it means for the state root and the live tree.
+
+** eb-staged-rebuild
+
+| Status | Command                     | Meaning                                                                                                                                                                                                                               |
+|--------+-----------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|      0 | every command               | Done: the run published, the rollback put the old trees back or was done already, =resume= found the run complete, =gc= or =retire= ended, or a =--dry-run= printed its plan.                                                         |
+|      1 | =resolve=                   | =MODULE_FILE= is not a regular file, or its =root= names no complete installation. The JSON is printed all the same.                                                                                                                  |
+|      1 | every command               | The binary ran out of memory, and printed =eb-staged-rebuild: out of memory=; or the Python package stopped with a traceback, which is a bug.                                                                                         |
+|      2 | every command               | A usage error, with the usage on stderr; or a refusal or an operating-system error, with =eb-staged-rebuild: REASON= on stderr. A run refused before its build changed nothing; one refused later says in its journal how far it got. |
+|      N | =run=, =resume=             | EasyBuild exited N during the build: the journal is =failed=, and nothing live changed. =128+N= is a build stopped by signal N, or a run that got =SIGTERM=, =SIGINT= or =SIGHUP= and stopped its build.                              |
+|      N | =run=, =resume=             | The =--prepare= program exited N: the journal stays =built=, nothing live changed, and =resume= runs the program again.                                                                                                               |
+|     75 | =run=, =resume=, =rollback= | A ledger record was not acknowledged, and the message says whether the directories were exchanged. Once the ledger answers, =resume= the run, or run =rollback= again after a rollback.                                               |
+
+A run that the tree check or the live check stopped after the build exits 2, with its journal =failed=; one whose publication failed in the middle exits 2, with its journal =built= and the old trees back.
+=status= says which.
+
+** build-events
+
+| Status | Meaning                                                                                                                                       |
+|--------+-----------------------------------------------------------------------------------------------------------------------------------------------|
+|      0 | The command exited 0, every post-build check passed, and every record was delivered.                                                          |
+|      N | The command exited N, and the =aborted= record was delivered.                                                                                 |
+|     65 | The command exited 0, but a post-build check failed, such as a module file that cannot be hashed: the record is =aborted=.                    |
+|     70 | An earlier attempt stopped while the command ran, so its result is unknown: the record is =aborted=.                                          |
+|     75 | A record is still pending in the outbox; with ="required": true=, a =started= record that was not acknowledged means the command did not run. |
+|    127 | The command could not be started: the record is =aborted=.                                                                                    |
+|      2 | Refused: a configuration or metadata that is not valid, an operation recorded with other metadata, or neither =--deliver= nor a command.      |
+|  128+N | =build-events= itself got signal N, =SIGTERM=, =SIGINT= or =SIGHUP=; the records stay pending in the outbox.                                  |
+
+An operation that has its result already, run again or with =--deliver=, delivers what is pending and exits with the status of that result; the command does not run a second time.
+
+** ledger-maintenance
+
+| Status | Meaning                                                                                                                      |
+|--------+------------------------------------------------------------------------------------------------------------------------------|
+|      0 | Done; the result is one JSON object on stdout.                                                                               |
+|      2 | Refused, or an operating-system error, with =ledger-maintenance: REASON= on stderr; also a =--timeout= that is not positive. |
+|     75 | An eb-stack call gave no receipt: =ledger-maintenance: REASON; nothing was acknowledged, retry the same command=.            |
+
+** See also
+
+- [[file:cli.org][The eb-staged-rebuild command]]
+- [[file:../howto/recover.org][Finish a run that failed or stopped]], [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]] and [[file:../howto/build-events.org][Record any build command in the ledger]], with the messages of each case
+- [[py:eb_staged_rebuild.cli.main]], [[py:eb_staged_rebuild.build_events.main]] and [[py:eb_staged_rebuild.ledger_maintenance.main]]
