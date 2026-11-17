@@ -115,6 +115,11 @@ def _parser():
 
     probe = sub.add_parser("probe", help="report bwrap, user namespaces, RENAME_EXCHANGE, and EasyBuild")
     probe.add_argument("--path", help="directory on the filesystem to probe (default: .)")
+    probe.add_argument(
+        "--no-create",
+        action="store_true",
+        help="refuse when --path does not exist instead of creating it for the probe",
+    )
     probe.add_argument("--eb", default=os.environ.get("EB_STAGED_REBUILD_EB", "eb"))
     probe.add_argument("--json", action="store_true")
 
@@ -245,6 +250,9 @@ def main(argv=None):
 def _dispatch(args):
     if args.command == "probe":
         directory = args.path or os.getcwd()
+        if args.no_create and not os.path.exists(directory):
+            print(f"probe path does not exist: {directory}", file=sys.stderr)
+            return 1
         report = probe_all(directory, args.eb)
         if args.json:
             print(json.dumps(report, indent=2, sort_keys=True))

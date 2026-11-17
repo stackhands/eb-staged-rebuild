@@ -35,6 +35,21 @@ def _read(path):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_probe_no_create_refuses_a_missing_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing = os.path.join(root, "missing")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            probe = subprocess.run(
+                [*CLI, "probe", "--path", missing, "--no-create", "--eb", "missing-eb"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
+            self.assertIn(f"probe path does not exist: {missing}", probe.stderr)
+            self.assertFalse(os.path.exists(missing))
+
     def test_unreadable_resolve_exits_2_without_a_traceback(self):
         if os.geteuid() == 0:
             self.skipTest("root can read a mode 000 file")
