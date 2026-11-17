@@ -11,7 +11,13 @@ eb-staged-rebuild rebuilds an existing EasyBuild installation in a versioned gen
 
 EasyBuild `--rebuild` and `--force` empty an existing install before the new install has passed its sanity checks. This program sends EasyBuild at `<state-root>/generations/<run-id>` and exchanges the live directory only after that generation is complete.
 
-Documentation: <https://stackhands.github.io/eb-staged-rebuild/> (tutorial, operator how-to, staging model, recovery, reference).
+Documentation: <https://stackhands.github.io/eb-staged-rebuild/>, built from the Org pages in `docs/orgmode/`: a tutorial, how-to guides, explanation, and a reference, including the API generated from the Python and Zig code.
+
+```console
+pixi run -e docs docbld
+```
+
+The HTML is written to `docs/build/html`. `docs/orgmode/contributing.org` says how to write a page.
 
 ## Install
 
@@ -52,15 +58,6 @@ eb-staged-rebuild rollback --state-root "$P/.eb-staged-rebuild" pigz-1
 ```
 
 `probe` reports the sandbox and whether the filesystem exchanges directories. `run` builds into `$P/.eb-staged-rebuild/generations/pigz-1`, the default state root for that software tree, and swaps it in for `software/pigz/2.8-GCCcore-15.2.0` and its module file. Arguments after `--` go to `eb`. `rollback` swaps the previous tree back. The [how-to](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers dry runs, resume and `gc`.
-
-## Build the documentation
-
-```bash
-python3 -m pip install -e ".[docs]"
-make -C docs html
-```
-
-Open `docs/_build/html/index.html`. The source pages start at [docs/index.md](docs/index.md).
 
 ## Changelog
 

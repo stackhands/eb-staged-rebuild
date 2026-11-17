@@ -1,15 +1,26 @@
+# Build the documentation the way `pixi run -e docs docbld` does: Org export,
+# API pages from the code, Sphinx with warnings and unresolved references as
+# errors, the Zig autodoc site, and the internal link check. External links
+# are checked in their own step. On main the site is published to
+# https://stackhands.github.io/eb-staged-rebuild/.
 name: docs
-# Build the Sphinx site with warnings as errors; on main, publish it to
-# GitHub Pages at https://stackhands.github.io/eb-staged-rebuild/.
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so a link that went dead elsewhere is noticed.
+    - cron: "17 5 * * 1"
+
 permissions:
   contents: read
+
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,16 +29,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e # v0.11.3
         with:
-          python-version: "3.12"
-      - run: sudo apt-get update && sudo apt-get install -y graphviz
-      - run: python -m pip install -e ".[docs]"
-      - run: sphinx-build -W -b html docs docs/_build/html
+          environments: docs
+          cache: true
+          locked: true
+
+      - name: Build
+        run: pixi run -e docs docbld
+        env:
+          DOCS_SOURCE_REF: ${{ github.sha }}
+
+      - name: External links
+        run: pixi run -e docs linkcheck
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
-          path: docs/_build/html
+          path: docs/build/html
+
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build

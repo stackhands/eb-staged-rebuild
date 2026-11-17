@@ -1,0 +1,57 @@
+#+TITLE: eb-staged-rebuild
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* eb-staged-rebuild
+
+eb-staged-rebuild rebuilds software that EasyBuild has installed already, without taking the installation away from the jobs that use it.
+EasyBuild's =--rebuild= empties the installation directory before the new build has passed its checks, so for the length of the build the path holds a partial installation, or none.
+eb-staged-rebuild has EasyBuild install into a separate tree instead, and once that tree is complete it exchanges the two directories and then replaces the module file.
+On a filesystem that exchanges two directories in one call, such as ext4, the path names a complete installation throughout.
+The previous tree stays on disk under a hidden name until its grace period is over, and a rollback brings it back.
+Each run keeps a journal, so a build that failed or a machine that went down leaves a run to finish or to undo.
+It can also record every publication in a signed eb-stack ledger.
+The tool is a Python package that needs only the standard library, and a static Zig binary of the same program.
+
+New here?
+[[file:tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]] rebuilds a stand-in installation in your home directory, without EasyBuild, and ends with the old installation back in place.
+
+| You want to                       | Read                                       |
+|-----------------------------------+--------------------------------------------|
+| learn by doing, start to finish   | [[file:tutorials/index.org][Tutorials]]    |
+| get one task done                 | [[file:howto/index.org][How-to guides]]    |
+| understand why it works this way  | [[file:explanation/index.org][Explanation]] |
+| look up a command, file or API    | [[file:reference/index.org][Reference]]    |
+
+#+begin_export rst
+.. toctree::
+   :hidden:
+   :caption: Tutorials
+
+   tutorials/index
+
+.. toctree::
+   :hidden:
+   :caption: How-to guides
+
+   howto/index
+
+.. toctree::
+   :hidden:
+   :caption: Explanation
+
+   explanation/index
+
+.. toctree::
+   :hidden:
+   :caption: Reference
+
+   reference/index
+
+.. toctree::
+   :hidden:
+   :caption: Project
+
+   contributing
+   changelog
+#+end_export

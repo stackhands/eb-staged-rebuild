@@ -1,0 +1,91 @@
+#+TITLE: Contributing
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Contributing
+
+Changes come as pull requests to [[https://github.com/stackhands/eb-staged-rebuild][stackhands/eb-staged-rebuild]].
+A change to behaviour changes the page that describes it in the same pull request.
+
+** Record the change
+
+Every change adds a news fragment, =changelog.d/+SLUG.TYPE.md=, with a short slug for the change and one of the types =towncrier.toml= configures:
+
+| Type      | Section of the release notes |
+|-----------+------------------------------|
+| =feature= | Features                     |
+| =bugfix=  | Fixes                        |
+| =doc=     | Documentation                |
+| =removal= | Removals                     |
+| =misc=    | Miscellaneous                |
+
+A fragment is one paragraph in the present tense that names the commands, options and files it is about in backticks, as the entries in the [[file:changelog.org][Changelog]] do.
+With [[https://towncrier.readthedocs.io][towncrier]] installed, =towncrier build --draft --version 1.0.0= shows the release notes the fragments make; a fragment whose name has no such type fails it.
+The release commit gathers them into =CHANGELOG.md=; [[https://github.com/stackhands/eb-staged-rebuild/blob/main/RELEASING.md][RELEASING.md]] has the rest of a release.
+
+** Run the tests
+
+With Python 3.11 or newer, from the top of the repository:
+
+#+begin_src bash
+python3 -m unittest discover -s tests
+#+end_src
+
+The ledger tests need =openssl= on =PATH= and an eb-stack 0.7.0 binary in =EB_STACK_BIN=, the one =.github/actions/pinned-ledger= builds; without it some skip and the =build-events= and =ledger-maintenance= suites fail.
+=EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration.py=, which rebuilds a package with EasyBuild 5.4.2, Lmod and, when it runs here, bubblewrap.
+=python3 tests/check_testmap.py= checks that every test that imports the Python code has its row in =TESTMAP.md=, which names what covers it for the Zig build.
+
+With Zig 0.17.1, =zig build test= runs the unit tests of the Zig build, and =zig build -Drelease=true= builds the binary.
+=TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/differential.sh= then runs both builds on the same commands and compares what they print and the files they leave; =.github/workflows/test.yml= has the other suites CI runs against the binary.
+A deliberate difference between the two builds has its row in =COMPAT.md=, which [[file:reference/compatibility.org][Compatibility]] shows.
+CI also runs =zig fmt --check build.zig build.zig.zon zig= and =shellcheck -S warning= on the shell scripts.
+
+** Build the documentation
+
+The documentation toolchain is pinned in =pixi.lock=: Emacs, Sphinx, lychee, and the tools that read the code.
+With [[https://pixi.sh][pixi]] installed, from the top of the repository:
+
+#+begin_src bash
+pixi run -e docs docbld
+#+end_src
+
+The site is in =docs/build/html/=; open =docs/build/html/index.html=.
+The build fails on any Sphinx warning, any cross-reference that does not resolve, any internal link or anchor that does not exist, and, outside the changelog, any name of a real site's machines or paths.
+The first build needs the network, to fetch the other stackhands sites' inventories; later builds reuse them for 30 days.
+
+External links are checked separately, as they need the network:
+
+#+begin_src bash
+pixi run -e docs linkcheck
+#+end_src
+
+=pixi run -e docs docdel= removes everything the build generated.
+
+** Where things are
+
+| Path                       | What it holds                                      |
+|----------------------------+----------------------------------------------------|
+| =docs/orgmode/=            | the pages, in Org: edit these                      |
+| =docs/examples/=           | the scripts that print the output the pages show   |
+| =docs/export.el=           | the Org to reStructuredText export                 |
+| =docs/source/conf.py=      | the Sphinx configuration                           |
+| =docs/source/_ext/=        | the Sphinx domain for Zig declarations             |
+| =docs/tools/zig_api.zig=   | writes the Zig API pages from the doc comments     |
+| =docs/tools/check_site.py= | checks internal links, anchors and forbidden names |
+
+The =.rst= files under =docs/source/= and everything under =docs/source/reference/api/= are generated and not committed.
+=tests/test_cli_docs.py= fails when a page under =docs/orgmode/= or the README no longer names an option, a command, a backend or an environment variable of =eb_staged_rebuild/cli.py=.
+
+** Write a page
+
+A page belongs to exactly one quadrant: a tutorial teaches by doing, a how-to guide gets one task done, an explanation says why, and a reference page lists what there is.
+Start from the skeleton for its quadrant in =docs-kit/skeletons/= of [[https://github.com/stackhands/.github][stackhands/.github]], add it to the =toctree= of the quadrant's =index.org=, and follow =docs-kit/STYLE.md= there.
+Examples use the neutral example site (=example.org=, =/opt/site=, =/home/alice=), never a real one.
+
+Every command a page shows was run, and the output under it is what it printed.
+A script under =docs/examples/= runs the commands of a page, as the page says at its end; CI runs these scripts, and a command that no longer does what the page shows stops them.
+Record output again with the script, and paste it.
+
+API documentation is written in the code, and the first sentence of each comment is the summary shown in lists.
+In Zig it is a =///= comment above each =pub= declaration and a =//!= comment at the top of each file.
+In Python it is the docstring of each public module, class and function.

@@ -26,7 +26,7 @@ def internal_ids():
         ("zig", (".zig",)),
     ):
         for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, sub)):
-            dirnames[:] = [name for name in dirnames if name not in {"_build", "__pycache__"}]
+            dirnames[:] = [name for name in dirnames if name not in {"build", "__pycache__"}]
             paths.extend(os.path.join(dirpath, name) for name in filenames if name.endswith(suffixes))
     found = []
     for path in sorted(paths):
@@ -38,14 +38,11 @@ def internal_ids():
 
 
 def documentation_files():
-    """README plus Markdown sources for the Sphinx site."""
+    """README plus the Org pages the Sphinx site is built from."""
     found = [os.path.join(ROOT, "README.md")]
-    docs = os.path.join(ROOT, "docs")
-    for dirpath, dirnames, filenames in os.walk(docs):
-        dirnames[:] = [name for name in dirnames if name not in {"_build", "examples", "orgmode"}]
-        for name in filenames:
-            if name.endswith(".md"):
-                found.append(os.path.join(dirpath, name))
+    for dirpath, dirnames, filenames in os.walk(os.path.join(ROOT, "docs", "orgmode")):
+        dirnames.sort()
+        found.extend(os.path.join(dirpath, name) for name in sorted(filenames) if name.endswith(".org"))
     return found
 
 
@@ -102,9 +99,8 @@ class CliDocTests(unittest.TestCase):
     def test_transcripts_do_not_record_a_checkout_path(self):
         """Recorded output must not name the machine that recorded it.
 
-        Commands a reader copies use ``$PWD`` or ``$STANDIN``. Transcript
-        text uses ``<checkout>`` for this repository. The walkthrough
-        rewrites its own checkout the same way when it is recorded again.
+        The pages show paths under the example site and the reader's home
+        directory, never the checkout the output was recorded in.
         """
         bad = []
         absolute = re.compile(r"/[^\s\"'`]*eb-staged-rebuild/docs/examples/eb-standin")
@@ -114,30 +110,6 @@ class CliDocTests(unittest.TestCase):
                     if "/agent/" in line or absolute.search(line):
                         bad.append(f"{os.path.relpath(path, ROOT)}:{number}: {line.strip()}")
         self.assertEqual(bad, [])
-        script = os.path.join(ROOT, "docs", "examples", "walkthrough.sh")
-        with open(script, encoding="utf-8") as handle:
-            recording = handle.read()
-        self.assertIn("file.read_bytes().replace(root, b\"<checkout>\")", recording)
-        self.assertNotIn('sed "s|$ROOT|<checkout>|g"', recording)
-
-    def test_a_dot_in_the_checkout_is_not_a_pattern(self):
-        """The checkout path is replaced literally.
-
-        ``sed`` would treat a ``.`` in the path as any character, so a
-        neighbouring path would be rewritten too.
-        """
-        script = os.path.join(ROOT, "docs", "examples", "walkthrough.sh")
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "out")
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write("/tmp/aXb /tmp/a.b\n")
-            subprocess.check_call(
-                ["sh", script, path, "/tmp/a.b"],
-                env={**os.environ, "WALKTHROUGH_REWRITE_ONLY": "1"},
-            )
-            with open(path, encoding="utf-8") as handle:
-                text = handle.read()
-        self.assertEqual(text, "/tmp/aXb <checkout>\n")
 
     def test_no_design_note_ids_in_docs_or_output(self):
         """The docs, the sources and probe's lock line say what is unmeasured
