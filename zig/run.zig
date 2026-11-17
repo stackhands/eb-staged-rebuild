@@ -220,6 +220,23 @@ fn runDir(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
 /// default path, so an allocation failure is an error, never a fallback to
 /// the parent environment.
 fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.proc.Envp {
+    var b = try childEnvBuilder(r, env, software, modules, live_modules);
+    return envpOf(r, &b);
+}
+
+/// The environment of the dry runs: the build's, with
+/// EASYBUILD_OUTPUT_STYLE=basic. With rich, EasyBuild wraps its output at
+/// the console width and, once FORCE_COLOR is set and not empty, colours it
+/// through a pipe too; basic output, which EasyBuild reads since 4.5.0, has
+/// neither, and --output-style among the eb arguments still wins.
+fn dryRunEnv(r: *R) E!common.proc.Envp {
+    var b = try childEnvBuilder(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    try b.set("EASYBUILD_OUTPUT_STYLE", "basic");
+    return envpOf(r, &b);
+}
+
+/// The environment childEnv gives, before it becomes an envp.
+fn childEnvBuilder(r: *R, env: probe.Env, software: []const u8, modules: []const u8, live_modules: []const u8) E!common.env.Builder {
     const a = r.a;
     var b = try common.env.Builder.fromEnv(a, common.env.Env.fromEnvp(env.envp));
     for ([_][]const u8{ "EASYBUILD_INSTALLPATH", "EASYBUILD_PREFIX", "EASYBUILD_REMOVE_GHOST_INSTALL_DIRS", "EASYBUILD_INSTALLPATH_SOFTWARE", "EASYBUILD_INSTALLPATH_MODULES" }) |k| b.unset(k);
@@ -238,6 +255,10 @@ fn childEnv(r: *R, env: probe.Env, software: []const u8, modules: []const u8, li
         const joined = if (parts.items.len > 0) try a.print("{s}:{s}", .{ live, try std.mem.join(a, ":", parts.items) }) else live;
         try b.set("MODULEPATH", joined);
     }
+    return b;
+}
+
+fn envpOf(r: *R, b: *common.env.Builder) E!common.proc.Envp {
     return b.envp() catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         // Paths come from argv and the environment, which cannot hold NUL.
@@ -251,6 +272,52 @@ fn resolveExe(a: Allocator, env: probe.Env, name: []const u8) ?[]const u8 {
 }
 
 // ---- learning the module list ----------------------------------------------
+
+/// strip_escapes: text without its ANSI CSI and OSC escape sequences. With
+/// rich, EasyBuild colours its output once FORCE_COLOR is set and not empty,
+/// through a pipe too, unless its output style is basic; the dry runs ask
+/// for basic output, but --output-style among the eb arguments wins. A
+/// sequence ends on its line, and one that does not end there is kept.
+fn stripEscapes(a: Allocator, text: []const u8) []const u8 {
+    const esc = std.ascii.control_code.esc;
+    if (std.mem.findScalar(u8, text, esc) == null) return text;
+    var out: std.ArrayList(u8) = .empty;
+    out.ensureTotalCapacity(a, text.len) catch oom();
+    var i: usize = 0;
+    while (i < text.len) {
+        if (text[i] == esc) if (escapeLen(text[i..])) |n| {
+            i += n;
+            continue;
+        };
+        out.appendAssumeCapacity(text[i]);
+        i += 1;
+    }
+    return out.items;
+}
+
+/// The length of the CSI or OSC sequence rest starts with, as ECMA-48 has
+/// them: ESC [, parameter bytes 0x30-0x3F, intermediate bytes 0x20-0x2F and
+/// a final byte 0x40-0x7E; or ESC ], a string without a newline, and BEL or
+/// ESC \.
+fn escapeLen(rest: []const u8) ?usize {
+    const cc = std.ascii.control_code;
+    if (rest.len < 2 or rest[0] != cc.esc) return null;
+    var i: usize = 2;
+    switch (rest[1]) {
+        '[' => {
+            while (i < rest.len and rest[i] >= 0x30 and rest[i] <= 0x3f) i += 1;
+            while (i < rest.len and rest[i] >= 0x20 and rest[i] <= 0x2f) i += 1;
+            return if (i < rest.len and rest[i] >= 0x40 and rest[i] <= 0x7e) i + 1 else null;
+        },
+        ']' => while (i < rest.len) : (i += 1) switch (rest[i]) {
+            cc.bel => return i + 1,
+            cc.esc => return if (i + 1 < rest.len and rest[i + 1] == '\\') i + 2 else null,
+            '\n' => return null,
+            else => {},
+        } else return null,
+        else => return null,
+    }
+}
 
 /// The status of a line that starts a dry-run entry: ^\s*\*\s+\[([ xFR-])\]
 fn entryStatus(line: []const u8) ?u8 {
@@ -290,7 +357,7 @@ fn dryRunModules(a: Allocator, text: []const u8) []const DryRunModule {
     var modules: std.ArrayList(DryRunModule) = .empty;
     var entry: std.ArrayList(u8) = .empty;
     var open = false;
-    var it = std.mem.splitScalar(u8, text, '\n');
+    var it = std.mem.splitScalar(u8, stripEscapes(a, text), '\n');
     while (true) {
         const raw = it.next();
         const line = std.mem.trimEnd(u8, raw orelse "", "\r");
@@ -341,7 +408,7 @@ fn builtByExtendedDryRun(a: Allocator, text: []const u8) []const []const u8 {
     var built: std.ArrayList([]const u8) = .empty;
     var entry: std.ArrayList(u8) = .empty;
     var open = false;
-    var it = std.mem.splitScalar(u8, text, '\n');
+    var it = std.mem.splitScalar(u8, stripEscapes(a, text), '\n');
     while (it.next()) |raw| {
         const line = std.mem.trimEnd(u8, raw, "\r");
         if (std.mem.startsWith(u8, line, "==")) {
@@ -382,7 +449,7 @@ fn leaveOutUnbuilt(r: *R, modules: []const DryRunModule, found: []const []const 
     // under the live software tree and, in this mode, does not remove it.
     try cmd.appendSlice(a, &.{ "--stop=fetch", "--ignore-locks" });
     log("module preflight: {s}", .{joinCmd(a, cmd.items)});
-    const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    const envp = try dryRunEnv(r);
     const exe = resolveExe(a, r.env, r.spec.eb_executable) orelse return r.refuse("[Errno 2] No such file or directory: '{s}'", .{r.spec.eb_executable});
     const res = common.proc.run(a, exe, cmd.items, envp, .{ .stdout_limit = 256 << 20, .stderr_limit = 64 << 20, .timeout_ms = null, .new_session = false }) catch |err|
         return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.eb_executable)});
@@ -419,7 +486,7 @@ fn learnRels(r: *R) E!Learned {
     try cmd.appendSlice(a, &.{ r.spec.eb_executable, "--dry-run" });
     try cmd.appendSlice(a, engine.ensureRebuild(a, engine.filterEbArgs(a, r.spec.eb_args)));
     log("module preflight: {s}", .{joinCmd(a, cmd.items)});
-    const envp = try childEnv(r, r.env, r.spec.software, r.spec.modules, r.spec.modules);
+    const envp = try dryRunEnv(r);
     var modules: []const DryRunModule = &.{};
     var code: u32 = 0;
     var tail: []const u8 = "";
@@ -1782,6 +1849,179 @@ test "dryRunModules keeps the status of each entry" {
     try std.testing.expectEqual(@as(u8, ' '), modules[1].status);
     try std.testing.expectEqualStrings("zlib/1.3.1", modules[1].rel);
     try std.testing.expectEqual(@as(u8, 'R'), modules[2].status);
+}
+
+// EasyBuild 5.4.2 with rich 15.0.0, FORCE_COLOR=1 and TERM=xterm-256color,
+// the output that tests/test_dry_run_lines.py has as COLOR_REBUILD,
+// COLOR_ROBOT and COLOR_EXTENDED. Once FORCE_COLOR is set and not empty,
+// rich writes ANSI escape sequences to a pipe too, and still wraps the lines
+// at 80 columns.
+const color_rebuild =
+    "== Temporary log file in case of crash /tmp/eb-0uh_10us/easybuild-vkclmi_q.log\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "Dry run: printing build status of easyconfigs\n" ++
+    " * \x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m \x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-0uh_10us/\x1b[0m\x1b[95measybuild-vkclmi_q.log\x1b[0m* have been \n" ++
+    "removed.\n" ++
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-0uh_10us\x1b[0m has been removed.\n";
+const color_robot =
+    "== Temporary log file in case of crash /tmp/eb-x1zw5cqf/easybuild-4u5bzs64.log\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "Dry run: printing build status of easyconfigs and dependencies\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.20.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/z/zlib/\x1b[0m\x1b[95mzlib-1.3.1.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "zlib/\x1b[1;36m1.3\x1b[0m.\x1b[1;36m1\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.19.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m19\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/b/Bison/\x1b[0m\x1b[95mBison-3.8.2.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "Bison/\x1b[1;36m3.8\x1b[0m.\x1b[1;36m2\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/f/flex/\x1b[0m\x1b[95mflex-2.6.4.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "flex/\x1b[1;36m2.6\x1b[0m.\x1b[1;36m4\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/b/binutils/\x1b[0m\x1b[95mbinutils-2.45.eb\x1b[0m \x1b[1m(\x1b[0mmodule:\n" ++
+    "binutils/\x1b[1;36m2.45\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/g/GCCcore/\x1b[0m\x1b[95mGCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule:\n" ++
+    "GCCcore/\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    " * \x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m \x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule: \n" ++
+    "Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m\n" ++
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-x1zw5cqf/\x1b[0m\x1b[95measybuild-4u5bzs64.log\x1b[0m* have been \n" ++
+    "removed.\n" ++
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-x1zw5cqf\x1b[0m has been removed.\n";
+const color_extended =
+    "== Temporary log file in case of crash /tmp/eb-tz2pzp7y/easybuild-_v17l6i5.log\n" ++
+    "file \x1b[35m/tmp/eb-tz2pzp7y/\x1b[0m\x1b[95mfake_vsc_mleiqnwz\x1b[0m removed\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m\n" ++
+    "== resolving dependencies \x1b[33m...\x1b[0m\n" ++
+    "\n" ++
+    "== processing EasyBuild easyconfig \n" ++
+    "\x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.20.eb\x1b[0m\n" ++
+    "\n" ++
+    "Important note: the actual build & install procedure that will be performed may \n" ++
+    "diverge\n" ++
+    "\x1b[1m(\x1b[0mslightly\x1b[1m)\x1b[0m from what is outlined below, due to conditions in the easyblock which\n" ++
+    "are\n" ++
+    "incorrectly handled in a dry run.\n" ++
+    "Any errors that may occur are ignored and reported as warnings, on a per-step \n" ++
+    "basis.\n" ++
+    "Please be aware of this, and only use the information below for quick debugging \n" ++
+    "purposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using \x1b[32m'ConfigureMake'\x1b[0m easyblock \n" ++
+    "\x1b[1m(\x1b[0measybuild.easyblocks.generic.configuremake @ \n" ++
+    "\x1b[35m/opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/\x1b[0m\x1b[95mconfigu\x1b[0m\n" ++
+    "\x1b[95mremake.py\x1b[0m\x1b[1m)\x1b[0m ***\n" ++
+    "\n" ++
+    "== building and installing M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m\x1b[33m...\x1b[0m\n" ++
+    "  >> installation prefix: \x1b[35m/tmp/eb-tz2pzp7y/__ROOT__/opt/site/software/M4/\x1b[0m\x1b[95m1.4.20\x1b[0m\n" ++
+    "fetching files and verifying checksums\x1b[33m...\x1b[0m \x1b[1m[\x1b[0mDRY RUN\x1b[1m]\x1b[0m\n" ++
+    "== processing EasyBuild easyconfig \n" ++
+    "\x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m\n" ++
+    "\n" ++
+    "Important note: the actual build & install procedure that will be performed may \n" ++
+    "diverge\n" ++
+    "\x1b[1m(\x1b[0mslightly\x1b[1m)\x1b[0m from what is outlined below, due to conditions in the easyblock which\n" ++
+    "are\n" ++
+    "incorrectly handled in a dry run.\n" ++
+    "Any errors that may occur are ignored and reported as warnings, on a per-step \n" ++
+    "basis.\n" ++
+    "Please be aware of this, and only use the information below for quick debugging \n" ++
+    "purposes.\n" ++
+    "\n" ++
+    "*** DRY RUN using \x1b[32m'Binary'\x1b[0m easyblock \x1b[1m(\x1b[0measybuild.easyblocks.generic.binary @ \n" ++
+    "\x1b[35m/opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/\x1b[0m\x1b[95mbinary.\x1b[0m\n" ++
+    "\x1b[95mpy\x1b[0m\x1b[1m)\x1b[0m ***\n" ++
+    "\n" ++
+    "== building and installing Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[33m...\x1b[0m\n" ++
+    "  >> installation prefix: \n" ++
+    "\x1b[35m/tmp/eb-tz2pzp7y/__ROOT__/opt/site/software/Example/\x1b[0m\x1b[95m1.0-GCCcore-15.2.0\x1b[0m\n" ++
+    "fetching files and verifying checksums\x1b[33m...\x1b[0m \x1b[1m[\x1b[0mDRY RUN\x1b[1m]\x1b[0m\n" ++
+    "== Build succeeded for \x1b[1;36m8\x1b[0m out of \x1b[1;36m8\x1b[0m \x1b[1m(\x1b[0mtotal: \x1b[1;36m7\x1b[0m mins \x1b[1;36m0\x1b[0m secs\x1b[1m)\x1b[0m\n" ++
+    "== Summary:\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m zlib/\x1b[1;36m1.3\x1b[0m.\x1b[1;36m1\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m19\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m Bison/\x1b[1;36m3.8\x1b[0m.\x1b[1;36m2\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m flex/\x1b[1;36m2.6\x1b[0m.\x1b[1;36m4\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m binutils/\x1b[1;36m2.45\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m GCCcore/\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\n" ++
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\n" ++
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-tz2pzp7y/\x1b[0m\x1b[95measybuild-_v17l6i5.log\x1b[0m* have been \n" ++
+    "removed.\n" ++
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-tz2pzp7y\x1b[0m has been removed.\n";
+
+test "relsFromDryRun and builtByExtendedDryRun read rich's coloured output" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const rebuild = relsFromDryRun(a, color_rebuild);
+    try std.testing.expectEqual(@as(usize, 1), rebuild.len);
+    try std.testing.expectEqualStrings("Example/1.0-GCCcore-15.2.0", rebuild[0]);
+    const want = [_][]const u8{ "M4/1.4.20", "zlib/1.3.1", "M4/1.4.19", "Bison/3.8.2", "flex/2.6.4", "binutils/2.45", "GCCcore/15.2.0", "Example/1.0-GCCcore-15.2.0" };
+    const robot = dryRunModules(a, color_robot);
+    try std.testing.expectEqual(want.len, robot.len);
+    for (want, robot, 1..) |rel, m, n| {
+        try std.testing.expectEqualStrings(rel, m.rel);
+        try std.testing.expectEqual(@as(u8, if (n < want.len) ' ' else 'R'), m.status);
+    }
+    const built = builtByExtendedDryRun(a, color_extended);
+    try std.testing.expectEqual(@as(usize, 2), built.len);
+    try std.testing.expectEqualStrings("M4/1.4.20", built[0]);
+    try std.testing.expectEqualStrings("Example/1.0-GCCcore-15.2.0", built[1]);
+}
+
+test "stripEscapes leaves out whole CSI and OSC sequences only" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    // The cases of ESCAPES in tests/test_dry_run_lines.py.
+    const cases = [_][2][]const u8{
+        .{ "", "" },
+        .{ "plain", "plain" },
+        .{ "\x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m", "[R]" },
+        .{ "\x1b[4;94mhttps://x\x1b[0m", "https://x" },
+        .{ "a\x1b[ qb", "ab" },
+        .{ "\x1b]8;;file:///a\x1b\\a\x1b]8;;\x1b\\", "a" },
+        .{ "\x1b]0;title\x07x", "x" },
+        .{ "a\x1b[12", "a\x1b[12" },
+        .{ "a\x1b[1\nm", "a\x1b[1\nm" },
+        .{ "a\x1b]8;;x", "a\x1b]8;;x" },
+        .{ "\x1b]8;;x\ny\x07", "\x1b]8;;x\ny\x07" },
+        .{ "\x1b(B", "\x1b(B" },
+        .{ "\x1b", "\x1b" },
+        .{ "\x1b\x1b[1mx", "\x1bx" },
+        .{ "\x1b]x\x1b[1my\x07", "\x1b]xy\x07" },
+        .{ "\x1b[1m\u{e9}\x1b[0m", "\u{e9}" },
+    };
+    for (cases) |c| try std.testing.expectEqualStrings(c[1], stripEscapes(a, c[0]));
+    const rels = relsFromDryRun(a, " * [R] \x1b]8;;file:///x/a.eb\x1b\\/x/a.eb\x1b]8;;\x1b\\ (module: \x1b]8;;x\x07a/1\x1b]8;;\x07)\n");
+    try std.testing.expectEqual(@as(usize, 1), rels.len);
+    try std.testing.expectEqualStrings("a/1", rels[0]);
+}
+
+test "dryRunEnv asks EasyBuild for basic output, and the build keeps the caller's" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const T = struct {
+        fn style(envp: common.proc.Envp) ?[]const u8 {
+            var i: usize = 0;
+            while (envp[i]) |entry| : (i += 1) {
+                const line = std.mem.span(entry);
+                if (std.mem.startsWith(u8, line, "EASYBUILD_OUTPUT_STYLE=")) return line["EASYBUILD_OUTPUT_STYLE=".len..];
+            }
+            return null;
+        }
+    };
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{ "PATH=/bin", "FORCE_COLOR=0", "EASYBUILD_OUTPUT_STYLE=rich" };
+    const env: probe.Env = .{ .envp = parent };
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r: R = .{ .a = a, .env = env, .ctx = &ctx, .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} } };
+    try std.testing.expectEqualStrings("basic", T.style(try dryRunEnv(&r)).?);
+    try std.testing.expectEqualStrings("rich", T.style(try childEnv(&r, env, "/gen/software", "/gen/modules", "/m")).?);
 }
 
 test "childEnv puts the live module files first on MODULEPATH" {

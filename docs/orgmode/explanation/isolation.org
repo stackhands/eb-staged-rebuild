@@ -36,6 +36,8 @@ With =--robot=, the dry run also marks =[ ]= the dependencies that are not insta
 The run then asks =eb --extended-dry-run=, with the same arguments, which resolves the dependencies as the build does and names each module it would build; =--stop=fetch= ends each after its first step, and =--ignore-locks= keeps it from leaving an install lock in the live tree, as EasyBuild 5.4.2 does in this mode.
 A module marked =[ ]= that it would not build is left out.
 One it would build is refused before anything is built, as is a run whose extended dry run fails or does not name a module the run rebuilds.
+Both dry runs get =EASYBUILD_OUTPUT_STYLE=basic=: with rich, EasyBuild wraps its lines at the console width and, once =FORCE_COLOR= is set and not empty, colours them through a pipe too.
+The run reads their output without ANSI CSI and OSC escape sequences, which an =--output-style= after =--= can bring back.
 
 *** The backends
 

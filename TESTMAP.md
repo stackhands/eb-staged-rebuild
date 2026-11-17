@@ -337,12 +337,17 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | ParseTests.test_an_entry_ends_at_the_next_entry_or_log_line | `zig/run.zig` test "relsFromDryRun ends an entry at the next entry or log line" |
 | ParseTests.test_the_fake_wraps_as_easybuild_does | the fake itself, used by differential "run, wrapped dry-run lines" |
 | ParseTests.test_the_extended_dry_run_names_the_modules_it_builds | `zig/run.zig` test "builtByExtendedDryRun names the modules it builds" |
+| ParseTests.test_escape_sequences_in_rich_output_are_left_out | `zig/run.zig` test "relsFromDryRun and builtByExtendedDryRun read rich's coloured output" |
+| ParseTests.test_only_whole_csi_and_osc_sequences_are_left_out | `zig/run.zig` test "stripEscapes leaves out whole CSI and OSC sequences only" |
 | RunTests.test_a_wrapped_module_line_names_the_module | differential "run, wrapped dry-run lines" |
 | RunTests.test_robot_rebuilds_only_the_listed_easyconfig | differential "run, --robot with installed dependencies" |
 | RunTests.test_robot_leaves_out_dependencies_eb_would_not_build | differential "run, --robot with dependencies eb would not build" |
 | RunTests.test_bwrap_mount_points_of_unbuilt_dependencies_are_removed | differential "run, bwrap, --robot leaves no mount point behind" |
 | RunTests.test_wrapped_extended_dry_run_lines_name_the_modules | differential "run, --robot, wrapped extended dry-run lines" |
 | RunTests.test_robot_refuses_a_missing_dependency_that_eb_would_build | differential "run, --robot with a missing dependency eb would build" |
+| RunTests.test_force_color_does_not_hide_the_module_lines | differential "run, --robot with FORCE_COLOR=0", "the output style each eb run got"; `zig/run.zig` test "dryRunEnv asks EasyBuild for basic output, and the build keeps the caller's" |
+| RunTests.test_escape_sequences_that_reach_the_module_preflight_are_left_out | differential "run, --robot, --output-style=rich with FORCE_COLOR=1" |
+| RunTests.test_force_color_does_not_hide_a_dependency_eb_would_build | differential "run, --module, --robot with FORCE_COLOR=1 and a missing dependency eb would build" |
 | RunTests.test_an_extended_dry_run_that_fails_refuses | differential "run, --robot, the extended dry run fails" |
 
 ### tests/test_prepare_recovery.py

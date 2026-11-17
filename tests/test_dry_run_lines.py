@@ -5,6 +5,7 @@ The recorded text is EasyBuild 5.4.2 on EESSI 2026.06 for
 not a terminal, its rich output wraps every line at 80 columns.
 """
 
+import dataclasses
 import json
 import os
 import stat
@@ -88,6 +89,142 @@ EXTENDED = (
     "   * [SUCCESS] Dep/1.0-GCCcore-15.2.0",
     "   * [SUCCESS] Top/1.0-GCCcore-15.2.0",
 )
+# EasyBuild 5.4.2 with rich 15.0.0 on the example site, as alice on login1,
+# with FORCE_COLOR=1 and TERM=xterm-256color: eb --dry-run [--robot]
+# --rebuild Example-1.0-GCCcore-15.2.0.eb, and of eb --extended-dry-run
+# --robot --rebuild --stop=fetch --ignore-locks the start, the blocks of the
+# first and the last of the eight easyconfigs up to their first step, and the
+# end. Once FORCE_COLOR is set and not empty, rich writes ANSI escape
+# sequences to a pipe too, and still wraps the lines at 80 columns.
+COLOR_REBUILD = (
+    "== Temporary log file in case of crash /tmp/eb-0uh_10us/easybuild-vkclmi_q.log",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "Dry run: printing build status of easyconfigs",
+    " * \x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m \x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m",
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-0uh_10us/\x1b[0m\x1b[95measybuild-vkclmi_q.log\x1b[0m* have been ",
+    "removed.",
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-0uh_10us\x1b[0m has been removed.",
+)
+COLOR_ROBOT = (
+    "== Temporary log file in case of crash /tmp/eb-x1zw5cqf/easybuild-4u5bzs64.log",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "Dry run: printing build status of easyconfigs and dependencies",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.20.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/z/zlib/\x1b[0m\x1b[95mzlib-1.3.1.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "zlib/\x1b[1;36m1.3\x1b[0m.\x1b[1;36m1\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.19.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m19\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/b/Bison/\x1b[0m\x1b[95mBison-3.8.2.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "Bison/\x1b[1;36m3.8\x1b[0m.\x1b[1;36m2\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/f/flex/\x1b[0m\x1b[95mflex-2.6.4.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "flex/\x1b[1;36m2.6\x1b[0m.\x1b[1;36m4\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/b/binutils/\x1b[0m\x1b[95mbinutils-2.45.eb\x1b[0m \x1b[1m(\x1b[0mmodule:",
+    "binutils/\x1b[1;36m2.45\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0m \x1b[1m]\x1b[0m \x1b[35m/opt/easybuild/easybuild/easyconfigs/g/GCCcore/\x1b[0m\x1b[95mGCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule:",
+    "GCCcore/\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m",
+    " * \x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m \x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m \x1b[1m(\x1b[0mmodule: ",
+    "Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[1m)\x1b[0m",
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-x1zw5cqf/\x1b[0m\x1b[95measybuild-4u5bzs64.log\x1b[0m* have been ",
+    "removed.",
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-x1zw5cqf\x1b[0m has been removed.",
+)
+COLOR_EXTENDED = (
+    "== Temporary log file in case of crash /tmp/eb-tz2pzp7y/easybuild-_v17l6i5.log",
+    "file \x1b[35m/tmp/eb-tz2pzp7y/\x1b[0m\x1b[95mfake_vsc_mleiqnwz\x1b[0m removed",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "== found valid index for \x1b[35m/opt/easybuild/easybuild/\x1b[0m\x1b[95measyconfigs\x1b[0m, so using it\x1b[33m...\x1b[0m",
+    "== resolving dependencies \x1b[33m...\x1b[0m",
+    "",
+    "== processing EasyBuild easyconfig ",
+    "\x1b[35m/opt/easybuild/easybuild/easyconfigs/m/M4/\x1b[0m\x1b[95mM4-1.4.20.eb\x1b[0m",
+    "",
+    "Important note: the actual build & install procedure that will be performed may ",
+    "diverge",
+    "\x1b[1m(\x1b[0mslightly\x1b[1m)\x1b[0m from what is outlined below, due to conditions in the easyblock which",
+    "are",
+    "incorrectly handled in a dry run.",
+    "Any errors that may occur are ignored and reported as warnings, on a per-step ",
+    "basis.",
+    "Please be aware of this, and only use the information below for quick debugging ",
+    "purposes.",
+    "",
+    "*** DRY RUN using \x1b[32m'ConfigureMake'\x1b[0m easyblock ",
+    "\x1b[1m(\x1b[0measybuild.easyblocks.generic.configuremake @ ",
+    "\x1b[35m/opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/\x1b[0m\x1b[95mconfigu\x1b[0m",
+    "\x1b[95mremake.py\x1b[0m\x1b[1m)\x1b[0m ***",
+    "",
+    "== building and installing M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m\x1b[33m...\x1b[0m",
+    "  >> installation prefix: \x1b[35m/tmp/eb-tz2pzp7y/__ROOT__/opt/site/software/M4/\x1b[0m\x1b[95m1.4.20\x1b[0m",
+    "fetching files and verifying checksums\x1b[33m...\x1b[0m \x1b[1m[\x1b[0mDRY RUN\x1b[1m]\x1b[0m",
+    "== processing EasyBuild easyconfig ",
+    "\x1b[35m/home/alice/easyconfigs/\x1b[0m\x1b[95mExample-1.0-GCCcore-15.2.0.eb\x1b[0m",
+    "",
+    "Important note: the actual build & install procedure that will be performed may ",
+    "diverge",
+    "\x1b[1m(\x1b[0mslightly\x1b[1m)\x1b[0m from what is outlined below, due to conditions in the easyblock which",
+    "are",
+    "incorrectly handled in a dry run.",
+    "Any errors that may occur are ignored and reported as warnings, on a per-step ",
+    "basis.",
+    "Please be aware of this, and only use the information below for quick debugging ",
+    "purposes.",
+    "",
+    "*** DRY RUN using \x1b[32m'Binary'\x1b[0m easyblock \x1b[1m(\x1b[0measybuild.easyblocks.generic.binary @ ",
+    "\x1b[35m/opt/easybuild/lib/python3.12/site-packages/easybuild/easyblocks/generic/\x1b[0m\x1b[95mbinary.\x1b[0m",
+    "\x1b[95mpy\x1b[0m\x1b[1m)\x1b[0m ***",
+    "",
+    "== building and installing Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m\x1b[33m...\x1b[0m",
+    "  >> installation prefix: ",
+    "\x1b[35m/tmp/eb-tz2pzp7y/__ROOT__/opt/site/software/Example/\x1b[0m\x1b[95m1.0-GCCcore-15.2.0\x1b[0m",
+    "fetching files and verifying checksums\x1b[33m...\x1b[0m \x1b[1m[\x1b[0mDRY RUN\x1b[1m]\x1b[0m",
+    "== Build succeeded for \x1b[1;36m8\x1b[0m out of \x1b[1;36m8\x1b[0m \x1b[1m(\x1b[0mtotal: \x1b[1;36m7\x1b[0m mins \x1b[1;36m0\x1b[0m secs\x1b[1m)\x1b[0m",
+    "== Summary:",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m20\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m zlib/\x1b[1;36m1.3\x1b[0m.\x1b[1;36m1\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m M4/\x1b[1;36m1.4\x1b[0m.\x1b[1;36m19\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m Bison/\x1b[1;36m3.8\x1b[0m.\x1b[1;36m2\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m flex/\x1b[1;36m2.6\x1b[0m.\x1b[1;36m4\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m binutils/\x1b[1;36m2.45\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m GCCcore/\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m",
+    "   * \x1b[1m[\x1b[0mSUCCESS\x1b[1m]\x1b[0m Example/\x1b[1;36m1.0\x1b[0m-GCCcore-\x1b[1;36m15.2\x1b[0m.\x1b[1;36m0\x1b[0m",
+    "== Temporary log \x1b[1;35mfile\x1b[0m\x1b[1m(\x1b[0ms\x1b[1m)\x1b[0m \x1b[35m/tmp/eb-tz2pzp7y/\x1b[0m\x1b[95measybuild-_v17l6i5.log\x1b[0m* have been ",
+    "removed.",
+    "== Temporary directory \x1b[35m/tmp/\x1b[0m\x1b[95meb-tz2pzp7y\x1b[0m has been removed.",
+)
+COLOR_ROBOT_RELS = [
+    "M4/1.4.20",
+    "zlib/1.3.1",
+    "M4/1.4.19",
+    "Bison/3.8.2",
+    "flex/2.6.4",
+    "binutils/2.45",
+    "GCCcore/15.2.0",
+    "Example/1.0-GCCcore-15.2.0",
+]
+# Text, and the text without its whole CSI and OSC sequences; the Zig test of
+# stripEscapes has the same cases.
+ESCAPES = (
+    ("", ""),
+    ("plain", "plain"),
+    ("\x1b[1m[\x1b[0mR\x1b[1m]\x1b[0m", "[R]"),
+    ("\x1b[4;94mhttps://x\x1b[0m", "https://x"),
+    ("a\x1b[ qb", "ab"),
+    ("\x1b]8;;file:///a\x1b\\a\x1b]8;;\x1b\\", "a"),
+    ("\x1b]0;title\x07x", "x"),
+    ("a\x1b[12", "a\x1b[12"),
+    ("a\x1b[1\nm", "a\x1b[1\nm"),
+    ("a\x1b]8;;x", "a\x1b]8;;x"),
+    ("\x1b]8;;x\ny\x07", "\x1b]8;;x\ny\x07"),
+    ("\x1b(B", "\x1b(B"),
+    ("\x1b", "\x1b"),
+    ("\x1b\x1b[1mx", "\x1bx"),
+    ("\x1b]x\x1b[1my\x07", "\x1b]xy\x07"),
+    ("\x1b[1m\u00e9\x1b[0m", "\u00e9"),
+)
 
 
 def _text(*parts):
@@ -120,6 +257,25 @@ class ParseTests(unittest.TestCase):
             self.assertEqual(modules_built_by_extended_dry_run(_text(wrapped)), built, width)
         self.assertEqual(modules_built_by_extended_dry_run("== building and installing a/1\n== done\n"), [])
 
+    def test_escape_sequences_in_rich_output_are_left_out(self):
+        from eb_staged_rebuild.engine import modules_built_by_extended_dry_run
+
+        self.assertEqual(software_rels_from_dry_run(_text(COLOR_REBUILD)), ["Example/1.0-GCCcore-15.2.0"])
+        self.assertEqual(software_rels_from_dry_run(_text(COLOR_ROBOT)), COLOR_ROBOT_RELS)
+        self.assertEqual(
+            modules_built_by_extended_dry_run(_text(COLOR_EXTENDED)),
+            ["M4/1.4.20", "Example/1.0-GCCcore-15.2.0"],
+        )
+
+    def test_only_whole_csi_and_osc_sequences_are_left_out(self):
+        from eb_staged_rebuild.engine import strip_escapes
+
+        for text, plain in ESCAPES:
+            with self.subTest(text=text):
+                self.assertEqual(strip_escapes(text), plain)
+        linked = " * [R] \x1b]8;;file:///x/a.eb\x1b\\/x/a.eb\x1b]8;;\x1b\\ (module: \x1b]8;;x\x07a/1\x1b]8;;\x07)\n"
+        self.assertEqual(software_rels_from_dry_run(linked), ["a/1"])
+
 
 class RunTests(unittest.TestCase):
     def setUp(self):
@@ -141,6 +297,8 @@ class RunTests(unittest.TestCase):
             "FAKE_EB_UNBUILT",
             "FAKE_EB_MISSING",
             "FAKE_EB_XFAIL",
+            "FAKE_EB_RICH",
+            "FAKE_EB_STYLE",
         ):
             os.environ.pop(key, None)
         os.environ["FAKE_EB_ARGV"] = self.argv
@@ -228,6 +386,42 @@ class RunTests(unittest.TestCase):
         os.environ["FAKE_EB_MISSING"] = "dep/2"
         message = self._refused("--robot")
         self.assertIn(os.path.join(self.software, "dep", "2"), message)
+
+    def test_force_color_does_not_hide_the_module_lines(self):
+        styles = os.path.join(self.root, "styles.log")
+        os.environ.update(
+            {
+                "FAKE_EB_RICH": "1",
+                "FORCE_COLOR": "0",
+                "TERM": "xterm-256color",
+                "EASYBUILD_OUTPUT_STYLE": "rich",
+                "FAKE_EB_UNBUILT": "M4/1.4.20",
+                "FAKE_EB_STYLE": styles,
+            }
+        )
+        self._run("--robot")
+        with open(styles, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().split(), ["basic", "basic", "rich"])
+
+    def test_escape_sequences_that_reach_the_module_preflight_are_left_out(self):
+        os.environ.update(
+            {
+                "FAKE_EB_RICH": "1",
+                "FORCE_COLOR": "1",
+                "TERM": "xterm-256color",
+                "FAKE_EB_UNBUILT": "M4/1.4.20",
+                "FAKE_EB_WRAP": "24",
+            }
+        )
+        self._run("--output-style=rich", "--robot")
+
+    def test_force_color_does_not_hide_a_dependency_eb_would_build(self):
+        os.environ.update(
+            {"FAKE_EB_RICH": "1", "FORCE_COLOR": "1", "TERM": "xterm-256color", "FAKE_EB_MISSING": "dep/2"}
+        )
+        with self.assertRaises(Refused) as caught:
+            run(dataclasses.replace(self._spec("--robot"), module_rels=["demo/1"]))
+        self.assertIn("dep/2 is missing, not an existing rebuild directory", str(caught.exception))
 
     def test_an_extended_dry_run_that_fails_refuses(self):
         os.environ["FAKE_EB_UNBUILT"] = "M4/1.4.20"

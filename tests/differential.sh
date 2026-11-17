@@ -302,6 +302,17 @@ compare_admin "run, --robot, wrapped extended dry-run lines" env FAKE_EB_UNBUILT
 compare_admin "rollback the wrapped --robot run" rollback --state-root @ROOT@/state d3
 compare_admin "run, --robot with a missing dependency eb would build" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d4 --skip-live-check -- demo-1.eb --robot
 compare_admin "run, --robot, the extended dry run fails" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_XFAIL=31 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d5 --skip-live-check -- demo-1.eb --robot
+# With rich, EasyBuild colours its output once FORCE_COLOR is set and not
+# empty, even to 0: the dry runs get EASYBUILD_OUTPUT_STYLE=basic, the
+# build keeps the caller's style, and escape sequences that reach the
+# module preflight all the same, as with --output-style=rich, are left out.
+compare_admin "run, --robot with FORCE_COLOR=0" env FAKE_EB_RICH=1 FORCE_COLOR=0 TERM=xterm-256color EASYBUILD_OUTPUT_STYLE=rich FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_STYLE=@ROOT@/styles @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c1 --skip-live-check -- demo-1.eb --robot
+compare_admin "the output style each eb run got" env cat @ROOT@/styles
+compare_admin "remove the record of output styles" env rm @ROOT@/styles
+compare_admin "rollback the run with FORCE_COLOR=0" rollback --state-root @ROOT@/state c1
+compare_admin "run, --robot, --output-style=rich with FORCE_COLOR=1" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c2 --skip-live-check -- demo-1.eb --robot --output-style=rich
+compare_admin "rollback the run with --output-style=rich" rollback --state-root @ROOT@/state c2
+compare_admin "run, --module, --robot with FORCE_COLOR=1 and a missing dependency eb would build" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c3 --skip-live-check --module demo/1 -- demo-1.eb --robot
 # EasyBuild finds the dependencies installed in the live tree by their module
 # files: all/ under --modules, or the suffix EasyBuild reads.
 compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m1 --skip-live-check --module demo/1 -- demo-1.eb

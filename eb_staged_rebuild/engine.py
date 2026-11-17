@@ -64,6 +64,7 @@ import re
 _ENTRY = re.compile(r"^\s*\*\s+\[[ xFR-]\]")
 _MODULE_LINE = re.compile(r"^\s*\*\s+\[([ xFR-])\]\s+.*\(module:\s*(.+)\)\s*$")
 _BUILDING = "== building and installing"
+_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)")
 
 
 @dataclass
@@ -176,6 +177,18 @@ def _check_install_dir(software, rel):
         raise Refused(f"{path} is {_NOT_A_DIRECTORY[kind]}, not an existing rebuild directory")
 
 
+def strip_escapes(text):
+    """``text`` without its ANSI CSI and OSC escape sequences.
+
+    With rich, EasyBuild colours its output once ``FORCE_COLOR`` is set and
+    not empty, through a pipe too, unless its output style is basic; the dry
+    runs ask for basic output, but ``--output-style`` among the build's
+    arguments wins. A sequence ends on its line, and one that does not end
+    there is kept.
+    """
+    return _ESCAPE.sub("", text)
+
+
 def _dry_run_entries(text):
     """Each module line of eb --dry-run, whole.
 
@@ -186,7 +199,7 @@ def _dry_run_entries(text):
     EasyBuild log line or an empty line.
     """
     entry = None
-    for line in text.splitlines():
+    for line in strip_escapes(text).splitlines():
         if entry is not None and line and not line.startswith("==") and not _ENTRY.match(line) and not _MODULE_LINE.match(entry):
             entry += line
             continue
@@ -232,7 +245,7 @@ def modules_built_by_extended_dry_run(text):
     """
     built = []
     entry = None
-    for line in text.splitlines():
+    for line in strip_escapes(text).splitlines():
         if line.startswith("=="):
             entry = line
         elif entry is not None and line.strip():

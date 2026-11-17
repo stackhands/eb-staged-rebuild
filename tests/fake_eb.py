@@ -166,10 +166,37 @@ def _robot(argv):
     return bool({arg.split("=", 1)[0] for arg in argv} & {"--robot", "-r"})
 
 
-def _print_wrapped(lines):
+def _coloured(argv):
+    """Whether the output is coloured, as EasyBuild with rich (FAKE_EB_RICH=1) colours it.
+
+    Rich colours a pipe too once FORCE_COLOR is set and not empty, unless
+    TERM is dumb or unknown, and EasyBuild uses rich unless its output style,
+    from --output-style or else EASYBUILD_OUTPUT_STYLE, is basic or no_color.
+    """
+    if os.environ.get("FAKE_EB_RICH") != "1" or not os.environ.get("FORCE_COLOR"):
+        return False
+    if os.environ.get("TERM") in ("dumb", "unknown"):
+        return False
+    style = _option(argv, "--output-style") or os.environ.get("EASYBUILD_OUTPUT_STYLE") or "auto"
+    return style in ("auto", "rich")
+
+
+def _colour(line):
+    """Style brackets bold and numbers bold cyan, as rich's highlighter does."""
+
+    def style(match):
+        code = "1;36" if match.group().isdigit() else "1"
+        return f"\x1b[{code}m{match.group()}\x1b[0m"
+
+    return re.sub(r"[\[\]()]|\d+", style, line)
+
+
+def _print_wrapped(lines, argv):
     width = int(os.environ.get("FAKE_EB_WRAP") or 0)
+    coloured = _coloured(argv)
     for line in lines:
-        print("\n".join(wrap(line, width)) if width else line)
+        pieces = wrap(line, width) if width else [line]
+        print("\n".join(_colour(piece) if coloured else piece for piece in pieces))
 
 
 def _dry_run(argv):
@@ -181,7 +208,8 @@ def _dry_run(argv):
     FAKE_EB_UNBUILT names ones marked [ ] that the build leaves alone, as the
     build dependencies of an installed toolchain are; FAKE_EB_MISSING names
     ones marked [ ] that the build installs. FAKE_EB_WRAP wraps every line
-    at that many columns, as rich does when stdout is not a terminal.
+    at that many columns, as rich does when stdout is not a terminal, and
+    FAKE_EB_RICH=1 colours the lines when rich would.
     """
     names = {arg.split("=", 1)[0] for arg in argv}
     status = "F" if names & {"--force", "-f"} else "R" if "--rebuild" in names else "x"
@@ -193,7 +221,7 @@ def _dry_run(argv):
         lines += [f" * [ ] {rel.replace('/', '-')}.eb (module: {rel})" for rel in unbuilt]
     for rel in (os.environ.get("FAKE_EB_RELS") or _rel()).split(","):
         lines.append(f" * [{status}] {rel.replace('/', '-')}.eb (module: {rel})")
-    _print_wrapped(lines)
+    _print_wrapped(lines, argv)
 
 
 def _extended_dry_run(argv):
@@ -201,9 +229,10 @@ def _extended_dry_run(argv):
 
     With --robot, the dependencies FAKE_EB_MISSING come first, then the
     listed easyconfigs. FAKE_EB_XFAIL is the exit status of a resolution
-    that fails, and FAKE_EB_WRAP wraps the lines as for the dry run. As
-    EasyBuild 5.4.2 does in this mode, each install lock is left in .locks
-    under the software tree unless --ignore-locks takes none.
+    that fails, and FAKE_EB_WRAP and FAKE_EB_RICH wrap and colour the lines
+    as for the dry run. As EasyBuild 5.4.2 does in this mode, each install
+    lock is left in .locks under the software tree unless --ignore-locks
+    takes none.
     """
     failed = os.environ.get("FAKE_EB_XFAIL")
     if failed:
@@ -221,7 +250,7 @@ def _extended_dry_run(argv):
             "== COMPLETED: Installation ended successfully (took 0 secs)",
         ]
     lines.append(f"== Build succeeded for {len(rels)} out of {len(rels)} (total: 0 secs)")
-    _print_wrapped(lines)
+    _print_wrapped(lines, argv)
     return 0
 
 
@@ -240,6 +269,12 @@ def main(argv):
     elif modulepath:
         with open(modulepath, "a", encoding="utf-8") as handle:
             handle.write(os.environ.get("MODULEPATH", "") + "\n")
+    # FAKE_EB_STYLE: a file to which each run adds the EASYBUILD_OUTPUT_STYLE
+    # it gets, or - for none.
+    style = os.environ.get("FAKE_EB_STYLE")
+    if style:
+        with open(style, "a", encoding="utf-8") as handle:
+            handle.write(os.environ.get("EASYBUILD_OUTPUT_STYLE", "-") + "\n")
     # FAKE_EB_VERSION: answer eb --version as that EasyBuild release does.
     version = os.environ.get("FAKE_EB_VERSION")
     if version and "--version" in argv:

@@ -181,6 +181,19 @@ def userns_command(ctx):
     return command, env, software, modules
 
 
+def _dry_run_env(ctx):
+    """Return the environment of a dry run: the build's, with basic output.
+
+    With rich, EasyBuild wraps its output at the console width and, once
+    ``FORCE_COLOR`` is set and not empty, colours it through a pipe too.
+    ``EASYBUILD_OUTPUT_STYLE=basic``, which EasyBuild reads since 4.5.0,
+    asks for neither; ``--output-style`` among the build's arguments wins.
+    """
+    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
+    env["EASYBUILD_OUTPUT_STYLE"] = "basic"
+    return env
+
+
 def dry_run_command(ctx):
     """List the modules the build replaces, without installing.
 
@@ -193,8 +206,7 @@ def dry_run_command(ctx):
         "--dry-run",
         *ensure_rebuild(filter_eb_args(ctx.eb_args)),
     ]
-    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
-    return cmd, env
+    return cmd, _dry_run_env(ctx)
 
 
 def extended_dry_run_command(ctx):
@@ -214,8 +226,7 @@ def extended_dry_run_command(ctx):
         "--stop=fetch",
         "--ignore-locks",
     ]
-    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
-    return cmd, env
+    return cmd, _dry_run_env(ctx)
 
 
 def _signal_group(child, signum):

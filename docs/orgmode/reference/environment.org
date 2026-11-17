@@ -27,6 +27,9 @@ Each EasyBuild command, the dry runs and the build alike, gets the caller's envi
 - =EASYBUILD_INSTALLPATH_SOFTWARE= and =EASYBUILD_INSTALLPATH_MODULES= name the generation's =software= and =modules= with the =installpath= and =userns= backends, and the live trees for the dry runs and for =bwrap=, where =--bwrap-installpath= moves the installation.
 - The directory of the live tree's module files goes first on =MODULEPATH=, unless it is there already, so that a build into the generation finds the dependencies installed in the live tree.
   It is =all= under the directory =--modules= names, where EasyBuild writes them; the last =--suffix-modules-path= after =--=, or else =EASYBUILD_SUFFIX_MODULES_PATH=, gives EasyBuild another suffix than =all=, and an absolute one is the directory itself.
+- The dry runs also get =EASYBUILD_OUTPUT_STYLE=basic=, which EasyBuild reads since 4.5.0.
+  With rich, EasyBuild wraps its output at the console width and, once =FORCE_COLOR= is set and not empty, even to =0=, colours it through a pipe too, unless =TERM= is =dumb= or =unknown=.
+  The build keeps the caller's output style; an =--output-style= after =--= reaches the dry runs and the build alike.
 
 The =--prepare= program, the command of =build-events= and =eb-stack= get the caller's environment unchanged.
 

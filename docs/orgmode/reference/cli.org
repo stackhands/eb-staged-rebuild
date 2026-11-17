@@ -130,6 +130,7 @@ Once it has checked them, =run= makes a relative =--software=, =--modules= or =-
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
 Every module that list names, except one marked =[x]= (installed, and left alone), must be an existing directory =software/NAME/VERSION=.
 When the dry run marks =[ ]= (not installed) a module that =--module= does not name, =run= asks =eb --extended-dry-run= with the same arguments, =--stop=fetch= and =--ignore-locks=, and leaves out each module marked =[ ]= that EasyBuild would not build.
+Both dry runs get =EASYBUILD_OUTPUT_STYLE=basic=, so that EasyBuild with rich neither wraps nor colours their output, and =run= ignores the ANSI escape sequences that an =--output-style= after =--= brings back.
 The arguments after =--= reach EasyBuild with =--rebuild= added, unless they hold =--rebuild=, =--force= or =-f=.
 These options would point EasyBuild at the live tree, and are dropped: =--prefix=, =--installpath=, =--installpath-software=, =--installpath-modules=, =--subdir-software=, =--subdir-modules=, =--bwrap=, =--disable-bwrap=, =--bwrap-installpath=, =--bwrap-options= and =--remove-ghost-install-dirs=.
 EasyBuild's output and the program's own lines, each starting =eb-staged-rebuild:=, go to stdout; a refusal goes to stderr.
