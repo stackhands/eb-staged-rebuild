@@ -308,6 +308,13 @@ compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/else
 compare_admin "rollback the MODULEPATH run" rollback --state-root @ROOT@/state m1
 compare_admin "run, MODULEPATH with the suffix EasyBuild reads" env MODULEPATH=/elsewhere/modules/all EASYBUILD_SUFFIX_MODULES_PATH=mods FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m2 --skip-live-check --module demo/1 -- demo-1.eb --suffix-modules-path one
 compare_admin "rollback the run with a modules suffix" rollback --state-root @ROOT@/state m2
+# Relative trees reach EasyBuild, the sandbox and the journal as absolute
+# paths, so the run can be rolled back from any directory.
+compare_admin "run, relative trees" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend installpath --eb @ROOT@/eb --run-id rel1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run on relative trees from another directory" env -C @ROOT@/state @CMD@ rollback --state-root @ROOT@/state rel1
+compare_admin "run --dry-run, userns, relative trees" run --software software --modules modules --state-root state --backend userns --dry-run -- demo-1.eb
+compare_admin "run, userns, relative trees" env FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend userns --eb @ROOT@/eb --run-id rel2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the userns run on relative trees" rollback --state-root state rel2
 # A rollback needs the run's tree live: a later run is rolled back first.
 compare_admin "run, an earlier run" env FAKE_EB_PAYLOAD=earlier @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, a later run" env FAKE_EB_PAYLOAD=later @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o2 --skip-live-check --module demo/1 -- demo-1.eb

@@ -1,5 +1,6 @@
 """EasyBuild is replaced by tests/fake_eb.py. These tests exercise the real backends."""
 
+import contextlib
 import json
 import os
 import stat
@@ -9,7 +10,7 @@ import unittest
 from types import SimpleNamespace
 
 from eb_staged_rebuild.builders import child_env, userns_command
-from eb_staged_rebuild.engine import Spec, run
+from eb_staged_rebuild.engine import Spec, rollback, run
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.probe import probe_userns_sandbox, stage_paths_from_bwrap_info
 from eb_staged_rebuild.errors import Refused
@@ -17,6 +18,7 @@ from tests.support import PROBES, classic_install
 
 
 FAKE_EB = os.path.join(os.path.dirname(__file__), "fake_eb.py")
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(path):
@@ -73,6 +75,28 @@ class FakeEbTests(unittest.TestCase):
             probes=probes or _probes((5, 4, 2), True),
             run_id="run1",
         )
+
+    def _relative_spec(self, backend):
+        return Spec(
+            software="software",
+            modules="modules",
+            state_root="state",
+            eb_args=["demo-1.eb"],
+            backend=backend,
+            module_rels=["demo/1"],
+            eb_executable=FAKE_EB,
+            probes=_probes((5, 4, 2), True),
+            run_id="run1",
+        )
+
+    def _assert_absolute_plans(self):
+        journal = json.loads(_read(os.path.join(self.state, "runs", "run1", "journal.json")))
+        for entry in journal["modules_plan"]:
+            for key in ("live_module", "backup", "prepared"):
+                self.assertTrue(os.path.isabs(entry[key]), f"{key}: {entry[key]}")
+        for entry in journal["links_plan"]:
+            self.assertTrue(os.path.isabs(entry["live_path"]), f"live_path: {entry['live_path']}")
+        return journal
 
     def _assert_live_untouched(self):
         self.assertEqual(os.lstat(self.install).st_ino, self.inode)
@@ -173,6 +197,46 @@ class FakeEbTests(unittest.TestCase):
         self._assert_switched()
         live = os.path.join(self.modules, "all")
         self.assertEqual(_read(record).splitlines(), [f"{live}:/elsewhere/modules/all"] * 2)
+
+    def test_relative_trees_reach_easybuild_as_absolute_paths(self):
+        record = os.path.join(self.root, "modulepath.log")
+        os.environ["FAKE_EB_MODULEPATH"] = record
+        os.environ["MODULEPATH"] = "/elsewhere/modules/all"
+        with contextlib.chdir(self.root):
+            live = os.path.join(os.getcwd(), "modules", "all")
+            result = run(self._relative_spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        self.assertEqual(_read(record).splitlines(), [f"{live}:/elsewhere/modules/all"] * 2)
+        self._assert_absolute_plans()
+
+    def test_userns_mounts_relative_trees_by_absolute_path(self):
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(probe.get("reason"))
+        # The sandbox helper runs as python -m eb_staged_rebuild.userns_sandbox,
+        # which finds an uninstalled package outside the checkout only here.
+        os.environ["PYTHONPATH"] = REPO
+        with contextlib.chdir(self.root):
+            here = os.getcwd()
+            result = run(self._relative_spec("userns"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        command = self._assert_absolute_plans()["eb_command"]
+        mounts = [command[i + 1] for i, argument in enumerate(command) if argument == "--read-only"]
+        self.assertEqual(mounts, [os.path.join(here, "software"), os.path.join(here, "modules")])
+
+    def test_rollback_from_elsewhere_after_a_run_on_relative_trees(self):
+        with contextlib.chdir(self.root):
+            result = run(self._relative_spec("installpath"))
+        self.assertEqual(result.returncode, 0, result.message)
+        elsewhere = os.path.join(self.root, "elsewhere")
+        os.makedirs(elsewhere)
+        with contextlib.chdir(elsewhere):
+            result = rollback(self.state, "run1")
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_live_untouched()
+        self.assertEqual(_read(self.module), self.v0)
 
     def test_easybuild_53_layout_without_stage_keys(self):
         os.environ["FAKE_EB_KEYS"] = "legacy"

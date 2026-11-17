@@ -1200,6 +1200,9 @@ def _select_backend(spec, probes):
 def run(spec):
     """Build into a new generation, then swap it with the live directory."""
     _check_roots(spec)
+    spec.software = abspath(spec.software)
+    spec.modules = abspath(spec.modules)
+    spec.state_root = abspath(spec.state_root)
     if spec.ledger_config is not None:
         spec.ledger_policy = load_config(spec.ledger_config)
         spec.ledger_config = spec.ledger_policy["path"]

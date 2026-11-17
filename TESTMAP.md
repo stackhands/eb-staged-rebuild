@@ -296,6 +296,9 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION` and record
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
 | FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
 | FakeEbTests.test_eb_finds_the_live_module_files_on_modulepath | differential "run, MODULEPATH names the live module files" |
+| FakeEbTests.test_relative_trees_reach_easybuild_as_absolute_paths | differential "run, relative trees" |
+| FakeEbTests.test_userns_mounts_relative_trees_by_absolute_path | differential "run, userns, relative trees" |
+| FakeEbTests.test_rollback_from_elsewhere_after_a_run_on_relative_trees | differential "rollback the run on relative trees from another directory" |
 | FakeEbTests.test_easybuild_53_layout_without_stage_keys | differential "run, bwrap, 5.3 layout without stage keys" |
 | FakeEbTests.test_missing_stage_key_on_unknown_version_is_not_published | differential "run, bwrap, unknown release without stage keys" |
 | FakeEbTests.test_overlay_upper_is_not_published | differential "run, bwrap, overlay" |

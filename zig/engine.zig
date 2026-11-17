@@ -209,11 +209,14 @@ fn strOr(v: ?Py, fallback: []const u8) []const u8 {
 
 // ---- run ----------------------------------------------------------------
 
-/// run: check the roots, probe, pick the backend, then print the dry run
-/// or hand the run to run.zig. Returns the exit status.
+/// run: check the roots and make them absolute, probe, pick the backend,
+/// then print the dry run or hand the run to run.zig. Returns the exit status.
 pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     var spec = spec_in;
     checkRoots(a, spec);
+    spec.software = admin.abspath(a, spec.software);
+    spec.modules = admin.abspath(a, spec.modules);
+    spec.state_root = admin.abspath(a, spec.state_root);
     const probes = probe.probeAll(a, env, spec.software, spec.eb_executable) catch |err| refuse("{s}", .{main_mod.osError(a, err, spec.software)});
     if (std.mem.eql(u8, spec.backend, "auto")) {
         spec.backend = if (usable(probes, "bwrap")) "bwrap" else if (usable(probes, "userns_sandbox")) "userns" else "installpath";
