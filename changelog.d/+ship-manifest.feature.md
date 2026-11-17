@@ -1,0 +1,1 @@
+`python3 -m eb_staged_rebuild.ship write ROOT MANIFEST` records the checksum of each file and the target of each symlink. `verify` exits 1 when a copy differs. The list is not a software bill of materials. Nothing writes it unless you run the command.

@@ -445,6 +445,7 @@ eb-staged-rebuild: /opt/site/software/Example/2.0-GCCcore-15.2.0 is missing, not
 ** Related
 
 - [[file:set-permissions.org][Set the permissions of a rebuild before it goes live]]
+- [[file:check-a-copied-install.org][Check a copied install]], when the next node does not share this disk
 - [[file:recover.org][Finish a run that failed or stopped]]
 - [[file:roll-back.org][Put the previous installation back]]
 - [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
