@@ -1,0 +1,1 @@
+CI runs `HaoZeke/large-file-auditor` in `.github/workflows/large-file-audit.yml` on `main` pushes and pull requests to fail when a commit introduces a blob of `500K` or more and name the offending blob.
