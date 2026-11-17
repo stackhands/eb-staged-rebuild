@@ -2,9 +2,8 @@
 //! exchange the complete tree with the stable live directory.
 //!
 //! The commands of the Python tool in one static binary: probe, run,
-//! resume, rollback, gc, retire, status and resolve, and the
-//! ledger-maintenance and build-events commands of its other entry
-//! points. COMPAT.md lists where the two builds differ.
+//! resume, rollback, gc, retire, status and resolve. COMPAT.md lists where
+//! the two builds differ.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -12,10 +11,8 @@ const common = @import("zig_common");
 const modulefile = @import("modulefile.zig");
 const pyfmt = @import("pyfmt.zig");
 const probe = @import("probe.zig");
-const ledger = @import("ledger.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
-const build_events = @import("build_events.zig");
 const build_options = @import("build_options");
 
 const sys = common.sys;
@@ -965,13 +962,11 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest);
     if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env);
     if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env);
-    if (std.mem.eql(u8, cmd, "ledger-maintenance")) return ledger.main(a, rest, .{ .envp = env.envp });
     if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env);
     if (std.mem.eql(u8, cmd, "rollback")) return cmdRollback(a, rest, env);
     if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env);
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
-    if (std.mem.eql(u8, cmd, "build-events")) return build_events.main(a, rest, env);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
     usageError(top_usage, prog, "argument command: invalid choice: '{s}' (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{cmd});
 }
@@ -982,14 +977,12 @@ pub var last_why: []const u8 = "";
 test {
     _ = @import("run.zig");
     _ = @import("publish.zig");
-    _ = @import("build_events.zig");
     _ = @import("swap.zig");
     _ = @import("livecheck.zig");
     _ = @import("discover.zig");
     _ = @import("builders.zig");
     _ = admin;
     _ = engine;
-    _ = ledger;
     _ = modulefile;
     _ = pyfmt;
     _ = probe;
