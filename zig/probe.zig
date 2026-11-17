@@ -457,7 +457,7 @@ fn probeEasybuild(a: Allocator, env: Env, eb: []const u8) Py {
     put(a, &d, "legacy_layout_versions", .{ .list = a.dupe(Py, &.{ Py.s("5.3.0"), Py.s("5.3.1") }) catch &.{} });
     put(a, &d, "reason", .null);
     const p = path orelse {
-        put(a, &d, "reason", Py.s(a.print("{s} was not found on PATH", .{eb}) catch eb));
+        put(a, &d, "reason", Py.s(a.print("{s} was not found on PATH. Install EasyBuild and put eb on PATH, as https://docs.easybuild.io/installation/ describes, or pass --eb with its path", .{eb}) catch eb));
         return .{ .dict = d.items };
     };
     const exe = if (p[0] == '/') p else blk: {

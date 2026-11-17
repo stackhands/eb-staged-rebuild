@@ -287,7 +287,10 @@ def probe_easybuild(eb="eb"):
         "reason": None,
     }
     if not path:
-        result["reason"] = f"{eb} was not found on PATH"
+        result["reason"] = (
+            f"{eb} was not found on PATH. Install EasyBuild and put eb on PATH, "
+            "as https://docs.easybuild.io/installation/ describes, or pass --eb with its path"
+        )
         return result
     proc = _run([path, "--version"], CAPABILITY_PROBE_TIMEOUT_SECONDS)
     if not isinstance(proc, subprocess.CompletedProcess):
