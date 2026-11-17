@@ -209,6 +209,8 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | GarbageCollectionTests.test_gc_refuses_a_grace_period_below_0_or_not_finite | differential "gc, --grace-hours below 0", "gc, --grace-hours=-5", "gc, --grace-hours -1e3", "gc, --grace-hours nan", "gc, --grace-hours inf", "gc, --grace-hours -inf"; `zig/main.zig` test "optionLike takes a negative number for a value, as argparse 3.14 does" |
 | GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_below_0_or_not_finite | differential "gc, a grace period below 0 in the environment", "gc, nan in the environment", "gc, inf and white space in the environment" |
 | GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
+| GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_that_is_not_a_number | differential "gc, a grace period in the environment that is not a number", "gc, an empty grace period in the environment", "gc, a grace period in the environment that needs quoting" |
+| GarbageCollectionTests.test_run_refuses_an_environment_grace_period_that_is_not_a_number | differential "run, a grace period in the environment that is not a number" |
 
 ### tests/test_retire.py
 

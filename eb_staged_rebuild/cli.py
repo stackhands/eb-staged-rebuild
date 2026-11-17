@@ -53,7 +53,10 @@ def _grace(value):
     if value is not None:
         return value
     text = os.environ.get("EB_STAGED_REBUILD_GRACE_HOURS", str(DEFAULT_GRACE_HOURS))
-    hours = float(text)
+    try:
+        hours = float(text)
+    except ValueError:
+        raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number: {text!r}") from None
     if not _is_hours(hours):
         raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {text!r}")
     return hours

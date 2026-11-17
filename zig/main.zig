@@ -539,7 +539,7 @@ fn graceArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64
 /// EB_STAGED_REBUILD_GRACE_HOURS, or the default when it is not set.
 fn envGrace(a: Allocator, env: probe.Env) f64 {
     const e = env.get("EB_STAGED_REBUILD_GRACE_HOURS") orelse return admin.default_grace_hours;
-    const hours = std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: '{s}'", .{e});
+    const hours = std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: {s}", .{repr(a, e)});
     if (!isHours(hours)) refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {s}", .{repr(a, e)});
     return hours;
 }

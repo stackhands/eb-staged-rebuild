@@ -349,11 +349,15 @@ compare_admin "gc, --grace-hours -0" gc --state-root @ROOT@/state --grace-hours 
 compare_admin "gc, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --dry-run
 compare_admin "gc, nan in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=nan @CMD@ gc --state-root @ROOT@/state --dry-run
 compare_admin "gc, inf and white space in the environment" env $'EB_STAGED_REBUILD_GRACE_HOURS= inf\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=5h @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, an empty grace period in the environment" env EB_STAGED_REBUILD_GRACE_HOURS= @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that needs quoting" env $'EB_STAGED_REBUILD_GRACE_HOURS=it\'s\t' @CMD@ gc --state-root @ROOT@/state --dry-run
 compare_admin "gc, --grace-hours instead of a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --grace-hours 1 --dry-run
 compare_admin "gc, a bad --lock-timeout before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --lock-timeout x --dry-run
 compare_admin "gc, --lock-timeout -5" gc --state-root @ROOT@/state --lock-timeout -5 --dry-run
 compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --grace-hours -5 --dry-run -- demo-1.eb
 compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=abc @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
 compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
 compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1

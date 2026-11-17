@@ -507,6 +507,26 @@ class GarbageCollectionTests(unittest.TestCase):
             )
             self.assertFalse(os.path.exists(state))
 
+    def test_gc_refuses_an_environment_grace_period_that_is_not_a_number(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for text, shown in (("abc", "'abc'"), ("", "''"), ("5h", "'5h'"), ("it's", '"it\'s"')):
+                with self.subTest(text=text):
+                    self.assertEqual(
+                        _main(["gc", "--state-root", state, "--dry-run"], {"EB_STAGED_REBUILD_GRACE_HOURS": text}),
+                        (2, "", f"eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: {shown}\n"),
+                    )
+
+    def test_run_refuses_an_environment_grace_period_that_is_not_a_number(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, _ = _fixture(root)
+            argv = ["run", "--software", software, "--modules", modules, "--state-root", state, "--dry-run"]
+            self.assertEqual(
+                _main([*argv, "--", "demo-1.eb"], {"EB_STAGED_REBUILD_GRACE_HOURS": "abc"}),
+                (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'abc'\n"),
+            )
+            self.assertFalse(os.path.exists(state))
+
 
 if __name__ == "__main__":
     unittest.main()
