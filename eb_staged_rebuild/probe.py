@@ -118,7 +118,11 @@ def probe_user_namespaces():
 
 
 def probe_userns_sandbox():
-    """Test a user and mount namespace with a verified read-only bind mount."""
+    """Test a user and mount namespace with a verified read-only bind mount.
+
+    The sandbox must also be able to become the caller's uid and gid again,
+    which it does before it runs EasyBuild.
+    """
     path = shutil.which("unshare")
     result = {
         "installed": bool(path),

@@ -181,6 +181,11 @@ def _dry_run(argv):
 
 def main(argv):
     _record(argv)
+    # FAKE_EB_IDS: a file to which each run adds the uid and gid it runs as.
+    ids = os.environ.get("FAKE_EB_IDS")
+    if ids:
+        with open(ids, "a", encoding="utf-8") as handle:
+            handle.write(f"{os.getuid()} {os.getgid()}\n")
     # FAKE_EB_VERSION: answer eb --version as that EasyBuild release does.
     version = os.environ.get("FAKE_EB_VERSION")
     if version and "--version" in argv:

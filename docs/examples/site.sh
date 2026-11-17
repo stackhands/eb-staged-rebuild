@@ -154,7 +154,8 @@ case_robot() {
 }
 
 case_userns() {
-    STATUS=1 run_example example-userns --backend userns
+    run_example example-userns --backend userns
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
 }
 
 case_no-easyconfig() {

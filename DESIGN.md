@@ -21,7 +21,11 @@ that still hold old files open.
 2. `unshare` with a user and mount namespace. The helper bind-mounts the live
    software tree and the live module tree read-only. The helper then checks
    that a probe write fails with `EROFS`. The build runs into the stage with
-   an install path.
+   an install path. `unshare --map-root-user` makes the caller root of that
+   namespace, which EasyBuild refuses to run as, so the helper runs the build
+   in a nested user namespace that maps the caller's uid and gid onto that
+   root: EasyBuild runs as the caller, without capabilities, and cannot
+   remount the read-only trees.
 3. The install-path fallback. The fallback still sends EasyBuild to a separate
    software tree and a separate module tree. The fallback has no kernel
    sandbox. The command prints that the run is using this unsandboxed

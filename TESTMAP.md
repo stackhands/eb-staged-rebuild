@@ -285,6 +285,7 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION`.
 | FakeEbTests.test_bwrap_swaps_the_staged_generation | differential "run, bwrap" |
 | FakeEbTests.test_userns_records_the_stable_prefix | differential "run, userns" |
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
+| FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
 | FakeEbTests.test_easybuild_53_layout_without_stage_keys | differential "run, bwrap, 5.3 layout without stage keys" |
 | FakeEbTests.test_missing_stage_key_on_unknown_version_is_not_published | differential "run, bwrap, unknown release without stage keys" |
 | FakeEbTests.test_overlay_upper_is_not_published | differential "run, bwrap, overlay" |
@@ -343,6 +344,7 @@ The fake `eb` prints the module list as EasyBuild 5.4.2 does: `[R]` only with `-
 |---|---|
 | EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
 | EasyBuildIntegrationTests.test_symlink_name_version_is_refused | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_symlink_name_version_is_refused |
 
 ### tests/test_sealed_install.py

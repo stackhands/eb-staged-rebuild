@@ -53,6 +53,7 @@ class FakeEbTests(unittest.TestCase):
         os.environ.pop("FAKE_EB_KEYS", None)
         os.environ.pop("FAKE_EB_OVERLAY", None)
         os.environ.pop("FAKE_EB_RECORD_PREFIX", None)
+        os.environ.pop("FAKE_EB_IDS", None)
 
     def tearDown(self):
         os.environ.clear()
@@ -150,6 +151,17 @@ class FakeEbTests(unittest.TestCase):
         self.assertTrue(
             any(argument.startswith("--installpath-software=") for argument in commands[-1])
         )
+
+    def test_userns_build_runs_eb_as_the_caller(self):
+        probe = probe_userns_sandbox()
+        if not probe.get("usable"):
+            self.skipTest(probe.get("reason"))
+        ids = os.path.join(self.root, "ids.log")
+        os.environ["FAKE_EB_IDS"] = ids
+        result = run(self._spec("userns"))
+        self.assertEqual(result.returncode, 0, result.message)
+        self._assert_switched()
+        self.assertEqual(_read(ids).splitlines()[-1], f"{os.getuid()} {os.getgid()}")
 
     def test_easybuild_53_layout_without_stage_keys(self):
         os.environ["FAKE_EB_KEYS"] = "legacy"

@@ -41,7 +41,11 @@ That refuses a =--robot= run before anything is built when the dry run lists a d
 | =userns=      | the generation, with =--installpath-software= and =--installpath-modules=                  | a user and mount namespace in which the live software and module trees are mounted read-only |
 | =installpath= | the generation, with the same two options                                                  | nothing but the options                                                                      |
 
-=--backend auto=, the default, takes =bwrap= when =bwrap --dev-bind / / true= runs, then =userns= when its namespace can be made and a test write to a read-only mount fails with =EROFS=, and otherwise =installpath=, with the line =neither bubblewrap nor the user-namespace sandbox is usable; using the unsandboxed install-path fallback=.
+The =userns= sandbox is =unshare --user --map-root-user --mount=, which makes the account root of a new user namespace, where it may mount: the live trees are bound onto themselves there and made read-only.
+EasyBuild refuses to run as root, so the sandbox then enters a second user namespace inside the first, in which the account's own uid and gid stand for the first one's root, and runs EasyBuild in it.
+EasyBuild runs as the account, without capabilities, and cannot remount the read-only trees, which belong to the first namespace; the files it writes belong to the account.
+
+=--backend auto=, the default, takes =bwrap= when =bwrap --dev-bind / / true= runs, then =userns= when its namespace can be made, a test write to a read-only mount fails with =EROFS= and the second namespace can be made, and otherwise =installpath=, with the line =neither bubblewrap nor the user-namespace sandbox is usable; using the unsandboxed install-path fallback=.
 =--backend bwrap= and =--backend userns= refuse to run when their probe fails, for a site that does not accept the fallback.
 =probe= runs the same tests, and [[file:../howto/install.org][Install eb-staged-rebuild]] shows its report.
 
@@ -63,7 +67,6 @@ The paths it reads must be inside the run's generation.
 
 - With =installpath=, nothing keeps a hook or a build command off the live tree.
 - With =bwrap=, only the installation being rebuilt is redirected; the rest of the live tree is as writable as outside the sandbox.
-- The =userns= backend runs EasyBuild as root inside its namespace, and EasyBuild refuses to run as root unless =EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES= is set; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
 - With =installpath= and =userns=, the build finds the dependencies in the live tree only if =MODULEPATH= already names its =modules/all=: the tool adds the module root, one level up, where Lmod finds no module under its usual name.
 - With =--robot=, EasyBuild's dry run lists the dependencies of installed modules too, such as the build dependencies of an installed toolchain, and a run is refused for one of those that is not installed, though =eb --robot= would not build it; [[file:../howto/rebuild.org][Rebuild an installed module]] shows the refusal.
 - The tests run EasyBuild 5.4.2; pin that version, or a later one the integration test has run.
@@ -71,6 +74,6 @@ The paths it reads must be inside the run's generation.
 ** Further reading
 
 - [[file:staging.org][Why a rebuild is staged and swapped in]] covers what happens to the generation.
-- [[file:../howto/rebuild.org][Rebuild an installed module]] shows a dry run, a refused =--robot= and the =userns= refusal.
+- [[file:../howto/rebuild.org][Rebuild an installed module]] shows a dry run, a =userns= build and a refused =--robot=.
 - [[file:../reference/cli.org][The eb-staged-rebuild command]] lists the options of =run=.
 - [[https://github.com/stackhands/eb-staged-rebuild/blob/main/DESIGN.md][DESIGN.md]] is the maintainers' record of the design and of what was rejected.

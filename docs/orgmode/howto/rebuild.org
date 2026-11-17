@@ -211,19 +211,105 @@ Example 1.0
 
 =docs/examples/site.sh= in the repository sets up this site with EasyBuild, =bash docs/examples/site.sh setup=, and runs each case of the how-to guides, in order: =probe=, =dry-run= and =rebuild= for this one.
 
+** Without bubblewrap
+
+Where bubblewrap cannot run, =--backend auto= takes the =userns= backend if =probe= reports =user-namespace sandbox: usable=, and =--backend userns= asks for it.
+EasyBuild then installs into the generation, with =--installpath-software= and =--installpath-modules=, in a user and mount namespace in which the live software and module trees are read-only, and it runs as the account that runs the tool:
+
+#+begin_src bash
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-userns \
+  --backend userns -- Example-1.0-GCCcore-15.2.0.eb
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+eb-staged-rebuild: run example-userns backend userns generation /opt/site/.eb-staged-rebuild/generations/example-userns
+eb-staged-rebuild: running /usr/bin/unshare --user --map-root-user --mount --fork --kill-child /home/alice/.local/bin/eb-staged-rebuild __userns-sandbox --read-only /opt/site/software --read-only /opt/site/modules -- eb --installpath-software=/opt/site/.eb-staged-rebuild/generations/example-userns/software --installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-userns/modules Example-1.0-GCCcore-15.2.0.eb --rebuild
+== Temporary log file in case of crash /tmp/eb-ad378zke/easybuild-vdqyv1mr.log
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+== processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+== building and installing Example/1.0-GCCcore-15.2.0...
+  >> installation prefix: /opt/site/.eb-staged-rebuild/generations/example-userns/software/Example/1.0-GCCcore-15.2.0
+== fetching files and verifying checksums...
+  >> sources:
+  >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+== ... (took < 1 sec)
+== creating build dir, resetting environment...
+  >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+== ... (took < 1 sec)
+== unpacking...
+== ... (took < 1 sec)
+== patching...
+== ... (took < 1 sec)
+== preparing...
+  >> loading toolchain module: GCCcore/15.2.0
+  >> defining build environment for GCCcore/15.2.0 toolchain
+== ... (took < 1 sec)
+== configuring...
+== ... (took < 1 sec)
+== building...
+== ... (took < 1 sec)
+== testing...
+== ... (took < 1 sec)
+== installing...
+== ... (took < 1 sec)
+== taking care of extensions...
+== ... (took < 1 sec)
+== restore after iterating...
+== ... (took < 1 sec)
+== postprocessing...
+== ... (took < 1 sec)
+== sanity checking...
+  >> file 'example-1.0.sh' found: OK
+  >> loading modules: Example/1.0-GCCcore-15.2.0...
+== ... (took < 1 sec)
+== cleaning up...
+== ... (took < 1 sec)
+== creating module...
+  >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-userns/modules/all/Example/1.0-GCCcore-15.2.0.lua
+== ... (took < 1 sec)
+== permissions...
+== ... (took < 1 sec)
+== packaging...
+== ... (took < 1 sec)
+== COMPLETED: Installation ended successfully (took 0 secs)
+== Results of the build can be found in the log file(s) /opt/site/.eb-staged-rebuild/generations/example-userns/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.052945.log
+== Build succeeded for 1 out of 1 (total: 0 secs)
+== Summary:
+   * [SUCCESS] Example/1.0-GCCcore-15.2.0
+== Temporary log file(s) /tmp/eb-ad378zke/easybuild-vdqyv1mr.log* have been removed.
+== Temporary directory /tmp/eb-ad378zke has been removed.
+eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run example-userns published 1 module(s)
+#+end_example
+
+The new installation belongs to that account:
+
+#+begin_src bash
+ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_src
+
+#+begin_example
+-rwxr--r-- 1 alice alice 29 Nov 17 05:29 /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_example
+
+This is the case =userns= of =site.sh=.
+[[file:../explanation/isolation.org][How a build is kept off the live tree]] explains the namespaces.
+
 ** If it fails
 
 A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
 These messages come before or instead of a build:
 
-| Message                                                                                                   | Cause                                                                                                                                                                                                                         | What to do                                                                                                                                                             |
-|-----------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                       | No easyconfig after =--=.                                                                                                                                                                                                     | Put the easyconfig, and any option for EasyBuild, after =--=.                                                                                                          |
-| =eb-staged-rebuild: /opt/site/software/M4/1.4.20 is a missing, not an existing rebuild directory=         | With =--robot=, the dry run lists =M4/1.4.20=, a build dependency of the installed =GCCcore/15.2.0=, as not installed, and the run refuses each module that is not installed, though =eb --robot= builds only =Example= here. | Rebuild without =--robot=, once any dependency the build itself needs is installed.                                                                                    |
-| =ERROR: You seem to be running EasyBuild with root privileges which is not wise, so let's end this here.= | The =userns= backend, which =auto= takes when bubblewrap cannot run, maps the build to root in its user namespace, and EasyBuild refuses.                                                                                     | Install bubblewrap, or pass =--backend installpath=; or let EasyBuild run as that root by setting =EASYBUILD_ALLOW_USE_AS_ROOT_AND_ACCEPT_CONSEQUENCES=1= for the run. |
-| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock=       | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out.                                                                                                                                | Wait for it, or give =--lock-timeout= more seconds.                                                                                                                    |
+| Message                                                                                             | Cause                                                                                                                                                                                                                         | What to do                                                                          |
+|-----------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: pass the easyconfig after --, for example: ...=                                 | No easyconfig after =--=.                                                                                                                                                                                                     | Put the easyconfig, and any option for EasyBuild, after =--=.                       |
+| =eb-staged-rebuild: /opt/site/software/M4/1.4.20 is a missing, not an existing rebuild directory=   | With =--robot=, the dry run lists =M4/1.4.20=, a build dependency of the installed =GCCcore/15.2.0=, as not installed, and the run refuses each module that is not installed, though =eb --robot= builds only =Example= here. | Rebuild without =--robot=, once any dependency the build itself needs is installed. |
+| =eb-staged-rebuild: another eb-staged-rebuild holds the lock at /opt/site/.eb-staged-rebuild/.lock= | Another run, rollback, =gc= or =retire= is using the state root, and =--lock-timeout= ran out.                                                                                                                                | Wait for it, or give =--lock-timeout= more seconds.                                 |
 
-The first three in full, as =site.sh= prints them in its cases =no-easyconfig=, =robot= and =userns=:
+The first two in full, as =site.sh= prints them in its cases =no-easyconfig= and =robot=:
 
 #+begin_src bash
 eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --dry-run
@@ -241,23 +327,6 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 #+begin_example
 eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --robot --rebuild
 eb-staged-rebuild: /opt/site/software/M4/1.4.20 is a missing, not an existing rebuild directory
-#+end_example
-
-#+begin_src bash
-eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-userns \
-  --backend userns -- Example-1.0-GCCcore-15.2.0.eb
-#+end_src
-
-#+begin_example
-eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
-eb-staged-rebuild: run example-userns backend userns generation /opt/site/.eb-staged-rebuild/generations/example-userns
-eb-staged-rebuild: running /usr/bin/unshare --user --map-root-user --mount --fork --kill-child /home/alice/.local/bin/eb-staged-rebuild __userns-sandbox --read-only /opt/site/software --read-only /opt/site/modules -- eb --installpath-software=/opt/site/.eb-staged-rebuild/generations/example-userns/software --installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-userns/modules Example-1.0-GCCcore-15.2.0.eb --rebuild
-== Temporary log file in case of crash /tmp/eb-c0ux46k3/easybuild-gvbmgtke.log
-
-
-ERROR: You seem to be running EasyBuild with root privileges which is not wise, so let's end this here.
-
-eb-staged-rebuild: eb exited 1; live modules were not changed
 #+end_example
 
 ** Related

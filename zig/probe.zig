@@ -607,8 +607,9 @@ fn mountRaw(source: ?[*:0]const u8, target: [*:0]const u8, flags: u32) linux.E {
     return linux.errno(linux.mount(source, target, null, flags, 0));
 }
 
-/// The sandbox setup the Python tool's userns_sandbox module does; only
-/// --probe is in this build.
+/// The sandbox setup the Python tool's userns_sandbox module does: the
+/// --read-only mounts, then the command as the caller; --probe checks a
+/// read-only mount and the return to the caller's ids.
 pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
     const prefix = "eb-staged-rebuild user namespace: ";
     var read_only: std.ArrayList([]const u8) = .empty;
@@ -651,12 +652,17 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
             cli.err(prefix ++ "read-only bind mount remained writable\n", .{});
             return sandbox_setup_exit;
         } else |err| switch (err) {
-            error.ReadOnly => return 0,
+            error.ReadOnly => {},
             else => {
                 cli.err(prefix ++ "{t}\n", .{err});
                 return sandbox_setup_exit;
             },
         }
+        if (dropToCaller(a)) |msg| {
+            cli.err(prefix ++ "{s}\n", .{msg});
+            return sandbox_setup_exit;
+        }
+        return 0;
     }
     for (read_only.items) |p| if (protect(a, p)) |msg| {
         cli.err(prefix ++ "{s}\n", .{msg});
@@ -664,6 +670,10 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
     };
     if (command.len == 0) {
         cli.err(prefix ++ "no sandbox command was supplied\n", .{});
+        return sandbox_setup_exit;
+    }
+    if (dropToCaller(a)) |msg| {
+        cli.err(prefix ++ "{s}\n", .{msg});
         return sandbox_setup_exit;
     }
     // os.execvpe(command[0], command, os.environ): a PATH search for a name.
@@ -693,6 +703,58 @@ fn protect(a: Allocator, path_in: []const u8) ?[]const u8 {
     if (e == .SUCCESS) e = mountRaw(z.ptr, z.ptr, MS_BIND | MS_REMOUNT | MS_RDONLY);
     if (e != .SUCCESS) return a.print("mount {s}: {s}", .{ path, strerror(e) }) catch "mount failed";
     return null;
+}
+
+/// _parent_id: the id of the parent namespace that `inner` maps to in the
+/// text of a uid_map or gid_map; null when no line maps it.
+fn parentId(map: []const u8, inner: u32) ?u32 {
+    var lines = std.mem.tokenizeScalar(u8, map, '\n');
+    while (lines.next()) |line| {
+        var fields = std.mem.tokenizeAny(u8, line, " \t");
+        var v: [3]u32 = undefined;
+        for (&v) |*x| x.* = std.fmt.parseInt(u32, fields.next() orelse return null, 10) catch return null;
+        if (inner >= v[0] and inner - v[0] < v[2]) return v[1] + (inner - v[0]);
+    }
+    return null;
+}
+
+/// _drop_to_caller: become the caller's uid and gid again, in a nested user
+/// namespace that maps them onto this namespace's 0. unshare
+/// --map-root-user made the caller uid 0, which the mounts need and which
+/// EasyBuild refuses to run as; after exec the command runs as the caller,
+/// without capabilities, and cannot change this namespace's read-only
+/// mounts. Null on success, else the reason.
+fn dropToCaller(a: Allocator) ?[]const u8 {
+    const uid = linux.getuid();
+    const gid = linux.getgid();
+    const caller_uid = parentId(readProc(a, "/proc/self/uid_map"), uid) orelse return a.print("/proc/self/uid_map does not map {d}", .{uid}) catch oom();
+    const caller_gid = parentId(readProc(a, "/proc/self/gid_map"), gid) orelse return a.print("/proc/self/gid_map does not map {d}", .{gid}) catch oom();
+    const e = linux.errno(linux.unshare(linux.CLONE.NEWUSER));
+    if (e != .SUCCESS) return a.print("unshare a user namespace: {s}", .{strerror(e)}) catch oom();
+    if (writeProc(a, "/proc/self/setgroups", "deny")) |msg| return msg;
+    if (writeProc(a, "/proc/self/uid_map", a.print("{d} {d} 1\n", .{ caller_uid, uid }) catch oom())) |msg| return msg;
+    if (writeProc(a, "/proc/self/gid_map", a.print("{d} {d} 1\n", .{ caller_gid, gid }) catch oom())) |msg| return msg;
+    return null;
+}
+
+fn readProc(a: Allocator, path: []const u8) []const u8 {
+    const fd = sys.openat(fsx.cwd, path, .{ .ACCMODE = .RDONLY }, 0) catch return "";
+    defer sys.close(fd);
+    return fsx.readAll(a, fd, 1 << 16) catch "";
+}
+
+fn writeProc(a: Allocator, path: []const u8, text: []const u8) ?[]const u8 {
+    const fd = sys.openat(fsx.cwd, path, .{ .ACCMODE = .WRONLY }, 0) catch |err| return a.print("{s}: {s}", .{ path, sys.describe(err) }) catch oom();
+    defer sys.close(fd);
+    sys.writeAll(fd, text) catch |err| return a.print("{s}: {s}", .{ path, sys.describe(err) }) catch oom();
+    return null;
+}
+
+test "parentId reads a uid_map" {
+    try std.testing.expectEqual(@as(?u32, 1001), parentId("         0       1001          1\n", 0));
+    try std.testing.expectEqual(@as(?u32, 100007), parentId("0 1001 1\n1 100000 65536\n", 8));
+    try std.testing.expectEqual(@as(?u32, null), parentId("0 1001 1\n", 1));
+    try std.testing.expectEqual(@as(?u32, null), parentId("", 0));
 }
 
 test "parseFrameworkVersion" {
