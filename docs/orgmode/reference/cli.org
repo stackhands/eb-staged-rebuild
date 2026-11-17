@@ -106,6 +106,8 @@ The lines, in this order:
 | =filesystem: FSTYPE MOUNT=                                                       | The filesystem type and mount point of =--path=.                                                                                                                      |
 | =lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured= | How the state-root lock is taken, and that it was measured on one node only.                                                                                          |
 
+[[file:json-output.org][Machine-readable command output]] names the JSON Schema files for =probe --json= and =status --json=.
+
 *** run
 
 Build the easyconfig in a new generation under the state root, and publish it in place of the installation it rebuilds.

@@ -472,6 +472,14 @@ site variables through CLI/docs tests and integration coverage.
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
 
+### tests/test_json_schemas.py
+
+| test | replacement |
+|---|---|
+| JsonSchemaTests.test_probe_json_validates | `docs/orgmode/reference/json/probe.schema.json`; Python or `TOOL_BIN` |
+| JsonSchemaTests.test_status_json_validates | `docs/orgmode/reference/json/status.schema.json` |
+| JsonSchemaTests.test_status_empty_root_validates | status `--json` on an empty state root |
+
 ## tests/test_ledger_bounded.py (the bounded `eb-stack ledger` call)
 
 `publish.zig` `bounded()` calls zig-common `proc.run` with the options `_bounded` implies: a 64 KiB stdout and stderr limit

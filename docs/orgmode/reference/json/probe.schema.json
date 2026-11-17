@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-staged-rebuild/reference/json/probe.schema.json",
+  "title": "eb-staged-rebuild probe --json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bwrap",
+    "easybuild",
+    "filesystem",
+    "flock",
+    "rename_exchange",
+    "user_namespaces",
+    "userns_sandbox"
+  ],
+  "properties": {
+    "bwrap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installed", "usable", "path", "version", "reason"],
+      "properties": {
+        "installed": { "type": "boolean" },
+        "usable": { "type": "boolean" },
+        "path": { "type": ["string", "null"] },
+        "version": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "easybuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eb",
+        "path",
+        "found",
+        "version_text",
+        "framework_version",
+        "bwrap_info_keys",
+        "keys_source",
+        "stage_path_keys",
+        "legacy_layout_versions",
+        "reason"
+      ],
+      "properties": {
+        "eb": { "type": "string" },
+        "path": { "type": ["string", "null"] },
+        "found": { "type": "boolean" },
+        "version_text": { "type": ["string", "null"] },
+        "framework_version": {
+          "type": ["array", "null"],
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "type": "integer" }
+        },
+        "bwrap_info_keys": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "keys_source": { "type": ["string", "null"] },
+        "stage_path_keys": { "type": ["boolean", "null"] },
+        "legacy_layout_versions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "filesystem": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "device": { "type": "string" },
+        "mount": { "type": "string" },
+        "fstype": { "type": ["string", "null"] },
+        "error": { "type": "string" }
+      }
+    },
+    "flock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cross_node", "method", "scope"],
+      "properties": {
+        "cross_node": { "const": "unmeasured" },
+        "method": { "const": "flock" },
+        "scope": { "type": "string" }
+      }
+    },
+    "rename_exchange": {
+      "type": "object",
+      "required": ["ok", "errno", "error", "flag", "path"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "errno": { "type": ["integer", "null"] },
+        "error": { "type": ["string", "null"] },
+        "flag": { "type": "integer" },
+        "path": { "type": "string" },
+        "device": { "type": "string" },
+        "mount": { "type": "string" },
+        "fstype": { "type": ["string", "null"] }
+      }
+    },
+    "user_namespaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_user_namespaces", "unprivileged_userns_clone", "readable"],
+      "properties": {
+        "max_user_namespaces": { "type": ["integer", "null"] },
+        "unprivileged_userns_clone": { "type": ["integer", "null"] },
+        "readable": { "type": "boolean" },
+        "error": { "type": "string" }
+      }
+    },
+    "userns_sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installed", "usable", "path", "reason"],
+      "properties": {
+        "installed": { "type": "boolean" },
+        "usable": { "type": "boolean" },
+        "path": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

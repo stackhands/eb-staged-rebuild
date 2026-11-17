@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-staged-rebuild/reference/json/status.schema.json",
+  "title": "eb-staged-rebuild status --json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runs"],
+  "properties": {
+    "runs": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/rebuild_run" },
+          { "$ref": "#/$defs/retire_run" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "module_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["live_software", "rel", "retired", "status"],
+      "properties": {
+        "live_software": { "type": ["string", "null"] },
+        "rel": { "type": ["string", "null"] },
+        "retired": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] }
+      }
+    },
+    "rebuild_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "kind",
+        "message",
+        "modules",
+        "modules_published",
+        "modules_total",
+        "run_id",
+        "state"
+      ],
+      "properties": {
+        "backend": { "type": ["string", "null"] },
+        "kind": { "type": "string" },
+        "message": { "type": ["string", "null"] },
+        "modules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/module_row" }
+        },
+        "modules_published": { "type": "integer", "minimum": 0 },
+        "modules_total": { "type": "integer", "minimum": 0 },
+        "run_id": { "type": ["string", "null"] },
+        "state": { "type": ["string", "null"] }
+      }
+    },
+    "retire_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "module_path", "run_id", "software_dir", "state"],
+      "properties": {
+        "kind": { "const": "retire" },
+        "module_path": { "type": ["string", "null"] },
+        "run_id": { "type": ["string", "null"] },
+        "software_dir": { "type": ["string", "null"] },
+        "state": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
