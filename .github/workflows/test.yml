@@ -89,12 +89,16 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - name: the example site of the how-to guides
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - run: zig build -Drelease=true
+      - name: the example site of the how-to guides, with the binary
         env:
           LMOD_CMD: /usr/share/lmod/lmod/libexec/lmod
         run: |
           sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/site
-          export PATH="/usr/share/lmod/lmod/libexec:${PATH}"
+          export PATH="$PWD/zig-out/bin:/usr/share/lmod/lmod/libexec:${PATH}"
           bash docs/examples/site.sh all
 
   zig:

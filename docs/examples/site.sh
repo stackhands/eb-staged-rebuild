@@ -11,10 +11,11 @@
 #   docs/examples/site.sh clean     remove what setup made
 #
 # The cases change the site in turn, so run them in the order of $cases.
-# They need eb-staged-rebuild, EasyBuild 5.4.2 as eb, Lmod as LMOD_CMD,
-# bwrap, openssl, an eb-stack 0.7.0 binary as EB_STACK_BIN or on PATH, and
-# a $SITE that exists and that you can write. The guides show the output of
-# a run as alice on login1.
+# They need the eb-staged-rebuild binary on PATH, since the Python package
+# has its build-events and ledger-maintenance commands as modules only,
+# EasyBuild 5.4.2 as eb, Lmod as LMOD_CMD, bwrap, openssl, an eb-stack 0.7.0
+# binary as EB_STACK_BIN or on PATH, and a $SITE that exists and that you
+# can write. The guides show the output of a run as alice on login1.
 set -euo pipefail
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
