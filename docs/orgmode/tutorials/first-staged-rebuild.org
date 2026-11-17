@@ -10,9 +10,12 @@ A small stand-in for EasyBuild, the one in the repository's =docs/examples/=, ta
 
 ** What you will need
 
-- A Linux machine with =git=, =bash= and Python 3.11 or newer:
+- A Linux machine with =git=, =bash= and Python 3.11 or newer, including
+  Python's =venv= module.  On Ubuntu, install the module before continuing:
 
   #+begin_src bash
+  sudo apt-get update
+  sudo apt-get install python3-venv
   python3 --version
   #+end_src
 
@@ -28,7 +31,7 @@ Clone the repository and check out the commit this tutorial was checked with:
 cd
 git clone https://github.com/stackhands/eb-staged-rebuild.git
 cd eb-staged-rebuild
-git checkout c44b8ad
+git checkout a5d7917
 #+end_src
 
 Install the Python package into a virtual environment of its own, and put that environment's commands on =PATH=:
@@ -266,4 +269,4 @@ rm -rf ~/rebuild-tutorial ~/eb-staged-rebuild ~/eb-staged-rebuild-venv
 
 =docs/examples/tutorial.sh= in the repository runs the commands of this tutorial from "Make an installation to rebuild" on, and stops at the first one that does not do what the tutorial says.
 
-Checked with Python 3.12.3 and eb-staged-rebuild at commit c44b8ad on 2026-11-17.
+Checked with Python 3.12.3 and eb-staged-rebuild at commit a5d7917 on 2026-11-17.
