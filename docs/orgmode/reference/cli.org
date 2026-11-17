@@ -18,7 +18,7 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
-                      [--ledger-config FILE] -- EASYCONFIG [EB-ARGUMENT...]
+                      [--ledger-config FILE] [--build-dir DIR] -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
@@ -125,14 +125,16 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--skip-live-check= | Do not record the live directories at the start, and do not refuse one that changed during the build.                                                                                                  |
 | =--prepare=         | The absolute path of a program to run with the path of =prepare-context.json=, after the build and before the exchange; a status other than 0 stops the run with that status.                          |
 | =--ledger-config=   | A JSON file that names an eb-stack ledger to record each publication in.                                                                                                                               |
+| =--build-dir=       | A scratch build directory passed to EasyBuild as =--buildpath= during the build. Refused when inside the generation root or the live =--software= or =--modules= trees. When omitted, EasyBuild keeps its own default build path. |
 
-Once it has checked them, =run= makes a relative =--software=, =--modules= or =--state-root= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
+Once it has checked them, =run= makes a relative =--software=, =--modules=, =--state-root= or =--build-dir= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
 Every module that list names, except one marked =[x]= (installed, and left alone), must be an existing directory =software/NAME/VERSION=.
 When the dry run marks =[ ]= (not installed) a module that =--module= does not name, =run= asks =eb --extended-dry-run= with the same arguments, =--stop=fetch= and =--ignore-locks=, and leaves out each module marked =[ ]= that EasyBuild would not build.
 Both dry runs get =EASYBUILD_OUTPUT_STYLE=basic=, so that EasyBuild with rich neither wraps nor colours their output, and =run= ignores the ANSI escape sequences that an =--output-style= after =--= brings back.
 The arguments after =--= reach EasyBuild with =--rebuild= added, unless they hold =--rebuild=, =--force= or =-f=.
 These options would point EasyBuild at the live tree, and are dropped: =--prefix=, =--installpath=, =--installpath-software=, =--installpath-modules=, =--subdir-software=, =--subdir-modules=, =--bwrap=, =--disable-bwrap=, =--bwrap-installpath=, =--bwrap-options= and =--remove-ghost-install-dirs=.
+When =--build-dir= is given, =--buildpath= after =--= is also dropped and replaced with =--buildpath=DIR=; without =--build-dir=, EasyBuild receives any =--buildpath= from after =--= or =EASYBUILD_BUILDPATH= unchanged.
 EasyBuild's output and the program's own lines, each starting =eb-staged-rebuild:=, go to stdout; a refusal goes to stderr.
 
 *** resume

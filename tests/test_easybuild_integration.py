@@ -164,7 +164,7 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             handle.write(payload)
         _easyconfig(ec, _sha256(payload), deps=deps)
 
-    def _rebuild(self, prefix, ec, src, backend, *eb_args):
+    def _rebuild(self, prefix, ec, src, backend, *eb_args, build_dir=None):
         spec = Spec(
             software=os.path.join(prefix, "software"),
             modules=os.path.join(prefix, "modules"),
@@ -173,6 +173,7 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             backend=backend,
             module_rels=["stagedemo/1"],
             eb_executable="eb",
+            build_dir=build_dir,
         )
         return run(spec)
 
@@ -306,6 +307,43 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         if not probe.get("usable"):
             self.skipTest(f"bwrap is not usable here: {probe.get('reason')}")
         self._rebuild_with_deps("bwrap", robot=True)
+
+    def test_build_dir_directs_eb_away_from_default_buildpath(self):
+        with tempfile.TemporaryDirectory() as work:
+            prefix, src, ec, live, module = self._install_v1(work)
+            inode = os.lstat(live).st_ino
+            self._retarget(src, ec, "payload-v2\n")
+            fake_home = os.path.join(work, "home")
+            os.makedirs(fake_home)
+            build_dir = os.path.join(work, "custom-build")
+            watcher = Watcher(
+                os.path.join(live, "stagedemo-1.txt"),
+                {"payload-v1\n", "payload-v2\n"},
+            )
+            watcher.start()
+            try:
+                with patch.dict(os.environ, {"HOME": fake_home}):
+                    os.environ.pop("EASYBUILD_BUILDPATH", None)
+                    os.environ.pop("EASYBUILD_PREFIX", None)
+                    result = self._rebuild(prefix, ec, src, "installpath", build_dir=build_dir)
+            finally:
+                self.stop_watcher(watcher)
+            self.assertEqual(result.returncode, 0, result.message)
+            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
+            self.assertFalse(os.path.exists(os.path.join(fake_home, ".local", "easybuild", "build")))
+            eb_dir = os.path.join(live, "easybuild")
+            logs = [name for name in os.listdir(eb_dir) if name.startswith("easybuild-") and name.endswith(".log")]
+            self.assertTrue(logs, os.listdir(eb_dir))
+            with open(os.path.join(eb_dir, logs[0]), encoding="utf-8") as handle:
+                self.assertIn(build_dir, handle.read())
+            with self.assertRaises(Refused):
+                self._rebuild(
+                    prefix,
+                    ec,
+                    src,
+                    "installpath",
+                    build_dir=os.path.join(prefix, "software", "bad-build"),
+                )
 
     def test_symlink_name_version_is_refused(self):
         with tempfile.TemporaryDirectory() as work:

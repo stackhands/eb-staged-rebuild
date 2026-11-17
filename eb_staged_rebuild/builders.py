@@ -30,8 +30,9 @@ _WITH_VALUE = {
 }
 
 
-def filter_eb_args(args):
+def filter_eb_args(args, drop_buildpath=False):
     """Drop install-path and bubblewrap options. Keep the easyconfig and the rest."""
+    with_value = _WITH_VALUE | {"--buildpath"} if drop_buildpath else _WITH_VALUE
     kept = []
     index = 0
     while index < len(args):
@@ -43,7 +44,7 @@ def filter_eb_args(args):
         if name in _FLAGS:
             index += 1
             continue
-        if name in _WITH_VALUE:
+        if name in with_value:
             if "=" not in arg:
                 index += 2
             else:
@@ -93,7 +94,7 @@ def module_path(modules, suffix):
     return os.path.join(modules, suffix) if suffix else modules
 
 
-def child_env(base, software, modules, live_modules, eb_args):
+def child_env(base, software, modules, live_modules, eb_args, drop_buildpath=False):
     """Return the environment EasyBuild runs with.
 
     It is the caller's, without EasyBuild's install-path variables, with
@@ -111,6 +112,8 @@ def child_env(base, software, modules, live_modules, eb_args):
         "EASYBUILD_INSTALLPATH_MODULES",
     ):
         env.pop(key, None)
+    if drop_buildpath:
+        env.pop("EASYBUILD_BUILDPATH", None)
     env["EASYBUILD_INSTALLPATH_SOFTWARE"] = os.fspath(software)
     env["EASYBUILD_INSTALLPATH_MODULES"] = os.fspath(modules)
     live = module_path(os.fspath(live_modules), modules_suffix(eb_args, base))
@@ -133,13 +136,16 @@ def installpath_command(ctx):
     EasyBuild installs into the generation's directories, given as its install paths.
     """
     software, modules = installpath_dirs(ctx.generation_root)
+    build_dir = getattr(ctx, "build_dir", None)
+    drop = bool(build_dir)
     cmd = [
         ctx.eb_executable,
         f"--installpath-software={software}",
         f"--installpath-modules={modules}",
-        *ensure_rebuild(filter_eb_args(ctx.eb_args)),
+        *([f"--buildpath={build_dir}"] if build_dir else []),
+        *ensure_rebuild(filter_eb_args(ctx.eb_args, drop_buildpath=drop)),
     ]
-    env = child_env(os.environ, software, modules, ctx.modules, ctx.eb_args)
+    env = child_env(os.environ, software, modules, ctx.modules, ctx.eb_args, drop_buildpath=drop)
     return cmd, env, software, modules
 
 
@@ -148,15 +154,18 @@ def bwrap_command(ctx):
 
     EasyBuild's bubblewrap mode binds the generation over the live install directory.
     """
+    build_dir = getattr(ctx, "build_dir", None)
+    drop = bool(build_dir)
     cmd = [
         ctx.eb_executable,
         "--experimental",
         "--bwrap",
         f"--bwrap-installpath={ctx.generation_root}",
         "--bwrap-options=--die-with-parent",
-        *ensure_rebuild(filter_eb_args(ctx.eb_args)),
+        *([f"--buildpath={build_dir}"] if build_dir else []),
+        *ensure_rebuild(filter_eb_args(ctx.eb_args, drop_buildpath=drop)),
     ]
-    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args)
+    env = child_env(os.environ, ctx.software, ctx.modules, ctx.modules, ctx.eb_args, drop_buildpath=drop)
     return cmd, env
 
 

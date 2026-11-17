@@ -711,8 +711,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " run";
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -788,6 +788,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
     const grace = grace_cli orelse envGrace(a, env);
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
+    if (vals[13]) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
     return engine.run(a, env, .{
         .software = software.?,
         .modules = modules.?,
@@ -803,6 +804,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .lock_timeout = lock_timeout,
         .prepare_executable = vals[11],
         .ledger_config = vals[12],
+        .build_dir = vals[13],
     });
 }
 
@@ -1028,4 +1030,9 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\
     , StateRoot.bracketed(retire_usage));
     try expect(comptime StateRoot.bracketed(gc_usage) ++ gc_help[gc_usage.len..], StateRoot.bracketed(gc_help));
+}
+
+test "run help includes --build-dir" {
+    try std.testing.expect(std.mem.indexOf(u8, run_usage, "[--build-dir DIR]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, run_help, "--build-dir DIR") != null);
 }

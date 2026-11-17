@@ -92,6 +92,7 @@ class Spec:
     prepare_executable: str = None
     ledger_config: str = None
     ledger_policy: dict = None
+    build_dir: str = None
 
 
 @dataclass
@@ -129,6 +130,7 @@ class _Ctx:
         self.faults = faults
         self.backend = spec.backend
         self.probes = spec.probes
+        self.build_dir = spec.build_dir
 
 
 def _check_roots(spec):
@@ -154,6 +156,31 @@ def _check_roots(spec):
         raise Refused(f"state root is unsafe: {reason}")
     if spec.backend not in ("auto", "installpath", "bwrap", "userns"):
         raise Refused(f"unknown backend {spec.backend}")
+    if spec.build_dir is not None:
+        if not spec.build_dir:
+            raise Refused("--build-dir must name a directory; it is empty")
+        build_abs = abspath(spec.build_dir)
+        build_real = os.path.realpath(build_abs)
+        generations_abs = os.path.join(abspath(spec.state_root), "generations")
+        generations_real = os.path.realpath(generations_abs)
+        if is_within(build_abs, generations_abs) or is_within(build_real, generations_real):
+            raise Refused(
+                f"build directory {build_abs} is inside the generation root {generations_abs}"
+            )
+        software_abs = abspath(spec.software)
+        software_real = os.path.realpath(software_abs)
+        if is_within(build_abs, software_abs) or is_within(build_real, software_real):
+            raise Refused(
+                f"build directory {build_abs} is inside the live software prefix {software_abs}"
+            )
+        modules_abs = abspath(spec.modules)
+        modules_real = os.path.realpath(modules_abs)
+        if is_within(build_abs, modules_abs) or is_within(build_real, modules_real):
+            raise Refused(
+                f"build directory {build_abs} is inside the live modules prefix {modules_abs}"
+            )
+        if os.path.exists(build_abs) and not os.path.isdir(build_abs):
+            raise Refused(f"build directory {build_abs} is not a directory")
 
 
 _NOT_A_DIRECTORY = {"missing": "missing", "file": "a file", "symlink": "a symlink", "other": "a special file"}
@@ -1166,7 +1193,7 @@ def _run_locked(spec, faults, journal, fresh_build):
 
 def _blank_journal(spec, run_id, probes, rels, left_out):
     now = _clock(spec)()
-    return {
+    journal = {
         "schema": SCHEMA,
         "run_id": run_id,
         "state": "created",
@@ -1199,6 +1226,9 @@ def _blank_journal(spec, run_id, probes, rels, left_out):
         "retired_at": None,
         "generation_removed_at": None,
     }
+    if spec.build_dir is not None:
+        journal["build_dir"] = abspath(spec.build_dir)
+    return journal
 
 
 def _select_backend(spec, probes):
@@ -1221,6 +1251,8 @@ def run(spec):
     spec.software = abspath(spec.software)
     spec.modules = abspath(spec.modules)
     spec.state_root = abspath(spec.state_root)
+    if spec.build_dir is not None:
+        spec.build_dir = abspath(spec.build_dir)
     if spec.ledger_config is not None:
         spec.ledger_policy = load_config(spec.ledger_config)
         spec.ledger_config = spec.ledger_policy["path"]
@@ -1282,6 +1314,7 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
         prepare_executable=journal.get("prepare_executable"),
         ledger_config=journal.get("ledger_config"),
         ledger_policy=journal.get("ledger_policy"),
+        build_dir=journal.get("build_dir"),
     )
 
 

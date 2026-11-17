@@ -33,7 +33,7 @@ ANCHORS=$SITE/ledger-anchors
 HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
-robot userns no-easyconfig not-installed ledger-setup backfill ledger-run
+robot userns build-dir no-easyconfig not-installed ledger-setup backfill ledger-run
 ledger-rollback build-events anchor project"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
@@ -158,6 +158,14 @@ case_robot() {
 case_userns() {
     run_example example-userns --backend userns
     step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_build-dir() {
+    step 0 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --build-dir "$SITE/build" --dry-run -- Example-1.0-GCCcore-15.2.0.eb
+    run_example example-build-dir --build-dir "$SITE/build"
+    step 2 eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
+        --build-dir "$SITE/software/Example" --dry-run -- Example-1.0-GCCcore-15.2.0.eb
 }
 
 case_no-easyconfig() {
@@ -291,7 +299,7 @@ case_project() {
 
 clean() {
     rm -rf "${SITE:?}/software" "${SITE:?}/modules" "${SITE:?}/sources" "${SITE:?}/bin" "${SITE:?}/standin" \
-        "$STATE" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" "${SITE:?}/build-events" \
+        "$STATE" "${SITE:?}/build" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" "${SITE:?}/build-events" \
         "$ANCHORS" "$HISTORY" "$EASYCONFIGS" "$HOME/sources" "$HOME/backfill" "$HOME/example-5.json"
     if [ -d "$SITE/keys" ]; then
         chmod -R u+w "$SITE/keys"

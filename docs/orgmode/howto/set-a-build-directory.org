@@ -1,0 +1,95 @@
+#+TITLE: Set a scratch build directory
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Set a scratch build directory
+
+Direct EasyBuild's temporary build tree to a scratch directory instead of its default under =~/.local/easybuild/build=.
+By default, =eb-staged-rebuild run= calls =eb= without =--buildpath=, so EasyBuild uses its own default build path or =EASYBUILD_BUILDPATH=.
+Passing =--build-dir DIR= tells =eb-staged-rebuild run= to pass =--buildpath=DIR= to EasyBuild during the build, while keeping the live prefix and the generation clean.
+
+** Before you start
+
+- An installed module to rebuild, and =eb-staged-rebuild= set up as in [[file:rebuild.org][Rebuild an installed module]].
+- A directory path on fast or local scratch storage outside the live software tree (=--software=), outside the live module tree (=--modules=), and outside the generation tree (=<state-root>/generations=).
+  The directory is created by EasyBuild if it does not exist yet.
+
+** Steps
+
+1. Check the command EasyBuild will receive with =--dry-run=:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+     --build-dir /opt/site/build --dry-run -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: dry-run: no build, no module file written
+   eb-staged-rebuild: backend: bwrap
+   eb-staged-rebuild: software: /opt/site/software
+   eb-staged-rebuild: modules: /opt/site/modules
+   eb-staged-rebuild: state root: /opt/site/.eb-staged-rebuild
+   eb-staged-rebuild: bwrap usable: True (bubblewrap 0.9.0)
+   eb-staged-rebuild: user.max_user_namespaces: 192727
+   eb-staged-rebuild: renameat2 RENAME_EXCHANGE on ext4: yes
+   eb-staged-rebuild: easybuild: This is EasyBuild 5.4.2 (framework: 5.4.2, easyblocks: 5.4.2) on host login1.
+   eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
+   eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
+   eb-staged-rebuild: command: eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/<run-id> --bwrap-options=--die-with-parent --buildpath=/opt/site/build Example-1.0-GCCcore-15.2.0.eb --rebuild
+   #+end_example
+
+   =eb-staged-rebuild= adds =--buildpath=/opt/site/build= to the build command.
+   A relative =--build-dir= path is resolved from the current directory before the run starts and recorded in the journal so =resume= uses the same build directory.
+
+2. Run the rebuild with =--build-dir=:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+     --run-id example-build-dir --build-dir /opt/site/build -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+   eb-staged-rebuild: run example-build-dir backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-build-dir
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-build-dir --bwrap-options=--die-with-parent --buildpath=/opt/site/build Example-1.0-GCCcore-15.2.0.eb --rebuild
+   ...
+   == creating build dir, resetting environment...
+     >> build dir: /opt/site/build/Example/1.0/GCCcore-15.2.0
+   ...
+   eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+   eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-build-dir published 1 module(s)
+   #+end_example
+
+   EasyBuild builds inside =/opt/site/build/Example/1.0/GCCcore-15.2.0= instead of =~/.local/easybuild/build=.
+   When =--build-dir= is set, =eb-staged-rebuild= removes =EASYBUILD_BUILDPATH= from EasyBuild's environment and drops any =--buildpath= after =--= so the explicit flag wins.
+   Leave =--build-dir= out to keep EasyBuild's default behaviour unchanged.
+
+3. Check that a directory inside the live prefix or generation is refused before any build starts:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+     --build-dir /opt/site/software/Example --dry-run -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: build directory /opt/site/software/Example is inside the live software prefix /opt/site/software
+   #+end_example
+
+=docs/examples/site.sh= runs these commands in its case =build-dir=.
+
+** If it fails
+
+| Message | Cause | What to do |
+|---|---|---|
+| =eb-staged-rebuild: build directory DIR is inside the generation root ...= | =DIR= (or its resolved target) is inside =<state-root>/generations=. | Choose a build directory outside =<state-root>/generations=. |
+| =eb-staged-rebuild: build directory DIR is inside the live software prefix ...= | =DIR= (or its resolved target) is inside =--software=. | Choose a build directory outside the live software tree. |
+| =eb-staged-rebuild: build directory DIR is inside the live modules prefix ...= | =DIR= (or its resolved target) is inside =--modules=. | Choose a build directory outside the live module tree. |
+| =eb-staged-rebuild: build directory DIR is not a directory= | An existing file or non-directory sits at =DIR=. | Remove that file or name a directory path. |
+| =eb-staged-rebuild: --build-dir must name a directory; it is empty= | =--build-dir= was given an empty string. | Pass a non-empty directory path after =--build-dir=. |
+
+** Related
+
+- [[file:rebuild.org][Rebuild an installed module]]
+- [[file:../reference/cli.org][The eb-staged-rebuild command]]
+- [[file:../reference/environment.org][Environment variables]]

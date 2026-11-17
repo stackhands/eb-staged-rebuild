@@ -43,6 +43,7 @@ pub const Spec = struct {
     lock_timeout: ?f64 = null,
     prepare_executable: ?[]const u8 = null,
     ledger_config: ?[]const u8 = null,
+    build_dir: ?[]const u8 = null,
 };
 
 // ---- eb arguments, as builders.py shapes them -----------------------------
@@ -59,6 +60,7 @@ fn inList(list: []const []const u8, s: []const u8) bool {
 const Kept = struct {
     args: []const []const u8,
     i: usize = 0,
+    drop_buildpath: bool = false,
 
     fn next(k: *Kept) ?[]const u8 {
         while (k.i < k.args.len) {
@@ -69,7 +71,7 @@ const Kept = struct {
                 k.i += 1;
                 continue;
             }
-            if (inList(&drop_with_value, name)) {
+            if (inList(&drop_with_value, name) or (k.drop_buildpath and std.mem.eql(u8, name, "--buildpath"))) {
                 k.i += if (eq == null) 2 else 1;
                 continue;
             }
@@ -82,8 +84,13 @@ const Kept = struct {
 
 /// filter_eb_args: drop install-path and bubblewrap options.
 pub fn filterEbArgs(a: Allocator, args: []const []const u8) []const []const u8 {
+    return filterEbArgsOpts(a, args, false);
+}
+
+/// filterEbArgsOpts: filter_eb_args, optionally dropping --buildpath too.
+pub fn filterEbArgsOpts(a: Allocator, args: []const []const u8, drop_buildpath: bool) []const []const u8 {
     var kept: std.ArrayList([]const u8) = .empty;
-    var it: Kept = .{ .args = args };
+    var it: Kept = .{ .args = args, .drop_buildpath = drop_buildpath };
     while (it.next()) |arg| kept.append(a, arg) catch oom();
     return kept.items;
 }
@@ -138,10 +145,11 @@ const selfExe = probe.selfExe;
 
 /// The build command each backend runs, as the dry run prints it.
 fn buildCommand(a: Allocator, env: probe.Env, spec: Spec, probes: Py, generation_root: []const u8) []const u8 {
-    const filtered = ensureRebuild(a, filterEbArgs(a, spec.eb_args));
+    const filtered = ensureRebuild(a, filterEbArgsOpts(a, spec.eb_args, spec.build_dir != null));
     var cmd: std.ArrayList([]const u8) = .empty;
     if (std.mem.eql(u8, spec.backend, "bwrap")) {
         cmd.appendSlice(a, &.{ spec.eb_executable, "--experimental", "--bwrap", a.print("--bwrap-installpath={s}", .{generation_root}) catch "", "--bwrap-options=--die-with-parent" }) catch oom();
+        if (spec.build_dir) |bd| cmd.append(a, a.print("--buildpath={s}", .{bd}) catch "") catch oom();
         cmd.appendSlice(a, filtered) catch oom();
         return join(a, cmd.items);
     }
@@ -149,6 +157,7 @@ fn buildCommand(a: Allocator, env: probe.Env, spec: Spec, probes: Py, generation
     const modules = std.fs.path.join(a, &.{ generation_root, "modules" }) catch "";
     var inner: std.ArrayList([]const u8) = .empty;
     inner.appendSlice(a, &.{ spec.eb_executable, a.print("--installpath-software={s}", .{software}) catch "", a.print("--installpath-modules={s}", .{modules}) catch "" }) catch oom();
+    if (spec.build_dir) |bd| inner.append(a, a.print("--buildpath={s}", .{bd}) catch "") catch oom();
     inner.appendSlice(a, filtered) catch oom();
     if (!std.mem.eql(u8, spec.backend, "userns")) return join(a, inner.items);
     const report = pyfmt.get(probes, "userns_sandbox");
@@ -174,9 +183,36 @@ fn symlinkComponent(a: Allocator, path: []const u8) ?[]const u8 {
     }
 }
 
+fn realpathDepth(a: Allocator, path: []const u8, depth: usize) Allocator.Error![]const u8 {
+    var rb: [sys.path_max]u8 = undefined;
+    if (fsx.realpath(fsx.cwd, path, &rb)) |r| return a.dupe(u8, r) else |_| {}
+    if (depth < 40 and std.mem.eql(u8, main_mod.lstatKind(path), "symlink")) {
+        var zb: [sys.path_max:0]u8 = undefined;
+        var lb: [sys.path_max]u8 = undefined;
+        if (sys.z(&zb, path)) |z| {
+            if (sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, &lb, lb.len })) |n| {
+                const target = lb[0..n];
+                const joined = if (target.len > 0 and target[0] == '/')
+                    target
+                else
+                    try std.fs.path.join(a, &.{ std.fs.path.dirname(path) orelse "/", target });
+                return realpathDepth(a, admin.abspath(a, joined), depth + 1);
+            } else |_| {}
+        } else |_| {}
+    }
+    const parent = std.fs.path.dirname(path) orelse return path;
+    if (std.mem.eql(u8, parent, path)) return path;
+    return std.fs.path.join(a, &.{ try realpathDepth(a, parent, depth), std.fs.path.basename(path) });
+}
+
+fn realpathLoose(a: Allocator, path: []const u8) Allocator.Error![]const u8 {
+    return realpathDepth(a, path, 0);
+}
+
 /// _check_roots: refuse a software or modules path that is not a real
 /// directory, a state root with a symbolic link in its path, an unknown
-/// backend, and a preparation program that is not an absolute path.
+/// backend, a preparation program that is not an absolute path, and a
+/// build directory inside the generation or the live prefix.
 pub fn checkRoots(a: Allocator, spec: Spec) void {
     if (spec.prepare_executable) |p| {
         if (p.len == 0) refuse("publication preparation executable must not be empty", .{});
@@ -195,6 +231,26 @@ pub fn checkRoots(a: Allocator, spec: Spec) void {
     if (symlinkComponent(a, spec.state_root)) |s| refuse("state root is unsafe: {s} is a symlink", .{s});
     const known = [_][]const u8{ "auto", "installpath", "bwrap", "userns" };
     if (!inList(&known, spec.backend)) refuse("unknown backend {s}", .{spec.backend});
+    if (spec.build_dir) |bd| {
+        if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
+        const build_abs = admin.abspath(a, bd);
+        const build_real = realpathLoose(a, build_abs) catch oom();
+        const gen_abs = std.fs.path.join(a, &.{ admin.abspath(a, spec.state_root), "generations" }) catch oom();
+        const gen_real = realpathLoose(a, gen_abs) catch oom();
+        if (admin.isWithin(a, build_abs, gen_abs) or admin.isWithin(a, build_real, gen_real))
+            refuse("build directory {s} is inside the generation root {s}", .{ build_abs, gen_abs });
+        const sw_abs = admin.abspath(a, spec.software);
+        const sw_real = realpathLoose(a, sw_abs) catch oom();
+        if (admin.isWithin(a, build_abs, sw_abs) or admin.isWithin(a, build_real, sw_real))
+            refuse("build directory {s} is inside the live software prefix {s}", .{ build_abs, sw_abs });
+        const mod_abs = admin.abspath(a, spec.modules);
+        const mod_real = realpathLoose(a, mod_abs) catch oom();
+        if (admin.isWithin(a, build_abs, mod_abs) or admin.isWithin(a, build_real, mod_real))
+            refuse("build directory {s} is inside the live modules prefix {s}", .{ build_abs, mod_abs });
+        if (fsx.statAt(fsx.cwd, build_abs, true)) |st| {
+            if (!st.isDir()) refuse("build directory {s} is not a directory", .{build_abs});
+        } else |_| {}
+    }
 }
 
 fn usable(probes: Py, key: []const u8) bool {
@@ -217,6 +273,7 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     spec.software = admin.abspath(a, spec.software);
     spec.modules = admin.abspath(a, spec.modules);
     spec.state_root = admin.abspath(a, spec.state_root);
+    if (spec.build_dir) |bd| spec.build_dir = admin.abspath(a, bd);
     const probes = probe.probeAll(a, env, spec.software, spec.eb_executable) catch |err| refuse("{s}", .{main_mod.osError(a, err, spec.software)});
     if (std.mem.eql(u8, spec.backend, "auto")) {
         spec.backend = if (usable(probes, "bwrap")) "bwrap" else if (usable(probes, "userns_sandbox")) "userns" else "installpath";
@@ -291,4 +348,32 @@ test "filterEbArgs and ensureRebuild" {
     const r = ensureRebuild(a, kept);
     try std.testing.expectEqualStrings("--rebuild", r[2]);
     try std.testing.expectEqual(@as(usize, 2), ensureRebuild(a, &.{ "x.eb", "-f" }).len);
+}
+
+test "filterEbArgsOpts drops --buildpath only when requested" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const raw = [_][]const u8{ "x.eb", "--buildpath=/old", "--buildpath", "/old2", "--robot" };
+    const kept_default = filterEbArgsOpts(a, &raw, false);
+    try std.testing.expectEqual(@as(usize, 5), kept_default.len);
+    const kept_drop = filterEbArgsOpts(a, &raw, true);
+    try std.testing.expectEqual(@as(usize, 2), kept_drop.len);
+    try std.testing.expectEqualStrings("--robot", kept_drop[1]);
+}
+
+test "buildCommand includes --buildpath only when build_dir is set" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const env: probe.Env = .{ .envp = &[_:null]?[*:0]const u8{"PATH=/bin"} };
+    const probes: Py = .{ .dict = &.{} };
+    const without = buildCommand(a, env, .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{ "x.eb", "--buildpath=/keep" }, .backend = "installpath" }, probes, "/st/generations/g1");
+    try std.testing.expect(std.mem.indexOf(u8, without, "--buildpath=/keep") != null);
+    const with_ip = buildCommand(a, env, .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{ "x.eb", "--buildpath=/drop" }, .backend = "installpath", .build_dir = "/tmp/bd" }, probes, "/st/generations/g1");
+    try std.testing.expect(std.mem.indexOf(u8, with_ip, "--buildpath=/tmp/bd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, with_ip, "/drop") == null);
+    const with_bw = buildCommand(a, env, .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{"x.eb"}, .backend = "bwrap", .build_dir = "/tmp/bd" }, probes, "/st/generations/g1");
+    try std.testing.expect(std.mem.indexOf(u8, with_bw, "--bwrap") != null);
+    try std.testing.expect(std.mem.indexOf(u8, with_bw, "--buildpath=/tmp/bd") != null);
 }

@@ -115,6 +115,12 @@ def _parser():
         "--ledger-config",
         help="JSON eb-stack ledger configuration; started records precede the directory swap",
     )
+    run_p.add_argument(
+        "--build-dir",
+        default=None,
+        metavar="DIR",
+        help="scratch build directory passed to eb as --buildpath",
+    )
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
@@ -221,9 +227,12 @@ def _dispatch(args):
             lock_timeout=args.lock_timeout,
             prepare_executable=args.prepare,
             ledger_config=args.ledger_config,
+            build_dir=args.build_dir,
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")
+        if args.build_dir is not None and not args.build_dir:
+            raise Refused("--build-dir must name a directory; it is empty")
         result = run(spec)
         return result.returncode
     if args.command == "resume":

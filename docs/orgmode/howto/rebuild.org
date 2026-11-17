@@ -444,6 +444,7 @@ eb-staged-rebuild: /opt/site/software/Example/2.0-GCCcore-15.2.0 is missing, not
 
 ** Related
 
+- [[file:set-a-build-directory.org][Set a scratch build directory]], to keep EasyBuild's build files off =~/.local/easybuild/build=
 - [[file:set-permissions.org][Set the permissions of a rebuild before it goes live]]
 - [[file:recover.org][Finish a run that failed or stopped]]
 - [[file:roll-back.org][Put the previous installation back]]

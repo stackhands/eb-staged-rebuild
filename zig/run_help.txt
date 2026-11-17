@@ -5,7 +5,7 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--module NAME/VERSION] [--run-id RUN_ID]
                              [--lock-timeout LOCK_TIMEOUT] [--skip-live-check]
                              [--prepare PREPARE]
-                             [--ledger-config LEDGER_CONFIG]
+                             [--ledger-config LEDGER_CONFIG] [--build-dir DIR]
                              ...
 
 positional arguments:
@@ -34,3 +34,4 @@ options:
   --ledger-config LEDGER_CONFIG
                         JSON eb-stack ledger configuration; started records
                         precede the directory swap
+  --build-dir DIR       scratch build directory passed to eb as --buildpath
