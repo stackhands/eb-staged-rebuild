@@ -105,6 +105,19 @@ def _payload(path):
         return handle.read()
 
 
+def _main(argv, env=None):
+    """Run the command line with EB_STAGED_REBUILD_GRACE_HOURS unset unless ``env`` sets it."""
+    out, err = io.StringIO(), io.StringIO()
+    with mock.patch.dict(os.environ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+        os.environ.update(env or {})
+        try:
+            code = cli.main(argv)
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue(), err.getvalue()
+
+
 class TransactionTests(unittest.TestCase):
     def assert_old_live(self, installed):
         for row in installed.values():
@@ -387,12 +400,8 @@ class GarbageCollectionTests(unittest.TestCase):
 
     @staticmethod
     def _gc(state, *args, env=None):
-        out = io.StringIO()
-        with mock.patch.dict(os.environ), contextlib.redirect_stdout(out):
-            os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
-            os.environ.update(env or {})
-            code = cli.main(["gc", "--state-root", state, "--dry-run", *args])
-        return code, out.getvalue()
+        code, out, _ = _main(["gc", "--state-root", state, "--dry-run", *args], env)
+        return code, out
 
     def _published(self, root, grace_hours):
         software, modules, state, installed, builder = _fixture(root)
@@ -436,6 +445,48 @@ class GarbageCollectionTests(unittest.TestCase):
                         self._gc(state, env={"EB_STAGED_REBUILD_GRACE_HOURS": "0"}),
                         (0, f"remove: {retired} (previous live tree)\n"),
                     )
+
+    def test_gc_refuses_a_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for args, text in (
+                (["--grace-hours", "-5"], "-5"),
+                (["--grace-hours=-5"], "-5"),
+                (["--grace-hours", "nan"], "nan"),
+                (["--grace-hours", "inf"], "inf"),
+                (["--grace-hours=-inf"], "-inf"),
+            ):
+                with self.subTest(args=args):
+                    code, out, err = _main(["gc", "--state-root", state, "--dry-run", *args])
+                    self.assertEqual(
+                        (code, out, err.splitlines()[-1:]),
+                        (2, "", [f"eb-staged-rebuild gc: error: argument --grace-hours: not a number of hours, 0 or more: '{text}'"]),
+                    )
+
+    def test_gc_refuses_an_environment_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _ = self._published(root, 0)
+            for text in ("-5", "nan", "inf"):
+                with self.subTest(text=text):
+                    self.assertEqual(
+                        _main(["gc", "--state-root", state, "--dry-run"], {"EB_STAGED_REBUILD_GRACE_HOURS": text}),
+                        (2, "", f"eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: '{text}'\n"),
+                    )
+
+    def test_run_refuses_a_grace_period_below_0_or_not_finite(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _, _ = _fixture(root)
+            argv = ["run", "--software", software, "--modules", modules, "--state-root", state, "--dry-run"]
+            code, out, err = _main([*argv, "--grace-hours", "-5", "--", "demo-1.eb"])
+            self.assertEqual(
+                (code, out, err.splitlines()[-1:]),
+                (2, "", ["eb-staged-rebuild run: error: argument --grace-hours: not a number of hours, 0 or more: '-5'"]),
+            )
+            self.assertEqual(
+                _main([*argv, "--", "demo-1.eb"], {"EB_STAGED_REBUILD_GRACE_HOURS": "nan"}),
+                (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: 'nan'\n"),
+            )
+            self.assertFalse(os.path.exists(state))
 
 
 if __name__ == "__main__":

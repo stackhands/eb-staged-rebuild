@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -34,15 +35,28 @@ def _state_root(value, software):
     return os.path.join(os.path.dirname(os.path.abspath(software)), ".eb-staged-rebuild")
 
 
+def _is_hours(value):
+    return math.isfinite(value) and value >= 0
+
+
+def _hours(text):
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {text!r}") from None
+    if not _is_hours(value):
+        raise argparse.ArgumentTypeError(f"not a number of hours, 0 or more: {text!r}")
+    return value
+
+
 def _grace(value):
     if value is not None:
         return value
-    return float(
-        os.environ.get(
-            "EB_STAGED_REBUILD_GRACE_HOURS",
-            str(DEFAULT_GRACE_HOURS),
-        )
-    )
+    text = os.environ.get("EB_STAGED_REBUILD_GRACE_HOURS", str(DEFAULT_GRACE_HOURS))
+    hours = float(text)
+    if not _is_hours(hours):
+        raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {text!r}")
+    return hours
 
 
 def _add_common(parser):
@@ -79,7 +93,7 @@ def _parser():
             "then the unsandboxed install-path fallback"
         ),
     )
-    run_p.add_argument("--grace-hours", type=float, default=None)
+    run_p.add_argument("--grace-hours", type=_hours, default=None)
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--module", action="append", default=[], dest="module_rels", metavar="NAME/VERSION")
     run_p.add_argument("--run-id", default=None)
@@ -107,7 +121,7 @@ def _parser():
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
     gc_p.add_argument("--state-root", required=True)
-    gc_p.add_argument("--grace-hours", type=float, default=None)
+    gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
     gc_p.add_argument(

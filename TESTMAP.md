@@ -203,6 +203,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | GarbageCollectionTests.test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded | differential "run, a grace period of 0 hours", "gc, the run's grace period", "gc, --grace-hours instead of the run's", "gc, the environment does not replace the run's" |
 | GarbageCollectionTests.test_a_longer_grace_period_of_the_run_outlasts_the_default | differential "gc, the environment does not replace the run's" (a run's own grace period against `EB_STAGED_REBUILD_GRACE_HOURS`) |
 | GarbageCollectionTests.test_a_recorded_grace_period_that_is_not_hours_is_not_used | differential "record a grace period below 0", "gc, a recorded grace period below 0"; `zig/admin.zig` test "runGrace uses the hours a run recorded, when they are a number at least 0" |
+| GarbageCollectionTests.test_gc_refuses_a_grace_period_below_0_or_not_finite | differential "gc, --grace-hours below 0", "gc, --grace-hours=-5", "gc, --grace-hours -1e3", "gc, --grace-hours nan", "gc, --grace-hours inf", "gc, --grace-hours -inf"; `zig/main.zig` test "optionLike takes a negative number for a value, as argparse 3.14 does" |
+| GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_below_0_or_not_finite | differential "gc, a grace period below 0 in the environment", "gc, nan in the environment", "gc, inf and white space in the environment" |
+| GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
 
 ### tests/test_retire.py
 

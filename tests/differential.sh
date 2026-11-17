@@ -111,6 +111,10 @@ for c in run resume rollback status gc retire; do compare "${c} -h" "${c}" -h; d
 zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")
 if "${TOOL_BIN}" --version | grep -qF -- "${zon_version}"; then echo "same version as build.zig.zon"; else echo "DIFF version: build.zig.zon says ${zon_version}"; diffs=$((diffs + 1)); fi
 compare "unknown command" bogus
+compare "a negative number for a command" -5
+compare "a dash for a command" -
+compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
+compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
@@ -322,7 +326,29 @@ compare_admin "gc, --grace-hours instead of the run's" gc --state-root @ROOT@/st
 compare_admin "gc, the environment does not replace the run's" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
 compare_admin "record a grace period below 0" env python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["grace_hours"] = -5; json.dump(d, open(p, "w"))' @ROOT@/state/runs/g1/journal.json
 compare_admin "gc, a recorded grace period below 0" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+# A grace period given as an option or in EB_STAGED_REBUILD_GRACE_HOURS must
+# be a number of hours, 0 or more. A word that looks like a negative number
+# is an option's value, as argparse takes it.
+compare_admin "gc, --grace-hours below 0" gc --state-root @ROOT@/state --grace-hours -5 --dry-run
+compare_admin "gc, --grace-hours=-5" gc --state-root @ROOT@/state --grace-hours=-5 --dry-run
+compare_admin "gc, --grace-hours -1e3" gc --state-root @ROOT@/state --grace-hours -1e3 --dry-run
+compare_admin "gc, --grace-hours nan" gc --state-root @ROOT@/state --grace-hours nan --dry-run
+compare_admin "gc, --grace-hours inf" gc --state-root @ROOT@/state --grace-hours inf --dry-run
+compare_admin "gc, --grace-hours -inf" gc --state-root @ROOT@/state --grace-hours -inf --dry-run
+compare_admin "gc, --grace-hours -0" gc --state-root @ROOT@/state --grace-hours -0 --dry-run
+compare_admin "gc, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, nan in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=nan @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, inf and white space in the environment" env $'EB_STAGED_REBUILD_GRACE_HOURS= inf\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, a bad --lock-timeout before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --lock-timeout x --dry-run
+compare_admin "gc, --lock-timeout -5" gc --state-root @ROOT@/state --lock-timeout -5 --dry-run
+compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --grace-hours -5 --dry-run -- demo-1.eb
+compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
 compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
+compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with a grace period of -0 hours" rollback --state-root @ROOT@/state g2
 for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

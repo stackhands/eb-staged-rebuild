@@ -114,9 +114,18 @@ const Opt = struct {
     seen: bool = false,
 };
 
+/// Whether argparse (Python 3.14) takes a word for an option string rather
+/// than a value: a '-' and more, unless it looks like a negative number, a
+/// '-' then a digit or ".DIGIT". No option of these parsers looks like one.
+fn optionLike(arg: []const u8) bool {
+    if (arg.len < 2 or arg[0] != '-') return false;
+    const d = if (arg[1] == '.' and arg.len > 2) arg[2] else arg[1];
+    return !std.ascii.isDigit(d);
+}
+
 /// argparse long options: --name, --name=value, any unique prefix of a name;
 /// -h and --help print `help`. Positionals are returned in order; a word
-/// starting with '-' that is no option is unrecognized.
+/// that is optionLike but no option is unrecognized.
 fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const u8, usage: []const u8, who: []const u8, extra: *std.ArrayList([]const u8)) []const []const u8 {
     var pos: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
@@ -130,7 +139,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
             cli.put(1, help);
             std.process.exit(0);
         }
-        if (arg.len < 2 or arg[0] != '-') {
+        if (!optionLike(arg)) {
             pos.append(a, arg) catch oom();
             continue;
         }
@@ -166,7 +175,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
         if (eq) |e| {
             o.value = arg[e + 1 ..];
         } else {
-            if (i + 1 >= args.len or (args[i + 1].len > 0 and args[i + 1][0] == '-'))
+            if (i + 1 >= args.len or optionLike(args[i + 1]))
                 usageError(usage, who, "argument --{s}: expected one argument", .{o.name});
             i += 1;
             o.value = args[i];
@@ -510,6 +519,31 @@ fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8)
     return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
 }
 
+fn repr(a: Allocator, s: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    pyfmt.reprStr(&out, a, s) catch oom();
+    return out.items;
+}
+
+fn isHours(hours: f64) bool {
+    return std.math.isFinite(hours) and hours >= 0;
+}
+
+/// --grace-hours of run and gc: a float, and a number of hours, 0 or more.
+fn graceArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64 {
+    const hours = floatArg(usage, who, "grace-hours", v);
+    if (!isHours(hours)) usageError(usage, who, "argument --grace-hours: not a number of hours, 0 or more: {s}", .{repr(a, v)});
+    return hours;
+}
+
+/// EB_STAGED_REBUILD_GRACE_HOURS, or the default when it is not set.
+fn envGrace(a: Allocator, env: probe.Env) f64 {
+    const e = env.get("EB_STAGED_REBUILD_GRACE_HOURS") orelse return admin.default_grace_hours;
+    const hours = std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: '{s}'", .{e});
+    if (!isHours(hours)) refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {s}", .{repr(a, e)});
+    return hours;
+}
+
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
     if (names.len == 0) return;
     usageError(usage, who, "the following arguments are required: {s}", .{std.mem.join(a, ", ", names) catch ""});
@@ -577,11 +611,9 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const grace: f64 = if (opts[1].value) |v| floatArg(gc_usage, who, "grace-hours", v) else blk: {
-        const e = env.get("EB_STAGED_REBUILD_GRACE_HOURS") orelse break :blk admin.default_grace_hours;
-        break :blk std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: '{s}'", .{e});
-    };
+    const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, gc_usage, who, v) else null;
     const timeout: ?f64 = if (opts[3].value) |v| floatArg(gc_usage, who, "lock-timeout", v) else null;
+    const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(&ctx, opts[0].value.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
 }
@@ -607,7 +639,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
             cli.put(1, run_help);
             return 0;
         }
-        if (std.mem.eql(u8, arg, "--") or arg.len == 0 or arg[0] != '-') {
+        if (std.mem.eql(u8, arg, "--") or !optionLike(arg)) {
             rest = args[i..];
             break;
         }
@@ -645,7 +677,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         if (eq) |e| {
             v = arg[e + 1 ..];
         } else {
-            if (i + 1 >= args.len or (args[i + 1].len > 0 and args[i + 1][0] == '-'))
+            if (i + 1 >= args.len or optionLike(args[i + 1]))
                 usageError(run_usage, who, "argument --{s}: expected one argument", .{names[k]});
             i += 1;
             v = args[i];
@@ -654,7 +686,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     }
     if (vals[4]) |b| if (!engine_inList(&backends, b))
         usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
-    const grace_cli: ?f64 = if (vals[5]) |v| floatArg(run_usage, who, "grace-hours", v) else null;
+    const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
     const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
@@ -663,16 +695,13 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         refuse("--software and --modules (or EASYBUILD_INSTALLPATH_SOFTWARE and EASYBUILD_INSTALLPATH_MODULES) are required", .{});
     const state_root = nonEmpty(vals[2]) orelse nonEmpty(env.get("EB_STAGED_REBUILD_STATE_ROOT")) orelse
         (std.fs.path.join(a, &.{ std.fs.path.dirname(admin.abspath(a, software.?)) orelse "/", ".eb-staged-rebuild" }) catch "");
-    const grace: f64 = grace_cli orelse blk: {
-        const e = env.get("EB_STAGED_REBUILD_GRACE_HOURS") orelse break :blk admin.default_grace_hours;
-        break :blk std.fmt.parseFloat(f64, std.mem.trim(u8, e, " \t\n\r\x0b\x0c")) catch refuse("EB_STAGED_REBUILD_GRACE_HOURS is not a number: '{s}'", .{e});
-    };
     var eb_args = rest;
     if (eb_args.len > 0 and std.mem.eql(u8, eb_args[0], "--")) eb_args = eb_args[1..];
     const has_positional = for (eb_args) |x| {
         if (x.len == 0 or x[0] != '-') break true;
     } else false;
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
+    const grace = grace_cli orelse envGrace(a, env);
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     return engine.run(a, env, .{
         .software = software.?,
@@ -808,7 +837,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             cli.put(1, comptime cli.versionLine(prog, version, build_options.commit));
             return 0;
         }
-        if (arg.len > 0 and arg[0] == '-') usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
+        if (optionLike(arg)) usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
         break;
     }
     if (i >= args.len) usageError(top_usage, prog, "the following arguments are required: command", .{});
@@ -845,4 +874,11 @@ test {
     _ = modulefile;
     _ = pyfmt;
     _ = probe;
+}
+
+test "optionLike takes a negative number for a value, as argparse 3.14 does" {
+    for ([_][]const u8{ "--grace-hours", "--", "-h", "-x", "-.", "-.x", "--5", "-inf" }) |w|
+        try std.testing.expect(optionLike(w));
+    for ([_][]const u8{ "", "-", "5", "-5", "-0", "-.5", "-1e3", "-5x" }) |w|
+        try std.testing.expect(!optionLike(w));
 }
