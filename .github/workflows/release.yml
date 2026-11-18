@@ -64,6 +64,21 @@ jobs:
         run: |
           mkdir dist
           cp out/bin/eb-staged-rebuild "dist/eb-staged-rebuild-${GITHUB_REF_NAME#v}-${{ matrix.arch }}-linux-musl"
+      - name: generate completion and manpage assets
+        uses: stackhands/.github/.github/actions/parser-cli-assets@main
+        with:
+          pythonpath: .
+          parser_ref: eb_staged_rebuild.cli._parser
+          parser_module: eb_staged_rebuild.cli
+          parser_function: _parser
+          prog: eb-staged-rebuild
+          out_completions_dir: dist/share/completions
+          out_man_dir: dist/share/man
+          out_bash_file: eb-staged-rebuild.bash
+          out_zsh_file: _eb-staged-rebuild
+          out_man_file: eb-staged-rebuild.1
+      - name: list generated cli assets
+        run: ls -1 dist/share/completions dist/share/man
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bin-${{ matrix.arch }}

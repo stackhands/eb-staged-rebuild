@@ -19,6 +19,8 @@ pixi run -e docs docbld
 
 The HTML is written to `docs/build/html`. `docs/orgmode/contributing.org` says how to write a page.
 
+Release bundles now include bash and zsh completion scripts with a man page produced from `_parser`, using pinned `shtab` and `argparse-manpage` in CI. Fish output is excluded because the generator toolchain does not provide fish completion support.
+
 ## Install
 
 Linux only. There are two builds of the same command-line tool; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference.
