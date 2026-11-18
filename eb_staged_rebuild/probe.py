@@ -186,7 +186,10 @@ def probe_rename_exchange(directory):
     os.makedirs(directory, exist_ok=True)
     info = filesystem(directory)
     info.update({"ok": False, "errno": None, "error": None, "flag": RENAME_EXCHANGE})
-    parent = tempfile.mkdtemp(prefix=".rename-exchange-", dir=directory)
+    try:
+        parent = tempfile.mkdtemp(prefix=".rename-exchange-", dir=directory)
+    except OSError as exc:
+        raise OSError(exc.errno, exc.strerror, directory) from exc
     left = os.path.join(parent, "left")
     right = os.path.join(parent, "right")
     try:
