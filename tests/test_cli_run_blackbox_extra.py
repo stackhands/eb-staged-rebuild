@@ -1,0 +1,77 @@
+"""Extra black-box CLI checks for the run subcommand."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+
+def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    merged = dict(os.environ)
+    if env:
+        merged.update(env)
+    return subprocess.run(
+        [sys.executable, "-m", "eb_staged_rebuild.cli", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=merged,
+    )
+
+
+class RunBlackBoxExtraTests(unittest.TestCase):
+    def test_run_dry_run_succeeds_with_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            software = os.path.join(tmp, "software")
+            modules = os.path.join(tmp, "modules")
+            state_root = os.path.join(tmp, "state")
+            os.makedirs(software)
+            os.makedirs(modules)
+            proc = run_cli(
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--state-root",
+                state_root,
+                "--dry-run",
+                "--",
+                "Demo-1.0.eb",
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(proc.stderr, "")
+            self.assertIn("dry-run: no build, no module file written", proc.stdout)
+
+    @unittest.expectedFailure
+    def test_run_rejects_non_finite_lock_timeout(self) -> None:
+        """Reproducer: `eb-staged-rebuild run ... --lock-timeout nan -- Demo-1.0.eb`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            software = os.path.join(tmp, "software")
+            modules = os.path.join(tmp, "modules")
+            state_root = os.path.join(tmp, "state")
+            os.makedirs(software)
+            os.makedirs(modules)
+            proc = run_cli(
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--state-root",
+                state_root,
+                "--dry-run",
+                "--lock-timeout",
+                "nan",
+                "--",
+                "Demo-1.0.eb",
+            )
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("--lock-timeout is not a finite number", proc.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
