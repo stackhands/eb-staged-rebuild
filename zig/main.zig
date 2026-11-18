@@ -655,7 +655,8 @@ fn envGrace(a: Allocator, env: probe.Env) f64 {
 /// EB_STAGED_REBUILD_MIN_FREE_BYTES supplies run's default free-space policy.
 fn envMinFreeBytes(a: Allocator, env: probe.Env) ?u64 {
     const e = env.get("EB_STAGED_REBUILD_MIN_FREE_BYTES") orelse return null;
-    const minimum = std.fmt.parseInt(i128, e, 10) catch
+    const t = std.mem.trim(u8, e, " \t\n\r\x0b\x0c");
+    const minimum = std.fmt.parseInt(i128, t, 10) catch
         refuse("EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: {s}", .{repr(a, e)});
     if (minimum < 0 or minimum > std.math.maxInt(u64))
         refuse(
@@ -663,6 +664,13 @@ fn envMinFreeBytes(a: Allocator, env: probe.Env) ?u64 {
             .{ std.math.maxInt(u64), repr(a, e) },
         );
     return @intCast(minimum);
+}
+
+test "envMinFreeBytes trims ASCII whitespace like Python int()" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const entries = [_:null]?[*:0]const u8{"EB_STAGED_REBUILD_MIN_FREE_BYTES= \t4096\n"};
+    try std.testing.expectEqual(@as(?u64, 4096), envMinFreeBytes(arena.allocator(), .{ .envp = &entries }));
 }
 
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
