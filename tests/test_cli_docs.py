@@ -103,6 +103,12 @@ class CliDocTests(unittest.TestCase):
         self.assertIn("--build-dir", text)
         self.assertIn("--buildpath", text)
 
+    def test_first_tutorial_starts_on_clean_ubuntu(self):
+        path = os.path.join(ROOT, "docs", "orgmode", "tutorials", "first-staged-rebuild.org")
+        with open(path, encoding="utf-8") as handle:
+            tutorial = handle.read()
+        self.assertIn("python3-venv", tutorial)
+
     def test_transcripts_do_not_record_a_checkout_path(self):
         """Recorded output must not name the machine that recorded it.
 
