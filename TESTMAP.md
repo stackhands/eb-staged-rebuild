@@ -543,3 +543,4 @@ it writes, with ids, times and the state root's scope normalized.
 | test | replacement |
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
+| LedgerConfigValidationTests.test_load_config_rejects_non_finite_timeout | `zig/publish.zig` test "isPositiveTimeout rejects non-finite and non-positive values" |
