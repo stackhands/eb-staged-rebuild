@@ -153,17 +153,20 @@ pub fn loadConfig(a: Allocator, path_in: []const u8, why: *[]const u8) Error!Py 
     }
     if (pyfmt.get(config, "timeout") == null) config = dictSet(a, config, "timeout", .{ .int = 120 });
     const t = pyfmt.get(config, "timeout").?;
-    const positive = switch (t) {
-        .int => |n| n > 0,
-        .float => |x| x > 0,
-        else => false,
-    };
-    if (!positive) {
+    if (!isPositiveTimeout(t)) {
         why.* = "ledger config timeout must be a positive number of seconds";
         return error.Refused;
     }
     config = dictSet(a, config, "path", Py.s(path));
     return config;
+}
+
+fn isPositiveTimeout(t: Py) bool {
+    return switch (t) {
+        .int => |n| n > 0,
+        .float => |x| std.math.isFinite(x) and x > 0,
+        else => false,
+    };
 }
 
 /// Whether two values dump to the same sorted JSON.
@@ -559,4 +562,14 @@ test "parseSummary" {
     try std.testing.expectEqual(@as(u64, 3), m.index);
     try std.testing.expect(!m.replayed);
     try std.testing.expect(parseSummary("appended record x id " ++ h) == null);
+}
+
+test "isPositiveTimeout rejects non-finite and non-positive values" {
+    try std.testing.expect(isPositiveTimeout(.{ .int = 120 }));
+    try std.testing.expect(isPositiveTimeout(.{ .float = 0.5 }));
+    try std.testing.expect(!isPositiveTimeout(.{ .int = 0 }));
+    try std.testing.expect(!isPositiveTimeout(.{ .float = 0.0 }));
+    try std.testing.expect(!isPositiveTimeout(.{ .float = -1.0 }));
+    try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.nan(f64) }));
+    try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.inf(f64) }));
 }

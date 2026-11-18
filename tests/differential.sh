@@ -128,6 +128,13 @@ compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-time
 compare "run, a run id with path components" run --software software --modules modules --state-root state --run-id ../escaped -- demo-1.eb
 compare "resume, a run id with path components" resume --state-root state ../escaped
 compare "rollback, a run id with path components" rollback --state-root state ../escaped
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
