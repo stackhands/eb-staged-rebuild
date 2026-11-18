@@ -1,5 +1,5 @@
-//! retire, rollback of a retire journal, and gc: the commands that change a
-//! module tree or a state root without building anything.
+//! retire, rollback of a retire journal, gc and verify: the commands that
+//! change a module tree or a state root without building anything.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -516,6 +516,30 @@ pub fn retire(
     _ = saveJournal(c, path, journal, "journal.retired");
     log("retired {s} -> {s}; software directory {s} left in place", .{ p.module, destination, p.software_dir });
     return 0;
+}
+
+// ---- verify ---------------------------------------------------------------
+
+/// verify: check the stage of a built run under the state root's lock, and
+/// write and print the result with run.zig's verifyCommand. Returns the exit
+/// status: 0 when the stage passes, 1 when it fails.
+pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
+    const a = c.a;
+    const path = journalPath(a, state_root, run_id);
+    const l = lock(c, state_root, lock_timeout);
+    defer l.release();
+    const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
+    if (!st.isReg()) refuse("no journal at {s}", .{path});
+    const journal = main_mod.loadJournal(a, path);
+    if (eqlStr(pyfmt.get(journal, "kind"), "retire")) refuse("run {s} is a retire record; it has no stage to verify", .{run_id});
+    const state_name = str(pyfmt.get(journal, "state")) orelse "";
+    if (!std.mem.eql(u8, state_name, "built")) refuse("run {s} is {s}; only a built run has a stage to verify", .{ run_id, state_name });
+    const run_mod = @import("run.zig");
+    var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
+    return run_mod.verifyCommand(&r) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
 }
 
 // ---- rollback -------------------------------------------------------------

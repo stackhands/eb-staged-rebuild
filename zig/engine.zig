@@ -47,6 +47,8 @@ pub const Spec = struct {
     build_dir: ?[]const u8 = null,
     min_free_bytes: ?u128 = null,
     require_exchange: bool = false,
+    verify: bool = false,
+    force: bool = false,
 };
 
 // ---- eb arguments, as builders.py shapes them -----------------------------
