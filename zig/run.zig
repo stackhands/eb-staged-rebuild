@@ -1364,6 +1364,40 @@ fn lockRoot(r: *R) E!state.RootLock {
     };
 }
 
+const StatFs = extern struct {
+    fs_type: isize,
+    block_size: isize,
+    blocks: isize,
+    blocks_free: isize,
+    blocks_available: isize,
+    files: isize,
+    files_free: isize,
+    fs_id: [2]i32,
+    name_length: isize,
+    fragment_size: isize,
+    flags: isize,
+    spare: [4]isize,
+};
+
+fn checkFreeSpace(r: *R) E!void {
+    const minimum = r.spec.min_free_bytes orelse return;
+    var path_buf: [sys.path_max:0]u8 = undefined;
+    const path = sys.z(&path_buf, r.spec.state_root) catch
+        return r.refuse("path is too long: {s}", .{r.spec.state_root});
+    var info: StatFs = undefined;
+    const result = linux.syscall2(.statfs, @intFromPtr(path.ptr), @intFromPtr(&info));
+    if (linux.errno(result) != .SUCCESS)
+        return r.refuse("cannot inspect free space on {s}", .{r.spec.state_root});
+    const blocks: u128 = if (info.blocks_available > 0) @intCast(info.blocks_available) else 0;
+    const fragment_size: u128 = if (info.fragment_size > 0) @intCast(info.fragment_size) else 0;
+    const available = blocks * fragment_size;
+    if (available < minimum)
+        return r.refuse(
+            "generation filesystem has {d} bytes available; --min-free-bytes requires {d}",
+            .{ available, minimum },
+        );
+}
+
 /// run without --dry-run.
 pub fn run(r: *R, probes: Py) E!Result {
     const a = r.a;
@@ -1401,6 +1435,7 @@ pub fn run(r: *R, probes: Py) E!Result {
     }
     const l = try lockRoot(r);
     defer l.release();
+    try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
     if (fsx.statAt(fsx.cwd, r.path, true)) |_| return r.refuse("run {s} already exists; resume it or choose another --run-id", .{run_id}) else |_| {}
     atomic.makedirs(runDir(a, r.spec.state_root, run_id)) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.state_root)});

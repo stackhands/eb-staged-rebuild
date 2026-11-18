@@ -615,6 +615,14 @@ fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8)
     return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
 }
 
+fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u64 {
+    const value = std.fmt.parseInt(i128, v, 10) catch
+        usageError(usage, who, "argument --min-free-bytes: invalid integer value: {s}", .{repr(a, v)});
+    if (value < 0 or value > std.math.maxInt(u64))
+        usageError(usage, who, "argument --min-free-bytes: not a number of bytes, 0 or more: {s}", .{repr(a, v)});
+    return @intCast(value);
+}
+
 fn repr(a: Allocator, s: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
     pyfmt.reprStr(&out, a, s) catch oom();
@@ -744,8 +752,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " run";
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -806,6 +814,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
     const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
+    const min_free_bytes: ?u64 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
     const modules = nonEmpty(vals[1]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_MODULES"));
@@ -838,6 +847,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .prepare_executable = vals[11],
         .ledger_config = vals[12],
         .build_dir = vals[13],
+        .min_free_bytes = min_free_bytes,
     });
 }
 

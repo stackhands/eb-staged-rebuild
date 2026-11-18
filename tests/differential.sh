@@ -126,6 +126,7 @@ norm() {
     sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
         -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
         -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${work}/(py|zig)#W#g" \
+        -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
         -e 's#[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox#SANDBOX#' \
         -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
@@ -324,12 +325,14 @@ compare_admin "run, no software" run --dry-run -- x.eb
 compare_admin "run, bad backend" run --backend nope -- x.eb
 compare_admin "run, empty prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare= --dry-run -- x.eb
 compare_admin "run, relative prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare=rel --dry-run -- x.eb
+compare_admin "run, negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --min-free-bytes=-1 -- x.eb
 compare_admin "retire, no module file" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/none.lua
 compare_admin "retire, missing options" retire
 compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
 # A whole run with tests/fake_eb.py as eb. The module text names each
 # copy's own paths, so hashes are compared only through the files they name.
 export NORM_HASH=1
+compare_admin "run refuses below --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-state --backend installpath --eb @ROOT@/eb --run-id space1 --skip-live-check --min-free-bytes 18446744073709551615 --module demo/1 -- demo-1.eb
 compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
 compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom

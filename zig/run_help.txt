@@ -6,6 +6,7 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--lock-timeout LOCK_TIMEOUT] [--skip-live-check]
                              [--prepare PREPARE]
                              [--ledger-config LEDGER_CONFIG] [--build-dir DIR]
+                             [--min-free-bytes BYTES]
                              ...
 
 positional arguments:
@@ -35,3 +36,6 @@ options:
                         JSON eb-stack ledger configuration; started records
                         precede the directory swap
   --build-dir DIR       scratch build directory passed to eb as --buildpath
+  --min-free-bytes BYTES
+                        refuse before the build unless the generation
+                        filesystem has at least BYTES available

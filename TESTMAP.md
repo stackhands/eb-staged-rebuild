@@ -186,6 +186,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 
 | test | replacement |
 |---|---|
+| FreeSpaceTests.test_command_leaves_the_guard_disabled_when_the_option_is_absent | differential "run, installpath" omits the option |
+| FreeSpaceTests.test_default_command_output_and_status_stay_byte_identical | differential "run, installpath" checks the default command's status and streams |
+| FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
 | TransactionTests.test_success_uses_fallback_and_keeps_old_tree_for_rollback | crash_matrix "fallback: run published" (journal `swap_method` `rename-fallback`, old tree kept as the hidden sibling) and "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
