@@ -24,7 +24,7 @@ eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
                      [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
-                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH]
+                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH] [--json]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
                          [--dry-run] [--usage-log FILE]
                          [--eb-keep-logs EB_KEEP_LOGS] [--lock-timeout SECONDS]
