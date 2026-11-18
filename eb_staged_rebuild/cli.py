@@ -11,6 +11,7 @@ from eb_staged_rebuild.constants import DEFAULT_GRACE_HOURS
 from eb_staged_rebuild.engine import Spec, describe_module, resume, rollback, run, verify
 from eb_staged_rebuild.errors import NeedsIntervention, Refused, StagedRebuildError
 from eb_staged_rebuild.gc import collect
+from eb_staged_rebuild.generations import format_generations, generations
 from eb_staged_rebuild.journal import list_journals
 from eb_staged_rebuild.retire import retire
 from eb_staged_rebuild.probe import probe_all
@@ -245,6 +246,9 @@ def _parser():
     status_p.add_argument("--json", action="store_true", help="print one JSON document")
     status_p.add_argument("run_id", nargs="?")
 
+    list_p = sub.add_parser("list", help="show each install path's live tree and the generations kept beside it")
+    _add_state_root(list_p)
+
     resolve_p = sub.add_parser("resolve", help="print the install path a module file names")
     resolve_p.add_argument("module")
     return parser
@@ -417,6 +421,10 @@ def _dispatch(args):
                     f"  {mod.get('status'):<10} {mod.get('rel')}  "
                     f"live={mod.get('live_software')} retired={mod.get('retired')}"
                 )
+        return 0
+    if args.command == "list":
+        for line in format_generations(generations(list_journals(args.state_root))):
+            print(line)
         return 0
     raise Refused(f"unknown command {args.command}")
 

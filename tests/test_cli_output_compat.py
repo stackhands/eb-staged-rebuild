@@ -27,11 +27,20 @@ def _run_cli(repo: Path, *args: str) -> tuple[int, str, str]:
 def _with_added_verify(result: tuple[int, str, str]) -> tuple[int, str, str]:
     rc, out, err = result
     old_choices = "{probe,run,resume,rollback,gc,retire,status,resolve}"
-    new_choices = "{probe,run,resume,verify,rollback,gc,retire,status,resolve}"
-    out = out.replace(old_choices, new_choices).replace(
-        "    resume              continue a run after a crash\n",
-        "    resume              continue a run after a crash\n"
-        "    verify              check a built run's stage before it is published\n",
+    new_choices = "{probe,run,resume,verify,rollback,gc,retire,status,list,resolve}"
+    out = (
+        out.replace(old_choices, new_choices)
+        .replace(
+            "    resume              continue a run after a crash\n",
+            "    resume              continue a run after a crash\n"
+            "    verify              check a built run's stage before it is published\n",
+        )
+        .replace(
+            "    status              show run journals\n",
+            "    status              show run journals\n"
+            "    list                show each install path's live tree and the generations\n"
+            "                        kept beside it\n",
+        )
     )
     err = err.replace(old_choices, new_choices)
     return rc, out, err

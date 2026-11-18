@@ -31,6 +31,7 @@ eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
                          [--dry-run] [--usage-log FILE]
                          [--eb-keep-logs EB_KEEP_LOGS] [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
+eb-staged-rebuild list --state-root DIR
 eb-staged-rebuild resolve MODULE_FILE
 #+end_example
 
@@ -38,13 +39,13 @@ The binary's help, from =eb-staged-rebuild --help=; the Python package's can wra
 
 #+begin_example
 usage: eb-staged-rebuild [-h] [--version]
-                         {probe,run,resume,verify,rollback,gc,retire,status,resolve} ...
+                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
 
 Build EasyBuild software in a staged tree, then exchange the complete tree
 with the stable live directory.
 
 positional arguments:
-  {probe,run,resume,verify,rollback,gc,retire,status,resolve}
+  {probe,run,resume,verify,rollback,gc,retire,status,list,resolve}
     probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
                         EasyBuild
     run                 build and atomically swap a staged tree
@@ -56,6 +57,8 @@ positional arguments:
     retire              move a module file out of the module tree after its
                         package is published elsewhere
     status              show run journals
+    list                show each install path's live tree and the generations
+                        kept beside it
     resolve             print the install path a module file names
 
 options:
@@ -269,6 +272,18 @@ A missing value is =null=.
 With no journal the document is ={"runs": []}=, and the exit status is still 0.
 A =RUN_ID= with no journal is still a refusal.
 
+*** list
+
+Print, for each installation that the run journals of the state root name, its path in the software tree and its absolute path, then a line for each of its generations still on disk: the live tree first, then the others, the most recently published first.
+
+| Option         | Meaning                                                                                        |
+|----------------+------------------------------------------------------------------------------------------------|
+| =--state-root= | The state root; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required. |
+
+[[file:generations.org][The generations of an installation]] gives the columns and the states.
+With no journal, =list= prints =no generations=.
+It takes no lock.
+
 *** resolve
 
 Print as JSON the installation directory that the =root= assignment of the module file =MODULE_FILE=, Lua or Tcl, names:
@@ -286,14 +301,14 @@ When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printe
 
 ** Environment
 
-| Variable                           | Used by                                                         | Meaning                                                                                          |
-|------------------------------------+-----------------------------------------------------------------+--------------------------------------------------------------------------------------------------|
-| =EASYBUILD_INSTALLPATH_SOFTWARE=   | =run=                                                           | The default of =--software=.                                                                     |
-| =EASYBUILD_INSTALLPATH_MODULES=    | =run=                                                           | The default of =--modules=.                                                                      |
-| =EB_STAGED_REBUILD_STATE_ROOT=     | =run=, =resume=, =verify=, =rollback=, =gc=, =retire=, =status= | The default of =--state-root=, unless it is empty.                                               |
-| =EB_STAGED_REBUILD_EB=             | =probe=, =run=                                                  | The default of =--eb=.                                                                           |
-| =EB_STAGED_REBUILD_GRACE_HOURS=    | =run=, =gc=                                                     | The default of =--grace-hours=, a number 0 or more; =gc= uses it only where no run recorded one. |
-| =EB_STAGED_REBUILD_MIN_FREE_BYTES= | =run=                                                           | The default of =--min-free-bytes=, an integer from 0 through 18446744073709551615.               |
+| Variable                           | Used by                                                                 | Meaning                                                                                          |
+|------------------------------------+-------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------|
+| =EASYBUILD_INSTALLPATH_SOFTWARE=   | =run=                                                                   | The default of =--software=.                                                                     |
+| =EASYBUILD_INSTALLPATH_MODULES=    | =run=                                                                   | The default of =--modules=.                                                                      |
+| =EB_STAGED_REBUILD_STATE_ROOT=     | =run=, =resume=, =verify=, =rollback=, =gc=, =retire=, =status=, =list= | The default of =--state-root=, unless it is empty.                                               |
+| =EB_STAGED_REBUILD_EB=             | =probe=, =run=                                                          | The default of =--eb=.                                                                           |
+| =EB_STAGED_REBUILD_GRACE_HOURS=    | =run=, =gc=                                                             | The default of =--grace-hours=, a number 0 or more; =gc= uses it only where no run recorded one. |
+| =EB_STAGED_REBUILD_MIN_FREE_BYTES= | =run=                                                                   | The default of =--min-free-bytes=, an integer from 0 through 18446744073709551615.               |
 
 [[file:environment.org][Environment variables]] also lists =LMOD_CMD=, with which the checks before publication load the new module files, the variables a run records for those checks, and what reaches EasyBuild.
 

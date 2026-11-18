@@ -31,7 +31,7 @@ HEAD=$SITE/ledger-heads/head.json
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns build-dir no-easyconfig not-installed ledger-setup ledger-run
-ledger-rollback verify"
+ledger-rollback verify list"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -222,6 +222,11 @@ case_verify() {
     step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
     step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
 }
+
+case_list() {
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+}
+
 clean() {
     rm -rf "${SITE:?}/software" "${SITE:?}/modules" "${SITE:?}/sources" "${SITE:?}/bin" "${SITE:?}/standin" \
         "$STATE" "${SITE:?}/build" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" \

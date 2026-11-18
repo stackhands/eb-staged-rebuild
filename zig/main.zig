@@ -2,8 +2,8 @@
 //! exchange the complete tree with the stable live directory.
 //!
 //! The commands of the Python tool in one static binary: probe, run,
-//! resume, verify, rollback, gc, retire, status and resolve. COMPAT.md lists
-//! where the two builds differ.
+//! resume, verify, rollback, gc, retire, status, list and resolve.
+//! COMPAT.md lists where the two builds differ.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -13,6 +13,7 @@ const pyfmt = @import("pyfmt.zig");
 const probe = @import("probe.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
+const generations = @import("generations.zig");
 const build_options = @import("build_options");
 
 const sys = common.sys;
@@ -26,11 +27,11 @@ const Py = json.Py;
 pub const version = build_options.version;
 const prog = "eb-staged-rebuild";
 
-const commands = [_][]const u8{ "probe", "run", "resume", "verify", "rollback", "gc", "retire", "status", "resolve" };
+const commands = [_][]const u8{ "probe", "run", "resume", "verify", "rollback", "gc", "retire", "status", "list", "resolve" };
 
 const top_usage =
     \\usage: eb-staged-rebuild [-h] [--version]
-    \\                         {probe,run,resume,verify,rollback,gc,retire,status,resolve} ...
+    \\                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
     \\
 ;
 
@@ -40,7 +41,7 @@ const top_help = top_usage ++
     \\with the stable live directory.
     \\
     \\positional arguments:
-    \\  {probe,run,resume,verify,rollback,gc,retire,status,resolve}
+    \\  {probe,run,resume,verify,rollback,gc,retire,status,list,resolve}
     \\    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
     \\                        EasyBuild
     \\    run                 build and atomically swap a staged tree
@@ -52,6 +53,8 @@ const top_help = top_usage ++
     \\    retire              move a module file out of the module tree after its
     \\                        package is published elsewhere
     \\    status              show run journals
+    \\    list                show each install path's live tree and the generations
+    \\                        kept beside it
     \\    resolve             print the install path a module file names
     \\
     \\options:
@@ -97,6 +100,14 @@ const status_options =
 ;
 const status_help = status_usage ++ status_options;
 const status_help_default = status_usage_default ++ status_options;
+const list_usage = "usage: eb-staged-rebuild list [-h] --state-root STATE_ROOT\n";
+const list_help = list_usage ++
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\
+;
 const resolve_usage = "usage: eb-staged-rebuild resolve [-h] module\n";
 const resolve_help = resolve_usage ++
     \\
@@ -583,6 +594,19 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
             line(a, &b);
         }
     }
+    return 0;
+}
+
+fn cmdList(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
+    const sr = StateRoot.of(env, list_usage, list_help);
+    var opts = [_]Opt{.{ .name = "state-root", .takes_value = true }};
+    var extra: std.ArrayList([]const u8) = .empty;
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    _ = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " list", &extra, &leftovers);
+    const state_root = opts[0].value orelse sr.default orelse
+        usageError(sr.usage, prog ++ " list", "the following arguments are required: --state-root", .{});
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
+    cli.put(1, generations.print(a, generations.collect(a, listJournals(a, state_root))));
     return 0;
 }
 
@@ -1179,6 +1203,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const rest = args[i + 1 ..];
     if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest, top_extra.items);
     if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "list")) return cmdList(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "rollback")) return cmdRollback(a, rest, env, top_extra.items);
@@ -1187,7 +1212,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "verify")) return cmdVerify(a, rest, env, top_extra.items);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
-    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
+    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'list', 'resolve')", .{repr(a, cmd)});
 }
 
 /// The message of the last refusal the engine returned as an error.
@@ -1218,6 +1243,7 @@ test "optionLike takes a negative number for a value, as argparse 3.14 does" {
 test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" {
     const expect = std.testing.expectEqualStrings;
     try expect(status_usage_default, status_help_default[0..status_usage_default.len]);
+    try expect("usage: eb-staged-rebuild list [-h] [--state-root STATE_ROOT]\n", StateRoot.bracketed(list_usage));
     try expect(
         \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
         \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]

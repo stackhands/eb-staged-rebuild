@@ -914,6 +914,7 @@ class StateRootVariableTests(unittest.TestCase):
             for argv in (
                 ["status"],
                 ["status", "run1"],
+                ["list"],
                 ["retire", "--module-file", installed["demo/1"]["module"], "--dry-run"],
                 ["gc", "--dry-run"],
                 ["resume", "run1"],

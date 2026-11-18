@@ -182,12 +182,14 @@ fn dictSet(a: Allocator, d: Py, key: []const u8, value: Py) Py {
     return .{ .dict = out.items };
 }
 
-fn str(v: ?Py) ?[]const u8 {
+/// The text of a JSON string, or null for any other value and for none.
+pub fn str(v: ?Py) ?[]const u8 {
     const x = v orelse return null;
     return if (x == .str) x.str else null;
 }
 
-fn eqlStr(v: ?Py, s: []const u8) bool {
+/// Whether `v` is the JSON string `s`.
+pub fn eqlStr(v: ?Py, s: []const u8) bool {
     const x = str(v) orelse return false;
     return std.mem.eql(u8, x, s);
 }
@@ -291,7 +293,9 @@ fn readFile(c: *Ctx, path: []const u8) []const u8 {
 
 // ---- retire -------------------------------------------------------------
 
-fn gmtimeStamp(a: Allocator, t: f64, comptime with_dashes: bool) []const u8 {
+/// The Unix time `t` in UTC, as 2026-11-17T08:53:00Z with `with_dashes` and
+/// as 20261117T085300Z without, to the second.
+pub fn gmtimeStamp(a: Allocator, t: f64, comptime with_dashes: bool) []const u8 {
     const secs: u64 = @intFromFloat(@max(@floor(t), 0));
     const es = std.time.epoch.EpochSeconds{ .secs = secs };
     const day = es.getEpochDay().calculateYearDay();
@@ -729,7 +733,9 @@ fn referenced(c: *Ctx, directory: []const u8, roots: []const []const u8) bool {
     return false;
 }
 
-fn num(v: ?Py) ?f64 {
+/// A JSON number as a float, a boolean as 1 or 0, and null for any other
+/// value and for none.
+pub fn num(v: ?Py) ?f64 {
     const x = v orelse return null;
     return switch (x) {
         .int => |n| @floatFromInt(n),
