@@ -536,7 +536,9 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
 const retire_usage =
     \\usage: eb-staged-rebuild retire [-h] --state-root STATE_ROOT
     \\                                --module-file MODULE_FILE [--reason REASON]
-    \\                                [--dry-run] [--lock-timeout LOCK_TIMEOUT]
+    \\                                [--dry-run] [--usage-log USAGE_LOG]
+    \\                                [--eb-keep-logs EB_KEEP_LOGS]
+    \\                                [--lock-timeout LOCK_TIMEOUT]
     \\
 ;
 const retire_help = retire_usage ++
@@ -548,6 +550,11 @@ const retire_help = retire_usage ++
     \\                        module file to retire
     \\  --reason REASON
     \\  --dry-run
+    \\  --usage-log USAGE_LOG
+    \\                        usage log checked with eb-keep-logs used --require-
+    \\                        none
+    \\  --eb-keep-logs EB_KEEP_LOGS
+    \\                        eb-keep-logs executable
     \\  --lock-timeout LOCK_TIMEOUT
     \\                        seconds to wait for the lock (default: refuse at once)
     \\
@@ -572,7 +579,10 @@ const rollback_help = rollback_usage ++
 const gc_usage =
     \\usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
     \\                            [--grace-hours GRACE_HOURS] [--dry-run]
-    \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+    \\                            [--lock-timeout LOCK_TIMEOUT]
+    \\                            [--usage-log USAGE_LOG]
+    \\                            [--eb-keep-logs EB_KEEP_LOGS]
+    \\                            [--metrics-file PATH] [--include-failed] [--json]
     \\
 ;
 const gc_help = gc_usage ++
@@ -583,9 +593,17 @@ const gc_help = gc_usage ++
     \\  --grace-hours GRACE_HOURS
     \\  --dry-run
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --usage-log USAGE_LOG
+    \\                        usage log checked with eb-keep-logs used --require-
+    \\                        none
+    \\  --eb-keep-logs EB_KEEP_LOGS
+    \\                        eb-keep-logs executable
+    \\  --metrics-file PATH   atomically write Prometheus metrics after garbage
+    \\                        collection
     \\  --include-failed      also remove the hidden trees and generation of a
     \\                        failed run that published nothing, after the grace
     \\                        period
+    \\  --json                write collection actions as JSON
     \\
 ;
 
@@ -593,6 +611,14 @@ const gc_help = gc_usage ++
 fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
     return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
+}
+
+fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u64 {
+    const value = std.fmt.parseInt(i128, v, 10) catch
+        usageError(usage, who, "argument --min-free-bytes: invalid integer value: {s}", .{repr(a, v)});
+    if (value < 0 or value > std.math.maxInt(u64))
+        usageError(usage, who, "argument --min-free-bytes: not a number of bytes, 0 or more: {s}", .{repr(a, v)});
+    return @intCast(value);
 }
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
@@ -620,6 +646,19 @@ fn envGrace(a: Allocator, env: probe.Env) f64 {
     return hours;
 }
 
+/// EB_STAGED_REBUILD_MIN_FREE_BYTES supplies run's default free-space policy.
+fn envMinFreeBytes(a: Allocator, env: probe.Env) ?u64 {
+    const e = env.get("EB_STAGED_REBUILD_MIN_FREE_BYTES") orelse return null;
+    const minimum = std.fmt.parseInt(i128, e, 10) catch
+        refuse("EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: {s}", .{repr(a, e)});
+    if (minimum < 0 or minimum > std.math.maxInt(u64))
+        refuse(
+            "EB_STAGED_REBUILD_MIN_FREE_BYTES is not a number of bytes, 0 through {d}: {s}",
+            .{ std.math.maxInt(u64), repr(a, e) },
+        );
+    return @intCast(minimum);
+}
+
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
     if (names.len == 0) return;
     usageError(usage, who, "the following arguments are required: {s}", .{std.mem.join(a, ", ", names) catch ""});
@@ -635,6 +674,8 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "module-file", .takes_value = true },
         .{ .name = "reason", .takes_value = true },
         .{ .name = "dry-run", .takes_value = false },
+        .{ .name = "usage-log", .takes_value = true },
+        .{ .name = "eb-keep-logs", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
     };
     const who = prog ++ " retire";
@@ -649,9 +690,9 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[4].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
-    return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout);
+    return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
 
 fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
@@ -681,8 +722,12 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "grace-hours", .takes_value = true },
         .{ .name = "dry-run", .takes_value = false },
+        .{ .name = "usage-log", .takes_value = true },
+        .{ .name = "eb-keep-logs", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "metrics-file", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
+        .{ .name = "json", .takes_value = false },
     };
     const who = prog ++ " gc";
     const sr = StateRoot.of(env, gc_usage, gc_help);
@@ -694,10 +739,22 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[3].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[4].seen, timeout, opts[1].value == null);
+    return admin.gc(
+        &ctx,
+        state_root.?,
+        grace,
+        opts[2].seen,
+        opts[7].seen,
+        timeout,
+        opts[1].value == null,
+        opts[3].value,
+        opts[4].value orelse "eb-keep-logs",
+        opts[6].value,
+        opts[8].seen,
+    );
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -708,8 +765,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " run";
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -770,6 +827,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
     const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
+    const min_free_cli: ?u64 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
     const modules = nonEmpty(vals[1]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_MODULES"));
@@ -784,6 +842,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     } else false;
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
     const grace = grace_cli orelse envGrace(a, env);
+    const min_free_bytes = min_free_cli orelse envMinFreeBytes(a, env);
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     if (vals[13]) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
     return engine.run(a, env, .{
@@ -802,6 +861,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .prepare_executable = vals[11],
         .ledger_config = vals[12],
         .build_dir = vals[13],
+        .min_free_bytes = min_free_bytes,
     });
 }
 
@@ -828,7 +888,7 @@ const StateRoot = struct {
             return .{ .default = null, .usage = usage, .help = help };
         // status --json makes the default usage longer than argparse's width,
         // so the wrapped form is written out rather than derived by bracketing.
-        if (comptime std.mem.indexOf(u8, usage, "[--json]") != null) {
+        if (comptime std.mem.eql(u8, usage, status_usage)) {
             return .{ .default = default, .usage = status_usage_default, .help = status_help_default };
         }
         return .{ .default = default, .usage = bracketed(usage), .help = bracketed(help) };
@@ -1013,13 +1073,18 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
     try expect(
         \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
         \\                            [--grace-hours GRACE_HOURS] [--dry-run]
-        \\                            [--lock-timeout LOCK_TIMEOUT] [--include-failed]
+        \\                            [--lock-timeout LOCK_TIMEOUT]
+        \\                            [--usage-log USAGE_LOG]
+        \\                            [--eb-keep-logs EB_KEEP_LOGS]
+        \\                            [--metrics-file PATH] [--include-failed] [--json]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(
         \\usage: eb-staged-rebuild retire [-h] [--state-root STATE_ROOT]
         \\                                --module-file MODULE_FILE [--reason REASON]
-        \\                                [--dry-run] [--lock-timeout LOCK_TIMEOUT]
+        \\                                [--dry-run] [--usage-log USAGE_LOG]
+        \\                                [--eb-keep-logs EB_KEEP_LOGS]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
         \\
     , StateRoot.bracketed(retire_usage));
     try expect(comptime StateRoot.bracketed(gc_usage) ++ gc_help[gc_usage.len..], StateRoot.bracketed(gc_help));

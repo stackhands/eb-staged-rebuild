@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from eb_staged_rebuild import cli
-from eb_staged_rebuild.engine import Spec, resume, rollback, run
+from eb_staged_rebuild.engine import Result, Spec, resume, rollback, run
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.gc import collect
@@ -106,10 +106,11 @@ def _payload(path):
 
 
 def _main(argv, env=None):
-    """Run the command line with the variables of the grace period and the state root unset unless ``env`` sets them."""
+    """Run the command line with its policy variables unset unless ``env`` sets them."""
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.dict(os.environ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+        os.environ.pop("EB_STAGED_REBUILD_MIN_FREE_BYTES", None)
         os.environ.pop("EB_STAGED_REBUILD_STATE_ROOT", None)
         os.environ.update(env or {})
         try:
@@ -117,6 +118,110 @@ def _main(argv, env=None):
         except SystemExit as exc:
             code = exc.code
     return code, out.getvalue(), err.getvalue()
+
+
+class FreeSpaceTests(unittest.TestCase):
+    def test_default_command_output_and_status_stay_byte_identical(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, builder = _fixture(root)
+            out, err = io.StringIO(), io.StringIO()
+            with (
+                mock.patch(
+                    "eb_staged_rebuild.engine.os.statvfs",
+                    side_effect=AssertionError("default run checked free space"),
+                ),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                result = run(_spec(software, modules, state, builder))
+            expected = (
+                f"eb-staged-rebuild: run run1 backend installpath generation "
+                f"{state}/generations/run1\n"
+                "eb-staged-rebuild: swapped all/demo/1.lua (rename-fallback)\n"
+                "eb-staged-rebuild: published module all/demo/1.lua\n"
+                "eb-staged-rebuild: run run1 published 1 module(s)\n"
+            ).encode()
+        self.assertEqual(
+            (result.returncode, out.getvalue().encode(), err.getvalue().encode()),
+            (0, expected, b""),
+        )
+
+    def test_command_leaves_the_guard_disabled_when_the_option_is_absent(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"]
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertIsNone(called.call_args.args[0].min_free_bytes)
+
+    def test_environment_sets_the_default_reserve(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"],
+                {"EB_STAGED_REBUILD_MIN_FREE_BYTES": "4096"},
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertEqual(called.call_args.args[0].min_free_bytes, 4096)
+
+    def test_option_takes_precedence_over_the_environment(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                [
+                    "run",
+                    "--software",
+                    "software",
+                    "--modules",
+                    "modules",
+                    "--min-free-bytes",
+                    "2048",
+                    "--",
+                    "demo-1.eb",
+                ],
+                {"EB_STAGED_REBUILD_MIN_FREE_BYTES": "site-policy"},
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertEqual(called.call_args.args[0].min_free_bytes, 2048)
+
+    def test_environment_reserve_is_a_nonnegative_64_bit_integer(self):
+        cases = {
+            "": "is not an integer: ''",
+            "site-policy": "is not an integer: 'site-policy'",
+            "-1": "is not a number of bytes, 0 through 18446744073709551615: '-1'",
+            "18446744073709551616": (
+                "is not a number of bytes, 0 through 18446744073709551615: "
+                "'18446744073709551616'"
+            ),
+        }
+        for value, message in cases.items():
+            with self.subTest(value=value):
+                code, out, err = _main(
+                    ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"],
+                    {"EB_STAGED_REBUILD_MIN_FREE_BYTES": value},
+                )
+                self.assertEqual(
+                    (code, out.encode(), err.encode()),
+                    (2, b"", f"eb-staged-rebuild: EB_STAGED_REBUILD_MIN_FREE_BYTES {message}\n".encode()),
+                )
+
+    def test_minimum_free_space_refuses_before_the_journal_and_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+            builder = mock.Mock(return_value=0)
+            spec = _spec(software, modules, state, builder)
+            spec.min_free_bytes = 4096
+            space = mock.Mock(f_bavail=3, f_frsize=1024)
+            with mock.patch("eb_staged_rebuild.engine.os.statvfs", return_value=space):
+                with self.assertRaisesRegex(
+                    Refused,
+                    r"generation filesystem has 3072 bytes available; "
+                    r"--min-free-bytes requires 4096",
+                ):
+                    run(spec)
+            builder.assert_not_called()
+            self.assertFalse(os.path.exists(os.path.join(state, "runs")))
 
 
 class TransactionTests(unittest.TestCase):
@@ -517,6 +622,16 @@ class GarbageCollectionTests(unittest.TestCase):
             f"remove: {retired} (previous live tree)\n"
             f"remove: {generation} (generation of a complete run)\n",
         )
+
+    def test_gc_default_output_remains_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            code, out, err = _main(["gc", "--state-root", state, "--dry-run"])
+            expected_code, expected_out = self._removal(state, retired)
+            self.assertEqual(
+                (code, out.encode("utf-8"), err.encode("utf-8")),
+                (expected_code, expected_out.encode("utf-8"), b""),
+            )
 
     def test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded(self):
         with tempfile.TemporaryDirectory() as root:

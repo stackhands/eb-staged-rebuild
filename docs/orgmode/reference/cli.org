@@ -18,13 +18,16 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
-                      [--ledger-config FILE] [--build-dir DIR] -- EASYCONFIG [EB-ARGUMENT...]
+                      [--ledger-config FILE] [--build-dir DIR] [--min-free-bytes BYTES]
+                      -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
-eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
-                     [--lock-timeout SECONDS]
-eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
-                         [--lock-timeout SECONDS]
+eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
+                     [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
+                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH]
+eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
+                         [--dry-run] [--usage-log FILE]
+                         [--eb-keep-logs EB_KEEP_LOGS] [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
 eb-staged-rebuild resolve MODULE_FILE
 #+end_example
@@ -103,7 +106,7 @@ The lines, in this order:
 | =filesystem: FSTYPE MOUNT=                                                       | The filesystem type and mount point of =--path=.                                                                                                                      |
 | =lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured= | How the state-root lock is taken, and that it was measured on one node only.                                                                                          |
 
-[[file:json-output.org][Machine-readable command output]] names the JSON Schema files for =probe --json= and =status --json=.
+[[file:json-output.org][Machine-readable command output]] names the JSON Schema files for =probe --json=, =gc --json= and =status --json=.
 
 *** run
 
@@ -125,8 +128,12 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--prepare=         | The absolute path of a program to run with the path of =prepare-context.json=, after the build and before the exchange; a status other than 0 stops the run with that status.                          |
 | =--ledger-config=   | A JSON file that names an eb-stack ledger to record each publication in.                                                                                                                               |
 | =--build-dir=       | A scratch build directory passed to EasyBuild as =--buildpath= during the build. Refused when inside the generation root or the live =--software= or =--modules= trees. When omitted, EasyBuild keeps its own default build path. |
+| =--min-free-bytes=  | Refuse before the journal and build unless the generation filesystem has at least this many bytes available to the caller. =EB_STAGED_REBUILD_MIN_FREE_BYTES= supplies the default.                                    |
 
 Once it has checked them, =run= makes a relative =--software=, =--modules=, =--state-root= or =--build-dir= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
+When =--min-free-bytes= is set, =run= reads the filesystem's available blocks after taking the state-root lock and before creating the run journal or starting the build command.
+It compares the available block count times the fragment size with =BYTES=.
+This is a reserve threshold, not an estimate of the rebuilt installation's size.
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
 Every module that list names, except one marked =[x]= (installed, and left alone), must be an existing directory =software/NAME/VERSION=.
 When the dry run marks =[ ]= (not installed) a module that =--module= does not name, =run= asks =eb --extended-dry-run= with the same arguments, =--stop=fetch= and =--ignore-locks=, and leaves out each module marked =[ ]= that EasyBuild would not build.
@@ -172,11 +179,20 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--state-root=     | The state root whose journals name the trees; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required.                                                                                                                                                                              |
 | =--grace-hours=    | Hours to keep every tree after its run published or rolled back, a number 0 or more. Without it, a tree is kept for the hours its run recorded, and the directory of a retired module file for =EB_STAGED_REBUILD_GRACE_HOURS=, or 144; so is a tree whose journal records no number of hours, 0 or more. |
 | =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                                          |
+| =--usage-log=      | Check this usage log with =eb-keep-logs used --prefix TREE --require-none= before removing a hidden tree or generation; a hit keeps the path.                                                                                                                                                           |
+| =--eb-keep-logs=   | The =eb-keep-logs= executable to run with =--usage-log=; the default is =eb-keep-logs=.                                                                                                                                                                                                                 |
 | =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
+| =--metrics-file=   | After a completed pass, atomically replace this file with Prometheus text exposition. It cannot be used with =--dry-run=. Without this option, no metrics file is written.                                                                                                                                   |
+| =--json=           | Print one JSON document with the collection actions instead of one line per action.                                                                                                                                                                                                                        |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
+With =--json=, the document has one =actions= array in the same order.
+Each item has the string fields =action=, =path= and =reason=; no actions produce ={"actions": []}=.
+The metrics file reports generation directories present, the age of the newest generation whose complete journal, current live module and live-tree stamp show that it remains published, and the time captured after this =gc= pass completes.
+Failed and unfinished generations do not become current merely because their generation directories are newer.
+It does not report bytes freed, because the tool does not know how many storage bytes the filesystem released.
 
 *** retire
 
@@ -188,6 +204,8 @@ Move a module file out of the module tree, once a later =MODULEPATH= entry provi
 | =--module-file=  | The module file to retire, a regular file with a =root= assignment; required.                                                                                      |
 | =--reason=       | Text to keep in the retire record.                                                                                                                                 |
 | =--dry-run=      | Print what would move, and move nothing.                                                                                                                           |
+| =--usage-log=    | Check this usage log with =eb-keep-logs used --prefix SOFTWARE_DIR --require-none= before retiring the module file; a hit refuses the retire.                    |
+| =--eb-keep-logs= | The =eb-keep-logs= executable to run with =--usage-log=; the default is =eb-keep-logs=.                                                        |
 | =--lock-timeout= | Seconds to wait for the state root's lock; the default is 0, which refuses at once.                                                                                |
 
 The file moves to =<state-root>/retired/STAMP/= followed by its absolute path, and the record is named =retire-STAMP=, where =STAMP= is the UTC time as =YYYYMMDDTHHMMSSZ=.
@@ -240,6 +258,7 @@ When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printe
 | =EB_STAGED_REBUILD_STATE_ROOT=   | =run=, =resume=, =rollback=, =gc=, =retire=, =status= | The default of =--state-root=, unless it is empty.                                               |
 | =EB_STAGED_REBUILD_EB=           | =probe=, =run=                                        | The default of =--eb=.                                                                           |
 | =EB_STAGED_REBUILD_GRACE_HOURS=  | =run=, =gc=                                           | The default of =--grace-hours=, a number 0 or more; =gc= uses it only where no run recorded one. |
+| =EB_STAGED_REBUILD_MIN_FREE_BYTES= | =run=                                                | The default of =--min-free-bytes=, an integer from 0 through 18446744073709551615.                |
 
 [[file:environment.org][Environment variables]] also lists what reaches EasyBuild.
 

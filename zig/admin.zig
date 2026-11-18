@@ -12,8 +12,10 @@ const probe = @import("probe.zig");
 const sys = common.sys;
 const fsx = common.fsx;
 const json = common.json;
+const pytext = common.pytext;
 const atomic = common.atomic;
 const state = common.state;
+const proc = common.proc;
 const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
@@ -32,6 +34,33 @@ fn refuse(comptime f: []const u8, args: anytype) noreturn {
 /// "eb-staged-rebuild: MESSAGE" on stdout, as the Python tool logs progress.
 fn log(comptime f: []const u8, args: anytype) void {
     cli.out("eb-staged-rebuild: " ++ f ++ "\n", args);
+}
+
+const UsageCheck = struct {
+    in_use: bool,
+    detail: []const u8,
+};
+
+fn checkUsageLog(c: *Ctx, prefix: []const u8, usage_log: ?[]const u8, eb_keep_logs: []const u8) UsageCheck {
+    const log_path = usage_log orelse return .{ .in_use = false, .detail = "" };
+    const argv = [_][]const u8{ eb_keep_logs, "used", "--prefix", prefix, "--require-none", log_path };
+    const exe = if (eb_keep_logs.len > 0 and eb_keep_logs[0] == '/') eb_keep_logs else (proc.which(c.a, eb_keep_logs, c.env.get("PATH") orelse "/bin:/usr/bin") catch null) orelse
+        refuse("cannot run {s} used: [Errno 2] No such file or directory: '{s}'", .{ eb_keep_logs, eb_keep_logs });
+    const r = proc.run(c.a, exe, &argv, c.env.envp, .{
+        .stdout_limit = 16 << 20,
+        .stderr_limit = 1 << 20,
+        .timeout_ms = null,
+        .new_session = false,
+    }) catch |err| refuse("cannot run {s} used: {t}", .{ eb_keep_logs, err });
+    const code: i64 = switch (r.term) {
+        .exited => |v| v,
+        .signaled => |v| -@as(i64, v),
+    };
+    if (code == 0) return .{ .in_use = false, .detail = "" };
+    const detail = if (r.stdout.len > 0) pytext.pyStrip(pytext.decodeReplace(c.a, r.stdout) catch r.stdout) else pytext.pyStrip(pytext.decodeReplace(c.a, r.stderr) catch r.stderr);
+    if (code == 2) return .{ .in_use = true, .detail = detail };
+    const tail = if (detail.len > 500) detail[detail.len - 500 ..] else detail;
+    refuse("{s} used exited {d}: {s}", .{ eb_keep_logs, code, tail });
 }
 
 /// The time in seconds since the epoch, as Python's time.time().
@@ -140,6 +169,7 @@ pub const Ctx = struct {
     a: Allocator,
     env: probe.Env,
     pause: PauseCtx,
+    now_fn: *const fn () f64 = nowSeconds,
 
     /// The fault hooks: pause at EB_STAGED_REBUILD_PAUSE_AT and, in the
     /// -Dtest-ops artifact only, fail at EB_STAGED_REBUILD_FAIL_AT.
@@ -362,11 +392,30 @@ fn rename(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8
 /// retire: move a module file aside under a retire journal, and leave its
 /// software directory in place; with `dry_run`, only say what would be
 /// retired. Returns the exit status.
-pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reason: ?[]const u8, dry_run: bool, lock_timeout: ?f64) u8 {
+pub fn retire(
+    c: *Ctx,
+    state_root_in: []const u8,
+    module_file: []const u8,
+    reason: ?[]const u8,
+    dry_run: bool,
+    lock_timeout: ?f64,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+) u8 {
     const a = c.a;
     const state_root = abspath(a, state_root_in);
     if (dry_run) {
         const p = plan(c, state_root, module_file);
+        const used = checkUsageLog(c, p.software_dir, usage_log, eb_keep_logs);
+        if (used.in_use) {
+            var why = a.print("refusing to retire {s}: usage log reports paths under {s}", .{ p.module, p.software_dir }) catch "";
+            if (used.detail.len > 0) {
+                var it = std.mem.splitScalar(u8, used.detail, '\n');
+                const first = it.next() orelse "";
+                why = a.print("{s}: {s}", .{ why, first }) catch why;
+            }
+            refuse("{s}", .{why});
+        }
         for (linksTo(a, p.module)) |link| log("would retire the link {s}", .{link});
         log("would retire {s} (software directory {s} is left in place)", .{ p.module, p.software_dir });
         return 0;
@@ -374,6 +423,16 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
     const p = plan(c, state_root, module_file);
+    const used = checkUsageLog(c, p.software_dir, usage_log, eb_keep_logs);
+    if (used.in_use) {
+        var why = a.print("refusing to retire {s}: usage log reports paths under {s}", .{ p.module, p.software_dir }) catch "";
+        if (used.detail.len > 0) {
+            var it = std.mem.splitScalar(u8, used.detail, '\n');
+            const first = it.next() orelse "";
+            why = a.print("{s}: {s}", .{ why, first }) catch why;
+        }
+        refuse("{s}", .{why});
+    }
     const when = nowSeconds();
     const stamp = gmtimeStamp(a, when, false);
     var name = stamp;
@@ -589,6 +648,20 @@ fn num(v: ?Py) ?f64 {
 
 const Action = struct { path: []const u8, action: []const u8, reason: []const u8 };
 
+fn gcDocument(a: Allocator, actions: []const Action) Py {
+    var rows: std.ArrayList(Py) = .empty;
+    for (actions) |act| {
+        var row: std.ArrayList(Py.Entry) = .empty;
+        row.append(a, .{ .key = "action", .value = Py.s(act.action) }) catch oom();
+        row.append(a, .{ .key = "path", .value = Py.s(act.path) }) catch oom();
+        row.append(a, .{ .key = "reason", .value = Py.s(act.reason) }) catch oom();
+        rows.append(a, .{ .dict = row.items }) catch oom();
+    }
+    var top: std.ArrayList(Py.Entry) = .empty;
+    top.append(a, .{ .key = "actions", .value = .{ .list = rows.items } }) catch oom();
+    return .{ .dict = top.items };
+}
+
 fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
     const st = pyfmt.get(j, "state");
     if (eqlStr(st, "complete")) return "complete run";
@@ -598,7 +671,17 @@ fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
 }
 
 /// Remove the generation of a run whose hidden trees are all settled.
-fn collectGeneration(c: *Ctx, state_root: []const u8, j: Py, roots: []const []const u8, include_failed: bool, dry_run: bool, actions: *std.ArrayList(Action)) bool {
+fn collectGeneration(
+    c: *Ctx,
+    state_root: []const u8,
+    j: Py,
+    roots: []const []const u8,
+    include_failed: bool,
+    dry_run: bool,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+    actions: *std.ArrayList(Action),
+) bool {
     const what = finishedRun(j, include_failed) orelse return false;
     const rid = str(pyfmt.get(j, "run_id")) orelse "";
     if (rid.len == 0 or std.mem.eql(u8, rid, ".") or std.mem.eql(u8, rid, "..") or std.mem.findScalar(u8, rid, '/') != null)
@@ -607,6 +690,17 @@ fn collectGeneration(c: *Ctx, state_root: []const u8, j: Py, roots: []const []co
     if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
     if (referenced(c, path, roots)) {
         actions.append(c.a, .{ .path = path, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+        return false;
+    }
+    const used = checkUsageLog(c, path, usage_log, eb_keep_logs);
+    if (used.in_use) {
+        var reason: []const u8 = "usage log reports paths under it";
+        if (used.detail.len > 0) {
+            var it = std.mem.splitScalar(u8, used.detail, '\n');
+            const first = it.next() orelse "";
+            reason = c.a.print("{s}: {s}", .{ reason, first }) catch reason;
+        }
+        actions.append(c.a, .{ .path = path, .action = "keep", .reason = reason }) catch oom();
         return false;
     }
     if (!dry_run) removeTree(c, path, dirname(path));
@@ -691,14 +785,111 @@ fn runGrace(j: Py, default: f64) f64 {
     return if (hours >= 0) hours else default;
 }
 
+fn metricsTreeRunId(c: *Ctx, path: []const u8) ?[]const u8 {
+    const stamp = std.fs.path.join(c.a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
+    if (!std.mem.eql(u8, main_mod.lstatKind(stamp), "file")) return null;
+    const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;
+    defer sys.close(f.fd);
+    const raw = fsx.readAll(c.a, f.fd, 1 << 20) catch return null;
+    const value = json.toPy(c.a, json.parse(c.a, raw) catch return null) catch return null;
+    return str(pyfmt.get(value, "run_id"));
+}
+
+fn currentCreatedAt(c: *Ctx, journals: []const Py, now: f64) ?f64 {
+    var newest: ?f64 = null;
+    for (journals) |j| {
+        if (!eqlStr(pyfmt.get(j, "state"), "complete")) continue;
+        const run_id = str(pyfmt.get(j, "run_id")) orelse continue;
+        const created: f64 = switch (pyfmt.get(j, "created_at") orelse continue) {
+            .int => |n| @floatFromInt(n),
+            .float => |f| f,
+            else => continue,
+        };
+        if (!std.math.isFinite(created) or created < 0 or created > now) continue;
+        const modules = pyfmt.get(j, "modules_plan") orelse continue;
+        if (modules != .list) continue;
+        for (modules.list) |m| {
+            if (!eqlStr(pyfmt.get(m, "status"), "published")) continue;
+            const live = str(pyfmt.get(m, "live_software")) orelse continue;
+            const live_module = str(pyfmt.get(m, "live_module")) orelse continue;
+            const module_root = moduleRoot(c, live_module) orelse continue;
+            if (!std.mem.eql(u8, module_root, abspath(c.a, live))) continue;
+            const stamped = metricsTreeRunId(c, live) orelse continue;
+            if (std.mem.eql(u8, stamped, run_id)) {
+                newest = if (newest) |known| @max(known, created) else created;
+                break;
+            }
+        }
+    }
+    return newest;
+}
+
+fn metricsBody(c: *Ctx, state_root: []const u8, journals: []const Py, now: f64) []const u8 {
+    const generations = std.fs.path.join(c.a, &.{ state_root, "generations" }) catch oom();
+    var names: std.ArrayList([]const u8) = .empty;
+    const fd = fsx.openDir(fsx.cwd, generations, true) catch |err| switch (err) {
+        error.NotFound => null,
+        else => refuse("{s}", .{main_mod.osError(c.a, err, generations)}),
+    };
+    if (fd) |directory| {
+        defer sys.close(directory);
+        var it = fsx.DirIter.init(c.a, directory) catch oom();
+        while (it.next() catch |err| refuse("{s}", .{main_mod.osError(c.a, err, generations)})) |e| {
+            const path = std.fs.path.join(c.a, &.{ generations, e.name }) catch oom();
+            if (std.mem.eql(u8, main_mod.lstatKind(path), "dir"))
+                names.append(c.a, c.a.dupe(u8, e.name) catch oom()) catch oom();
+        }
+    }
+    const current_created_at = currentCreatedAt(c, journals, now);
+    var out: std.ArrayList(u8) = .empty;
+    out.print(c.a,
+        \\# HELP eb_staged_rebuild_generations_present Real generation directories present after garbage collection.
+        \\# TYPE eb_staged_rebuild_generations_present gauge
+        \\eb_staged_rebuild_generations_present {d}
+        \\# HELP eb_staged_rebuild_current_generation_age_seconds Age of the newest generation that remains published live.
+        \\# TYPE eb_staged_rebuild_current_generation_age_seconds gauge
+        \\
+    , .{names.items.len}) catch oom();
+    if (current_created_at) |created| out.print(c.a, "eb_staged_rebuild_current_generation_age_seconds {d}\n", .{now - created}) catch oom();
+    out.print(c.a,
+        \\# HELP eb_staged_rebuild_last_gc_timestamp_seconds Unix timestamp of the last completed garbage-collection pass.
+        \\# TYPE eb_staged_rebuild_last_gc_timestamp_seconds gauge
+        \\eb_staged_rebuild_last_gc_timestamp_seconds {d}
+        \\
+    , .{now}) catch oom();
+    return out.items;
+}
+
+fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []const Py) void {
+    if (path.len == 0) refuse("--metrics-file must name a file; it is empty", .{});
+    const parent = dirname(path);
+    atomic.makedirs(if (parent.len > 0) parent else ".") catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
+    var why: atomic.Why = .{};
+    atomic.atomicWrite(c.a, path, metricsBody(c, state_root, journals, c.now_fn()), .{ .faults = c.faults(), .step = "metrics" }, &why) catch |err|
+        if (err == error.Refused) refuse("{s}", .{why.msg}) else refuse("{s}", .{main_mod.osError(c.a, err, path)});
+}
+
 /// gc: remove each hidden tree whose grace period is over and, with
 /// `include_failed`, the staged tree of a failed run that published
 /// nothing; with `dry_run`, only list them. `grace_hours` applies to every
 /// tree, or with `run_grace` only to the trees whose run recorded no grace
 /// period and to retired module files. Returns the exit status.
-pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64, run_grace: bool) u8 {
+pub fn gc(
+    c: *Ctx,
+    state_root_in: []const u8,
+    grace_hours: f64,
+    dry_run: bool,
+    include_failed: bool,
+    lock_timeout: ?f64,
+    run_grace: bool,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+    metrics_file: ?[]const u8,
+    json_output: bool,
+) u8 {
     const a = c.a;
-    const now = nowSeconds();
+    if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
+    const now = c.now_fn();
     const l = lock(c, state_root_in, lock_timeout);
     defer l.release();
     const state_root = abspath(a, state_root_in);
@@ -758,13 +949,35 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
                 settled = false;
                 continue;
             }
+            const used = checkUsageLog(c, retired, usage_log, eb_keep_logs);
+            if (used.in_use) {
+                var reason: []const u8 = "usage log reports paths under it";
+                if (used.detail.len > 0) {
+                    var it = std.mem.splitScalar(u8, used.detail, '\n');
+                    const first = it.next() orelse "";
+                    reason = a.print("{s}: {s}", .{ reason, first }) catch reason;
+                }
+                actions.append(a, .{ .path = retired, .action = "keep", .reason = reason }) catch oom();
+                settled = false;
+                continue;
+            }
             actions.append(a, .{ .path = retired, .action = "remove", .reason = why }) catch oom();
             if (dry_run) continue;
             removeTree(c, retired, dirname(retired));
             mods[mi] = dictSet(a, m, "retired_removed_at", .{ .float = now });
             changed = true;
         }
-        const generation_removed = settled and collectGeneration(c, state_root, j, roots, include_failed, dry_run, &actions);
+        const generation_removed = settled and collectGeneration(
+            c,
+            state_root,
+            j,
+            roots,
+            include_failed,
+            dry_run,
+            usage_log,
+            eb_keep_logs,
+            &actions,
+        );
         if (generation_removed) j = dictSet(a, j, "generation_removed_at", .{ .float = now });
         if (changed or generation_removed) {
             if (changed) j = dictSet(a, j, "modules_plan", .{ .list = mods });
@@ -807,7 +1020,14 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
             actions.append(a, .{ .path = dir, .action = "manual", .reason = a.print("ready to remove by hand after {s}; gc does not delete the stable software directory", .{gmtimeStamp(a, ready, true)}) catch "" }) catch oom();
         }
     }
-    for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
+    if (metrics_file) |path| writeMetrics(c, path, state_root, journals);
+    if (json_output) {
+        const out = json.dumps(a, gcDocument(a, actions.items), 2, true) catch return 1;
+        cli.put(1, out);
+        cli.put(1, "\n");
+    } else {
+        for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
+    }
     return 0;
 }
 
@@ -842,6 +1062,86 @@ test "finishedRun: a complete or rolled-back run, and a failed one only with inc
     try std.testing.expectEqualStrings("failed run", finishedRun(.{ .dict = &failed }, true).?);
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &building }, true));
     try std.testing.expectEqual(@as(?[]const u8, null), finishedRun(.{ .dict = &.{} }, true));
+}
+
+test "metrics exclude a retired publication whose live module is missing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-metrics-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    try atomic.makedirs(try a.print("{s}/generations/current", .{root}));
+    try atomic.makedirs(try a.print("{s}/generations/failed", .{root}));
+    try atomic.makedirs(try a.print("{s}/generations/building", .{root}));
+    const live = try a.print("{s}/software/demo/1", .{root});
+    try atomic.makedirs(live);
+    const stamp = try a.print("{s}/.eb-staged-rebuild-complete", .{live});
+    const stamp_fd = try sys.openat(fsx.cwd, stamp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(stamp_fd, "{\"run_id\":\"current\"}\n");
+    sys.close(stamp_fd);
+    const live_module = try a.print("{s}/modules/all/demo/1.lua", .{root});
+    try atomic.makedirs(dirname(live_module));
+    const module_fd = try sys.openat(fsx.cwd, live_module, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(module_fd, try a.print("local root = \"{s}\"\n", .{live}));
+    sys.close(module_fd);
+    const current_plan = [_]Py{.{ .dict = &.{
+        .{ .key = "status", .value = Py.s("published") },
+        .{ .key = "live_software", .value = Py.s(live) },
+        .{ .key = "live_module", .value = Py.s(live_module) },
+    } }};
+    const journals = [_]Py{
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("current") },
+            .{ .key = "state", .value = Py.s("complete") },
+            .{ .key = "created_at", .value = .{ .float = 700 } },
+            .{ .key = "modules_plan", .value = .{ .list = &current_plan } },
+        } },
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("failed") },
+            .{ .key = "state", .value = Py.s("failed") },
+            .{ .key = "created_at", .value = .{ .float = 900 } },
+            .{ .key = "modules_plan", .value = .{ .list = &.{} } },
+        } },
+        .{ .dict = &.{
+            .{ .key = "run_id", .value = Py.s("building") },
+            .{ .key = "state", .value = Py.s("building") },
+            .{ .key = "created_at", .value = .{ .float = 950 } },
+            .{ .key = "modules_plan", .value = .{ .list = &.{} } },
+        } },
+    };
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const body = metricsBody(&c, root, &journals, 1000);
+    try std.testing.expect(std.mem.indexOf(u8, body, "eb_staged_rebuild_generations_present 3\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "eb_staged_rebuild_current_generation_age_seconds 300\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "bytes") == null);
+    try sys.unlinkat(fsx.cwd, live_module, 0);
+    const retired = metricsBody(&c, root, &journals, 1000);
+    try std.testing.expect(std.mem.indexOf(u8, retired, "\neb_staged_rebuild_current_generation_age_seconds ") == null);
+}
+
+test "gc records its completion time after its starting time" {
+    const Clock = struct {
+        var calls: usize = 0;
+        fn now() f64 {
+            calls += 1;
+            return if (calls == 1) 1000 else 2000;
+        }
+    };
+    Clock.calls = 0;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-metrics-time-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const metrics = try a.print("{s}/metrics.prom", .{root});
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false));
+    try std.testing.expectEqual(@as(usize, 2), Clock.calls);
+    try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
 }
 
 test "linksTo finds the links that resolve to a module file beside it and in each class directory" {

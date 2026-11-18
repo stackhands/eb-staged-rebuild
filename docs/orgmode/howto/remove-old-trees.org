@@ -49,6 +49,13 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
 
    Every tree is younger than the 144 hours its run recorded, and is kept.
    The grace period of a tree starts when its run published, or when it was rolled back.
+   For an automation that needs fields instead of lines, add =--json=:
+
+   #+begin_src bash
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --dry-run --json
+   #+end_src
+
+   Its =actions= array has one object per path, with =action=, =path= and =reason= fields.
 3. Remove the trees whose grace period is over.
    =gc --grace-hours= gives every tree the same grace period instead of its run's; with =--grace-hours 0=, as here, every tree is past it. Look first, then remove them:
 
@@ -65,6 +72,13 @@ Each one stays beside the stable directory under a hidden name, =software/NAME/.
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-2 (previous live tree)
    remove: /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-3 (rolled-back candidate)
    #+end_example
+
+   To keep a tree or generation while cluster usage logs still name it, add =--usage-log FILE=:
+
+   #+begin_src bash
+   eb-staged-rebuild gc --state-root /opt/site/.eb-staged-rebuild --grace-hours 0 \
+     --usage-log /var/log/xalt/usage.jsonl --dry-run
+   #+end_src
 
 ** Check that it worked
 

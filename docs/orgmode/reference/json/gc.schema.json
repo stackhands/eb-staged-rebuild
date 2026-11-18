@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stackhands.github.io/eb-staged-rebuild/reference/json/gc.schema.json",
+  "title": "eb-staged-rebuild gc output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "actions"
+  ],
+  "properties": {
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "manual",
+              "remove"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

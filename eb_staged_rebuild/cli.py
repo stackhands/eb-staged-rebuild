@@ -49,6 +49,16 @@ def _hours(text):
     return value
 
 
+def _bytes(text):
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer value: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"not a number of bytes, 0 or more: {text!r}")
+    return value
+
+
 def _grace(value):
     if value is not None:
         return value
@@ -60,6 +70,24 @@ def _grace(value):
     if not _is_hours(hours):
         raise Refused(f"EB_STAGED_REBUILD_GRACE_HOURS is not a number of hours, 0 or more: {text!r}")
     return hours
+
+
+def _min_free_bytes(value):
+    if value is not None:
+        return value
+    text = os.environ.get("EB_STAGED_REBUILD_MIN_FREE_BYTES")
+    if text is None:
+        return None
+    try:
+        minimum = int(text)
+    except ValueError:
+        raise Refused(f"EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: {text!r}") from None
+    if minimum < 0 or minimum > (1 << 64) - 1:
+        raise Refused(
+            "EB_STAGED_REBUILD_MIN_FREE_BYTES is not a number of bytes, "
+            f"0 through {(1 << 64) - 1}: {text!r}"
+        )
+    return minimum
 
 
 def _add_state_root(parser):
@@ -121,6 +149,13 @@ def _parser():
         metavar="DIR",
         help="scratch build directory passed to eb as --buildpath",
     )
+    run_p.add_argument(
+        "--min-free-bytes",
+        type=_bytes,
+        default=None,
+        metavar="BYTES",
+        help="refuse before the build unless the generation filesystem has at least BYTES available",
+    )
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
@@ -138,11 +173,19 @@ def _parser():
     gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
+    gc_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
+    gc_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
+    gc_p.add_argument(
+        "--metrics-file",
+        metavar="PATH",
+        help="atomically write Prometheus metrics after garbage collection",
+    )
     gc_p.add_argument(
         "--include-failed",
         action="store_true",
         help="also remove the hidden trees and generation of a failed run that published nothing, after the grace period",
     )
+    gc_p.add_argument("--json", action="store_true", help="write collection actions as JSON")
 
     retire_p = sub.add_parser(
         "retire",
@@ -152,6 +195,8 @@ def _parser():
     retire_p.add_argument("--module-file", required=True, help="module file to retire")
     retire_p.add_argument("--reason", default=None)
     retire_p.add_argument("--dry-run", action="store_true")
+    retire_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
+    retire_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
     retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
@@ -228,6 +273,7 @@ def _dispatch(args):
             prepare_executable=args.prepare,
             ledger_config=args.ledger_config,
             build_dir=args.build_dir,
+            min_free_bytes=_min_free_bytes(args.min_free_bytes),
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")
@@ -250,9 +296,25 @@ def _dispatch(args):
             include_failed=args.include_failed,
             lock_timeout=args.lock_timeout,
             run_grace=args.grace_hours is None,
+            usage_log=args.usage_log,
+            eb_keep_logs=args.eb_keep_logs,
+            metrics_file=args.metrics_file,
         )
-        for action in actions:
-            print(f"{action['action']}: {action['path']} ({action['reason']})")
+        if args.json:
+            document = {
+                "actions": [
+                    {
+                        "action": action["action"],
+                        "path": action["path"],
+                        "reason": action["reason"],
+                    }
+                    for action in actions
+                ]
+            }
+            print(json.dumps(document, indent=2, sort_keys=True))
+        else:
+            for action in actions:
+                print(f"{action['action']}: {action['path']} ({action['reason']})")
         return 0
     if args.command == "retire":
         result = retire(
@@ -261,6 +323,8 @@ def _dispatch(args):
             reason=args.reason,
             dry_run=args.dry_run,
             lock_timeout=args.lock_timeout,
+            usage_log=args.usage_log,
+            eb_keep_logs=args.eb_keep_logs,
         )
         return result.returncode
     if args.command == "status":

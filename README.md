@@ -19,6 +19,8 @@ pixi run -e docs docbld
 
 The HTML is written to `docs/build/html`. `docs/orgmode/contributing.org` says how to write a page.
 
+Release bundles now include bash and zsh completion scripts with a man page produced from `_parser`, using pinned `shtab` and `argparse-manpage` in CI. Fish output is excluded because the generator toolchain does not provide fish completion support.
+
 ## Install
 
 Linux only. There are two builds of the same command-line tool; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference.
@@ -55,6 +57,7 @@ eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-1
 ```
 
 `probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover failed runs, rollback and `gc`.
+Sites that keep a filesystem reserve can add `--min-free-bytes BYTES` to `run`; without it, the command does not check free space.
 
 ## Changelog
 

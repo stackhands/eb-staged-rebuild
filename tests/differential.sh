@@ -126,6 +126,7 @@ norm() {
     sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
         -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
         -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${work}/(py|zig)#W#g" \
+        -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
         -e 's#[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox#SANDBOX#' \
         -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
@@ -146,6 +147,9 @@ fixture() {
     chmod +x "${root}/eb"
     printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_stack.py" "$@"\n' "${repo_root}" > "${root}/ebstack"
     chmod +x "${root}/ebstack"
+    printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_keep_logs.py" "$@"\n' "${repo_root}" > "${root}/keep-logs"
+    chmod +x "${root}/keep-logs"
+    printf '{"record":"x"}\n' > "${root}/usage.log"
     printf '{"eb_stack": "%s/ebstack", "log": "%s/ledger.jsonl", "key": "%s/key.pem", "head": "%s/head.json", "actor": "ci", "stack": "s", "target": "t"}\n' "${root}" "${root}" "${root}" "${root}" > "${root}/ledger.json"
     # Refusal fixtures: a symlinked rebuild target, a symlinked state root,
     # a symlinked module file, a module file without a root assignment, and
@@ -229,12 +233,18 @@ compare_admin() {
         find "${root}" -name journal.json -printf '%h\0' 2>/dev/null | LC_ALL=C sort -z |
             while IFS= read -r -d '' d; do cat "${d}/journal.json"; done > "${out}.journals"
         (cd "${root}" && find . -not -name '.lock*' -not -name .last-retire 2>/dev/null) > "${out}.tree"
-        for f in out err journals; do norm < "${out}.${f}" > "${out}.${f}.n"; done
+        find "${root}" -name '*.prom' -type f -print0 2>/dev/null | LC_ALL=C sort -z |
+            while IFS= read -r -d '' f; do printf '%s\n' "${f#${root}/}"; cat "${f}"; done > "${out}.metrics"
+        for f in out err journals metrics; do
+            norm < "${out}.${f}" |
+                sed -E 's/^(eb_staged_rebuild_(current_generation_age|last_gc_timestamp)_seconds) .*/\1 TIME/' \
+                > "${out}.${f}.n"
+        done
         # Sorted after normalizing, so names that differ only in a stamp
         # compare by what is left.
         norm < "${out}.tree" | LC_ALL=C sort > "${out}.tree.n"
     done
-    for f in rc out.n err.n journals.n tree.n; do
+    for f in rc out.n err.n journals.n metrics.n tree.n; do
         if ! cmp -s "${work}/py.admin.${f}" "${work}/zig.admin.${f}"; then
             [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
             bad=1
@@ -246,10 +256,15 @@ compare_admin() {
 fixture "${work}/py"
 fixture "${work}/zig"
 compare_admin "retire --dry-run" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --dry-run
+compare_admin "retire, --usage-log in use" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "retire, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "retire" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --reason moved
 compare_admin "retire again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "status after retire" status --state-root @ROOT@/state
 compare_admin "gc keeps within grace" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc --json keeps within grace" gc --state-root @ROOT@/state --dry-run --json
+compare_admin "gc, --usage-log keeps an in-use tree" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "gc, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 if [ "$(id -u)" != 0 ]; then
     for impl in py zig; do chmod 0 "${work}/${impl}/modules/all/kept"; done
     compare_admin "gc, an unreadable live module" gc --state-root @ROOT@/state --grace-hours 0
@@ -292,19 +307,31 @@ for impl in py zig; do rm "${work}/${impl}/modules/tools/classy/1.lua"; done
 compare_admin "rollback the retire with class links" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "run --dry-run, auto" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
+compare_admin "run --dry-run, free-space environment unset" env -u EB_STAGED_REBUILD_MIN_FREE_BYTES @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
 compare_admin "run --dry-run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --dry-run -- demo-1.eb -f
 compare_admin "run, no easyconfig" run --software @ROOT@/software --modules @ROOT@/modules --dry-run
 compare_admin "run, no software" run --dry-run -- x.eb
 compare_admin "run, bad backend" run --backend nope -- x.eb
 compare_admin "run, empty prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare= --dry-run -- x.eb
 compare_admin "run, relative prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare=rel --dry-run -- x.eb
+compare_admin "run, negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --min-free-bytes=-1 -- x.eb
 compare_admin "retire, no module file" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/none.lua
 compare_admin "retire, missing options" retire
 compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
 # A whole run with tests/fake_eb.py as eb. The module text names each
 # copy's own paths, so hashes are compared only through the files they name.
 export NORM_HASH=1
+compare_admin "run refuses below --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-state --backend installpath --eb @ROOT@/eb --run-id space1 --skip-live-check --min-free-bytes 18446744073709551615 --module demo/1 -- demo-1.eb
+compare_admin "run refuses below the environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551615 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-env-state --backend installpath --eb @ROOT@/eb --run-id space-env --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
+compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom
+compare_admin "gc refuses an empty metrics path" gc --state-root @ROOT@/state --metrics-file=
+for impl in py zig; do
+    printf 'unchanged\n' > "${work}/${impl}/metrics-target"
+    ln -s metrics-target "${work}/${impl}/metrics-link.prom"
+done
+compare_admin "gc refuses a symlinked metrics path" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics-link.prom
 compare_admin "run, installpath, recorded prefix" env FAKE_EB_RECORD_PREFIX=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id rp1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status after the run" status --state-root @ROOT@/state r2
 compare_admin "resume a complete run" resume --state-root @ROOT@/state r2
@@ -398,6 +425,12 @@ compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modu
 compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=abc @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, a free-space reserve below 0 in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a free-space reserve in the environment that is not an integer" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an empty free-space reserve in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES= @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an environment reserve above the supported range" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551616 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, --min-free-bytes instead of a bad environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --min-free-bytes 0 --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad free-space environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
 compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
 compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
 compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb

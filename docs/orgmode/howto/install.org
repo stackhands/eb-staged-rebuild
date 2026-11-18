@@ -12,7 +12,7 @@ All three run the same commands; [[file:../reference/compatibility.org][Compatib
 - Linux on x86_64 or aarch64, and the account that runs EasyBuild for the software tree.
 - For a release binary, =curl= and =sha256sum=, and the GitHub CLI, =gh=, to check where the binary was built.
 - To build the binary, Zig 0.17.1 and =git=.
-- For the Python package, Python 3.11 or newer and =git=; it needs nothing outside the standard library.
+- For the Python package, Python 3.11 or newer and =git=; on Ubuntu, install =python3-venv= for =python3 -m venv=.
 
 ** Steps
 

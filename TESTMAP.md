@@ -140,6 +140,12 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 
 | test | replacement |
 |---|---|
+| FreeSpaceTests.test_command_leaves_the_guard_disabled_when_the_option_is_absent | differential "run --dry-run, free-space environment unset" checks the default status and streams |
+| FreeSpaceTests.test_default_command_output_and_status_stay_byte_identical | differential "run, installpath" checks the default command's status and streams |
+| FreeSpaceTests.test_environment_sets_the_default_reserve | differential "run refuses below the environment reserve" |
+| FreeSpaceTests.test_option_takes_precedence_over_the_environment | differential "run, --min-free-bytes instead of a bad environment reserve" |
+| FreeSpaceTests.test_environment_reserve_is_a_nonnegative_64_bit_integer | differential "run, a free-space reserve below 0 in the environment", "run, a free-space reserve in the environment that is not an integer", "run, an empty free-space reserve in the environment", "run, an environment reserve above the supported range" |
+| FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
 | TransactionTests.test_success_uses_fallback_and_keeps_old_tree_for_rollback | crash_matrix "fallback: run published" (journal `swap_method` `rename-fallback`, old tree kept as the hidden sibling) and "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
@@ -158,6 +164,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
+| GarbageCollectionTests.test_gc_default_output_remains_exact_bytes | differential "gc --dry-run, generations" |
 | GarbageCollectionTests.test_gc_removes_a_generation_once_its_hidden_trees_are_gone | differential "gc --dry-run, generations", "gc removes a complete run's generation" |
 | GarbageCollectionTests.test_gc_removes_a_failed_generation_only_with_include_failed | differential "gc --include-failed removes a failed build's generation", "resume builds the removed generation again"; `zig/admin.zig` test "finishedRun: a complete or rolled-back run, and a failed one only with include_failed" |
 | GarbageCollectionTests.test_gc_refuses_a_generation_named_by_a_run_id_that_is_not_a_plain_name | differential "gc refuses a generation for a run id that is not a plain name" |
@@ -181,6 +188,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RetireTests.test_retire_moves_module_and_leaves_software | differential "retire" |
 | RetireTests.test_dry_run_changes_nothing | differential "retire --dry-run" |
 | RetireTests.test_dry_run_still_refuses | differential "retire --dry-run, a directory" |
+| RetireTests.test_usage_log_refuses_retire_when_prefix_is_in_use | differential "retire, --usage-log in use" |
+| RetireTests.test_usage_log_allows_retire_when_prefix_is_clear | runs against `TOOL_BIN` |
+| RetireTests.test_usage_log_failure_refuses_without_retiring | differential "retire, --usage-log helper failure" |
 | RetireTests.test_resume_refuses_a_retire_record | differential "resume a retire record" |
 | RetireTests.test_rollback_puts_module_back | differential "rollback the retire", "rollback again" |
 | RetireTests.test_rollback_refuses_to_overwrite_a_new_module_file | differential "rollback over a new module file", "rollback after the new file is gone" |
@@ -232,6 +242,22 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 |---|---|
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
+| ReferenceTests.test_usage_log_keeps_a_retired_tree | differential "gc, --usage-log keeps an in-use tree" |
+| ReferenceTests.test_usage_log_keeps_a_generation | runs against `TOOL_BIN` |
+| ReferenceTests.test_usage_log_failure_refuses_without_deleting | differential "gc, --usage-log helper failure" |
+
+### tests/test_metrics.py
+
+The Python and Zig renderers expose the same names and known generation values.
+The Python test also passes the generated text to `promtool check metrics` when CI's pinned promtool is present.
+
+| test | replacement |
+|---|---|
+| MetricsTests.test_metrics_report_only_known_values | `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_retired_publication_with_stamped_tree_is_not_current | `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_metrics_are_an_atomic_prometheus_file | zig-common `src/atomic_test.zig` atomic replacement tests; `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
+| MetricsTests.test_gc_timestamp_is_taken_after_locked_work | `zig/admin.zig` test "gc records its completion time after its starting time" |
+| MetricsTests.test_dry_run_refuses_to_write_metrics | `zig/main.zig` dispatches the same refusal in `admin.gc` |
 
 ### tests/test_prefix.py
 
@@ -450,6 +476,7 @@ site variables through CLI/docs tests and integration coverage.
 | test | replacement |
 |---|---|
 | JsonSchemaTests.test_probe_json_validates | `docs/orgmode/reference/json/probe.schema.json`; Python or `TOOL_BIN` |
+| JsonSchemaTests.test_gc_json_validates | `docs/orgmode/reference/json/gc.schema.json`; differential "gc --json keeps within grace" |
 | JsonSchemaTests.test_status_json_validates | `docs/orgmode/reference/json/status.schema.json` |
 | JsonSchemaTests.test_status_empty_root_validates | status `--json` on an empty state root |
 

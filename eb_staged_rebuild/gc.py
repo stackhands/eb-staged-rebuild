@@ -27,9 +27,11 @@ from eb_staged_rebuild.constants import SECONDS_PER_HOUR
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.journal import generation_root, journal_path, list_journals, save_journal
 from eb_staged_rebuild.lockfile import FileLock
+from eb_staged_rebuild.metrics import write_metrics
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.paths import abspath, is_within, lstat_kind
 from eb_staged_rebuild.retire import is_retire
+from eb_staged_rebuild.usage_log import check_prefix
 
 
 def _retirement(journal, mod, include_failed):
@@ -65,7 +67,7 @@ def _finished_run(journal, include_failed):
     return None
 
 
-def _generation(state_root, journal, roots, include_failed, dry_run):
+def _generation(state_root, journal, roots, include_failed, dry_run, usage_log, eb_keep_logs):
     """Remove the generation of a run whose hidden trees are all settled."""
     what = _finished_run(journal, include_failed)
     if what is None:
@@ -78,6 +80,12 @@ def _generation(state_root, journal, roots, include_failed, dry_run):
         return []
     if _referenced(path, roots):
         return [{"path": path, "action": "keep", "reason": "a live module resolves inside it"}]
+    in_use, detail = check_prefix(path, usage_log, eb_keep_logs)
+    if in_use:
+        reason = "usage log reports paths under it"
+        if detail:
+            reason = f"{reason}: {detail.splitlines()[0]}"
+        return [{"path": path, "action": "keep", "reason": reason}]
     if not dry_run:
         remove_generation_tree(path, os.path.dirname(path))
     return [{"path": path, "action": "remove", "reason": f"generation of a {what}"}]
@@ -206,7 +214,18 @@ def _retired_software(journals, roots, grace_hours, now):
     return actions
 
 
-def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_grace):
+def _collect_locked(
+    state_root,
+    grace_hours,
+    now,
+    dry_run,
+    include_failed,
+    run_grace,
+    usage_log,
+    eb_keep_logs,
+    metrics_file,
+    completion_clock,
+):
     state_root = abspath(state_root)
     journals = list_journals(state_root)
     roots = _live_roots(journals)
@@ -263,6 +282,20 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                 )
                 settled = False
                 continue
+            in_use, detail = check_prefix(retired, usage_log, eb_keep_logs)
+            if in_use:
+                reason = "usage log reports paths under it"
+                if detail:
+                    reason = f"{reason}: {detail.splitlines()[0]}"
+                actions.append(
+                    {
+                        "path": retired,
+                        "action": "keep",
+                        "reason": reason,
+                    }
+                )
+                settled = False
+                continue
             actions.append(
                 {
                     "path": retired,
@@ -276,7 +309,9 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
             remove_generation_tree(retired, os.path.dirname(retired))
             mod["retired_removed_at"] = now
             changed = True
-        generation = _generation(state_root, journal, roots, include_failed, dry_run) if settled else []
+        generation = _generation(
+            state_root, journal, roots, include_failed, dry_run, usage_log, eb_keep_logs
+        ) if settled else []
         actions.extend(generation)
         generation_removed = not dry_run and any(action["action"] == "remove" for action in generation)
         if generation_removed:
@@ -295,6 +330,8 @@ def _collect_locked(state_root, grace_hours, now, dry_run, include_failed, run_g
                 "journal.gc",
             )
     actions.extend(_retired_software(journals, roots, grace_hours, now))
+    if metrics_file is not None:
+        write_metrics(metrics_file, state_root, journals, completion_clock())
     return actions
 
 
@@ -306,12 +343,18 @@ def collect(
     include_failed=False,
     lock_timeout=None,
     run_grace=False,
+    usage_log=None,
+    eb_keep_logs="eb-keep-logs",
+    metrics_file=None,
+    completion_clock=time.time,
 ):
     """Collect retired trees while holding the same lock as publish/rollback.
 
     ``grace_hours`` applies to every tree, or with ``run_grace`` only to the
     trees whose run recorded no grace period and to retired module files.
     """
+    if dry_run and metrics_file is not None:
+        raise Refused("--metrics-file cannot be used with --dry-run")
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
@@ -322,6 +365,10 @@ def collect(
             dry_run,
             include_failed,
             run_grace,
+            usage_log,
+            eb_keep_logs,
+            metrics_file,
+            completion_clock,
         )
     finally:
         lock.release()
