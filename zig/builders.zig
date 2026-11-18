@@ -62,6 +62,12 @@ fn parseEasybuildUmask(raw: []const u8) ?u16 {
     return if (parsed <= 0o777) parsed else null;
 }
 
+fn applyEasybuildUmask(env: probe.Env) void {
+    if (env.get("EASYBUILD_UMASK")) |raw| {
+        if (parseEasybuildUmask(raw)) |mode| _ = linux.syscall1(.umask, @as(usize, mode));
+    }
+}
+
 /// Refused: there is no /proc to confirm that the process group stopped;
 /// CannotStart: the command could not be started; ExecFailed: execve
 /// failed (`exec_errno`) or a test failed the step (`injected_at`).
@@ -128,9 +134,7 @@ pub fn runCommand(a: Allocator, exe: []const u8, argv: []const []const u8, envp:
         const w: linux.fd_t = report[1];
         if (w > 3) _ = linux.close_range(3, w - 1, .{ .UNSHARE = false, .CLOEXEC = false });
         _ = linux.close_range(w + 1, std.math.maxInt(linux.fd_t), .{ .UNSHARE = false, .CLOEXEC = false });
-        if ((probe.Env{ .envp = envp }).get("EASYBUILD_UMASK")) |raw| {
-            if (parseEasybuildUmask(raw)) |mode| _ = linux.syscall1(.umask, @as(usize, mode));
-        }
+        applyEasybuildUmask(.{ .envp = envp });
         const exec_rc = linux.execve(zexe.ptr, zargv.ptr, envp);
         const code: u32 = @backingInt(linux.errno(exec_rc));
         _ = linux.write(report[1], std.mem.asBytes(&code), @sizeOf(u32));
