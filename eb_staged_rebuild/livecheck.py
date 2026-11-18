@@ -71,7 +71,11 @@ def snapshot(path):
         return {"exists": True, "symlink": False, "kind": kind}
     st = os.lstat(path)
     rows = []
-    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+
+    def _walk_error(exc):
+        raise OSError(exc.errno, exc.strerror, path) from exc
+
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=False, onerror=_walk_error):
         kept = []
         for name in dirnames:
             child = os.path.join(dirpath, name)
