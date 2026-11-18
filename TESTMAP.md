@@ -258,6 +258,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ModuleFileTests.test_rewrite_does_not_eat_a_longer_prefix | `zig/modulefile.zig` test "loads, identity and rewriting" |
 | ModuleFileTests.test_new_path_that_contains_the_old_path_is_not_doubled | `zig/modulefile.zig` test "a new path that contains the old path is not doubled" |
 | ModuleFileTests.test_refuses_a_file_with_no_root | `zig/modulefile.zig` test "loads, identity and rewriting" |
+| ModuleFileTests.test_resolve_refuses_non_utf8_module_text | differential "resolve non-utf8.lua" |
 
 ### tests/test_gc_references.py
 

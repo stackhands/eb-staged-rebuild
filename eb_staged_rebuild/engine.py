@@ -1684,7 +1684,10 @@ def describe_module(path):
     kind = lstat_kind(path)
     if kind != "file":
         return {"path": os.fspath(path), "kind": kind, "complete": False, "root": None}
-    text = read_bytes(path).decode("utf-8")
+    try:
+        text = read_bytes(path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused(f"{path} is not UTF-8 text") from exc
     syntax, root = parse_root(text)
     return {
         "path": os.fspath(path),
