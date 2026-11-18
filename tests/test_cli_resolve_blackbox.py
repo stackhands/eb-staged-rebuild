@@ -4,19 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
-
-def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "eb_staged_rebuild.cli", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from tests.support import run_cli
 
 
 class ResolveBlackBoxTests(unittest.TestCase):
