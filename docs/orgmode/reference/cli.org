@@ -19,7 +19,7 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
                       [--ledger-config FILE] [--build-dir DIR] [--min-free-bytes BYTES]
-                      -- EASYCONFIG [EB-ARGUMENT...]
+                      [--require-exchange] -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]

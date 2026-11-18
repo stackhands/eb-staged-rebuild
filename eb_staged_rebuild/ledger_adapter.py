@@ -12,6 +12,7 @@ the retry idempotent.
 
 import hashlib
 import json
+import math
 import os
 import re
 import selectors
@@ -112,7 +113,12 @@ def load_config(path):
         raise Refused("ledger config required must be true or false")
     config.setdefault("timeout", 120)
     timeout = config["timeout"]
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
         raise Refused("ledger config timeout must be a positive number of seconds")
     config["path"] = path
     return config

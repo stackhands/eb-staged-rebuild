@@ -42,7 +42,7 @@ cat /opt/site/etc/ledger.json
 | =target=     | required          | The target the records name, such as =x86_64/amd/zen4=.                                                                                                      |
 | =action=     | =rebuild-inplace= | The =action= of each publication record: =install=, =rebuild-inplace= or =rebuild-bump=. A rollback's records have the action =correction=.                  |
 | =required=   | =true=            | With =true=, the directories are exchanged only once every =started= record is acknowledged. With =false=, a run goes on, and the records wait for =resume=. |
-| =timeout=    | =120=             | Seconds each eb-stack call may take; a number greater than 0.                                                                                                |
+| =timeout=    | =120=             | Seconds each eb-stack call may take; a finite number greater than 0.                                                                                         |
 
 - =actor=, =stack= and =target= must be strings that are not empty.
 - Other keys are not used, but are part of the configuration the run compares.
