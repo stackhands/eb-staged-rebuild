@@ -255,6 +255,61 @@ compare_admin() {
 }
 fixture "${work}/py"
 fixture "${work}/zig"
+
+compare_cross_filesystem() {
+    local label="run refuses a state root on another filesystem before the build"
+    if [ ! -d /dev/shm ] || [ "$(stat -c %d /dev/shm)" = "$(stat -c %d "${work}")" ]; then
+        echo "same ${label} (second filesystem not available)"
+        return
+    fi
+    local other impl root state out builds runs generations bad=0
+    other=$(mktemp -d /dev/shm/esr-diff.XXXXXX)
+    for impl in py zig; do
+        root="${work}/${impl}"
+        state="${other}/${impl}/state"
+        out="${work}/${impl}.cross-filesystem"
+        mkdir -p "${other}/${impl}"
+        if [ "${impl}" = py ]; then
+            env PYTHONPATH="${repo_root}" FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+                python3 -m eb_staged_rebuild run \
+                --software "${root}/software" --modules "${root}/modules" \
+                --state-root "${state}" --backend installpath --eb "${root}/eb" \
+                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+                > "${out}.out" 2> "${out}.err"
+        else
+            env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+                "${TOOL_BIN}" run \
+                --software "${root}/software" --modules "${root}/modules" \
+                --state-root "${state}" --backend installpath --eb "${root}/eb" \
+                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+                > "${out}.out" 2> "${out}.err"
+        fi
+        echo $? > "${out}.rc"
+        builds=$(awk '/--installpath-software/{n++} END{print n+0}' "${root}/cross-filesystem-argv")
+        runs=$([ -e "${state}/runs" ] && echo yes || echo no)
+        generations=$([ -e "${state}/generations" ] && echo yes || echo no)
+        printf 'builds=%s runs=%s generations=%s\n' "${builds}" "${runs}" "${generations}" > "${out}.state"
+        for f in out err; do norm < "${out}.${f}" > "${out}.${f}.n"; done
+    done
+    for f in rc out.n err.n state; do
+        if ! cmp -s "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}"; then
+            [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
+            bad=1
+            diff "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}" |
+                head -20 | sed "s/^/     ${f} /"
+        fi
+    done
+    if [ "$(cat "${work}/py.cross-filesystem.rc")" != 2 ] ||
+       [ "$(cat "${work}/py.cross-filesystem.state")" != "builds=0 runs=no generations=no" ]; then
+        [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
+        bad=1
+        sed 's/^/     state /' "${work}/py.cross-filesystem.state"
+    fi
+    rm -rf "${other}"
+    if [ "${bad}" -eq 0 ]; then echo "same ${label}"; else diffs=$((diffs + 1)); fi
+}
+
+compare_cross_filesystem
 compare_admin "retire --dry-run" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --dry-run
 compare_admin "retire, --usage-log in use" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "retire, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs

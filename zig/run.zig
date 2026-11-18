@@ -114,6 +114,18 @@ pub const R = struct {
     }
 };
 
+fn checkStageFilesystem(r: *R, rels: []const []const u8) E!void {
+    for (rels) |rel| {
+        const target = try std.fs.path.join(r.a, &.{ r.spec.software, rel });
+        const target_parent = std.fs.path.dirname(target) orelse "/";
+        if (!admin.sameFilesystem(r.ctx, r.spec.state_root, target_parent))
+            return r.refuse(
+                "the state root and live software tree are on different filesystems; place --state-root beside the software tree",
+                .{},
+            );
+    }
+}
+
 fn dictSet(a: Allocator, d: Py, key: []const u8, value: Py) Py {
     var out: std.ArrayList(Py.Entry) = .empty;
     var found = false;
@@ -1448,6 +1460,7 @@ pub fn run(r: *R, probes: Py) E!Result {
     }
     const l = try lockRoot(r);
     defer l.release();
+    try checkStageFilesystem(r, rels);
     try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
     if (fsx.statAt(fsx.cwd, r.path, true)) |_| return r.refuse("run {s} already exists; resume it or choose another --run-id", .{run_id}) else |_| {}

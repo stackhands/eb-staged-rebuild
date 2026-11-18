@@ -132,6 +132,7 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--require-exchange= | Refuse before the journal and build unless the software filesystem supports =renameat2(RENAME_EXCHANGE)=. A run that records this policy never uses the ordinary-rename fallback, including during rollback.                |
 
 Once it has checked them, =run= makes a relative =--software=, =--modules=, =--state-root= or =--build-dir= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
+After taking the state-root lock, =run= checks that the state root and live software tree have the same filesystem device before it creates the journal or starts the build command.
 When =--min-free-bytes= is set, =run= reads the filesystem's available blocks after taking the state-root lock and before creating the run journal or starting the build command.
 It compares the available block count times the fragment size with =BYTES=.
 This is a reserve threshold, not an estimate of the rebuilt installation's size.

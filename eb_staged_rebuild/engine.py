@@ -57,6 +57,7 @@ from eb_staged_rebuild.paths import (
     lstat_kind,
 )
 from eb_staged_rebuild.probe import probe_all, stage_paths_from_bwrap_info
+from eb_staged_rebuild.retire import _check_same_filesystem
 from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
 
 import re
@@ -215,6 +216,17 @@ def _check_free_space(path, minimum):
         raise Refused(
             f"generation filesystem has {available} bytes available; "
             f"--min-free-bytes requires {minimum}"
+        )
+
+
+def _check_stage_filesystem(state_root, software, rels):
+    for rel in rels:
+        target_parent = os.path.dirname(os.path.join(software, rel))
+        _check_same_filesystem(
+            state_root,
+            target_parent,
+            "the state root and live software tree are on different filesystems; "
+            "place --state-root beside the software tree",
         )
 
 
@@ -1309,6 +1321,7 @@ def run(spec):
     lock = FileLock(spec.state_root)
     lock.acquire(spec.lock_timeout)
     try:
+        _check_stage_filesystem(spec.state_root, spec.software, rels)
         _check_free_space(spec.state_root, spec.min_free_bytes)
         if os.path.exists(journal_path(spec.state_root, run_id)):
             raise Refused(f"run {run_id} already exists; resume it or choose another --run-id")
