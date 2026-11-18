@@ -41,6 +41,7 @@ A link elsewhere in the tree is not discovered.
    #+end_example
 
    The record is named after the time of the move, as the directory under =retired/= is.
+   To refuse the retire while usage logs still name the software directory, add =--usage-log FILE= (and =--eb-keep-logs BIN= when needed).
 
 ** Check that it worked
 

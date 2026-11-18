@@ -28,6 +28,7 @@ from eb_staged_rebuild.journal import journal_path, list_journals, run_dir, save
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import parse_root
 from eb_staged_rebuild.paths import abspath, is_real_dir, is_within, lstat_kind
+from eb_staged_rebuild.usage_log import check_prefix
 
 KIND = "retire"
 
@@ -136,7 +137,17 @@ def _plan(state_root, module):
     return module, data, abspath(root)
 
 
-def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clock=None, lock_timeout=0):
+def retire(
+    state_root,
+    module_file,
+    reason=None,
+    dry_run=False,
+    faults=None,
+    clock=None,
+    lock_timeout=0,
+    usage_log=None,
+    eb_keep_logs="eb-keep-logs",
+):
     """Move ``module_file`` into the state root and journal it. Returns the journal."""
     from eb_staged_rebuild.engine import Result
 
@@ -145,6 +156,12 @@ def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clo
     now = time.time if clock is None else clock
     if dry_run:
         module, _data, software_dir = _plan(state_root, module_file)
+        in_use, detail = check_prefix(software_dir, usage_log, eb_keep_logs)
+        if in_use:
+            reason = f"refusing to retire {module}: usage log reports paths under {software_dir}"
+            if detail:
+                reason = f"{reason}: {detail.splitlines()[0]}"
+            raise Refused(reason)
         for link in _links_to(module):
             _log(f"would retire the link {link}")
         message = f"would retire {module} (software directory {software_dir} is left in place)"
@@ -154,6 +171,12 @@ def retire(state_root, module_file, reason=None, dry_run=False, faults=None, clo
     lock.acquire(lock_timeout)
     try:
         module, data, software_dir = _plan(state_root, module_file)
+        in_use, detail = check_prefix(software_dir, usage_log, eb_keep_logs)
+        if in_use:
+            reason = f"refusing to retire {module}: usage log reports paths under {software_dir}"
+            if detail:
+                reason = f"{reason}: {detail.splitlines()[0]}"
+            raise Refused(reason)
         when = now()
         name = _unique(state_root, when)
         run_id = f"retire-{name}"

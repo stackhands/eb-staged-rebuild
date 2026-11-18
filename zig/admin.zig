@@ -12,8 +12,10 @@ const probe = @import("probe.zig");
 const sys = common.sys;
 const fsx = common.fsx;
 const json = common.json;
+const pytext = common.pytext;
 const atomic = common.atomic;
 const state = common.state;
+const proc = common.proc;
 const rootlock = @import("rootlock.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
@@ -32,6 +34,33 @@ fn refuse(comptime f: []const u8, args: anytype) noreturn {
 /// "eb-staged-rebuild: MESSAGE" on stdout, as the Python tool logs progress.
 fn log(comptime f: []const u8, args: anytype) void {
     cli.out("eb-staged-rebuild: " ++ f ++ "\n", args);
+}
+
+const UsageCheck = struct {
+    in_use: bool,
+    detail: []const u8,
+};
+
+fn checkUsageLog(c: *Ctx, prefix: []const u8, usage_log: ?[]const u8, eb_keep_logs: []const u8) UsageCheck {
+    const log_path = usage_log orelse return .{ .in_use = false, .detail = "" };
+    const argv = [_][]const u8{ eb_keep_logs, "used", "--prefix", prefix, "--require-none", log_path };
+    const exe = if (eb_keep_logs.len > 0 and eb_keep_logs[0] == '/') eb_keep_logs else (proc.which(c.a, eb_keep_logs, c.env.get("PATH") orelse "/bin:/usr/bin") catch null) orelse
+        refuse("cannot run {s} used: [Errno 2] No such file or directory: '{s}'", .{ eb_keep_logs, eb_keep_logs });
+    const r = proc.run(c.a, exe, &argv, c.env.envp, .{
+        .stdout_limit = 16 << 20,
+        .stderr_limit = 1 << 20,
+        .timeout_ms = null,
+        .new_session = false,
+    }) catch |err| refuse("cannot run {s} used: {t}", .{ eb_keep_logs, err });
+    const code: i64 = switch (r.term) {
+        .exited => |v| v,
+        .signaled => |v| -@as(i64, v),
+    };
+    if (code == 0) return .{ .in_use = false, .detail = "" };
+    const detail = if (r.stdout.len > 0) pytext.pyStrip(pytext.decodeReplace(c.a, r.stdout) catch r.stdout) else pytext.pyStrip(pytext.decodeReplace(c.a, r.stderr) catch r.stderr);
+    if (code == 2) return .{ .in_use = true, .detail = detail };
+    const tail = if (detail.len > 500) detail[detail.len - 500 ..] else detail;
+    refuse("{s} used exited {d}: {s}", .{ eb_keep_logs, code, tail });
 }
 
 /// The time in seconds since the epoch, as Python's time.time().
@@ -363,11 +392,30 @@ fn rename(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8
 /// retire: move a module file aside under a retire journal, and leave its
 /// software directory in place; with `dry_run`, only say what would be
 /// retired. Returns the exit status.
-pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reason: ?[]const u8, dry_run: bool, lock_timeout: ?f64) u8 {
+pub fn retire(
+    c: *Ctx,
+    state_root_in: []const u8,
+    module_file: []const u8,
+    reason: ?[]const u8,
+    dry_run: bool,
+    lock_timeout: ?f64,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+) u8 {
     const a = c.a;
     const state_root = abspath(a, state_root_in);
     if (dry_run) {
         const p = plan(c, state_root, module_file);
+        const used = checkUsageLog(c, p.software_dir, usage_log, eb_keep_logs);
+        if (used.in_use) {
+            var why = a.print("refusing to retire {s}: usage log reports paths under {s}", .{ p.module, p.software_dir }) catch "";
+            if (used.detail.len > 0) {
+                var it = std.mem.splitScalar(u8, used.detail, '\n');
+                const first = it.next() orelse "";
+                why = a.print("{s}: {s}", .{ why, first }) catch why;
+            }
+            refuse("{s}", .{why});
+        }
         for (linksTo(a, p.module)) |link| log("would retire the link {s}", .{link});
         log("would retire {s} (software directory {s} is left in place)", .{ p.module, p.software_dir });
         return 0;
@@ -375,6 +423,16 @@ pub fn retire(c: *Ctx, state_root_in: []const u8, module_file: []const u8, reaso
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
     const p = plan(c, state_root, module_file);
+    const used = checkUsageLog(c, p.software_dir, usage_log, eb_keep_logs);
+    if (used.in_use) {
+        var why = a.print("refusing to retire {s}: usage log reports paths under {s}", .{ p.module, p.software_dir }) catch "";
+        if (used.detail.len > 0) {
+            var it = std.mem.splitScalar(u8, used.detail, '\n');
+            const first = it.next() orelse "";
+            why = a.print("{s}: {s}", .{ why, first }) catch why;
+        }
+        refuse("{s}", .{why});
+    }
     const when = nowSeconds();
     const stamp = gmtimeStamp(a, when, false);
     var name = stamp;
@@ -599,7 +657,17 @@ fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
 }
 
 /// Remove the generation of a run whose hidden trees are all settled.
-fn collectGeneration(c: *Ctx, state_root: []const u8, j: Py, roots: []const []const u8, include_failed: bool, dry_run: bool, actions: *std.ArrayList(Action)) bool {
+fn collectGeneration(
+    c: *Ctx,
+    state_root: []const u8,
+    j: Py,
+    roots: []const []const u8,
+    include_failed: bool,
+    dry_run: bool,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+    actions: *std.ArrayList(Action),
+) bool {
     const what = finishedRun(j, include_failed) orelse return false;
     const rid = str(pyfmt.get(j, "run_id")) orelse "";
     if (rid.len == 0 or std.mem.eql(u8, rid, ".") or std.mem.eql(u8, rid, "..") or std.mem.findScalar(u8, rid, '/') != null)
@@ -608,6 +676,17 @@ fn collectGeneration(c: *Ctx, state_root: []const u8, j: Py, roots: []const []co
     if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
     if (referenced(c, path, roots)) {
         actions.append(c.a, .{ .path = path, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+        return false;
+    }
+    const used = checkUsageLog(c, path, usage_log, eb_keep_logs);
+    if (used.in_use) {
+        var reason: []const u8 = "usage log reports paths under it";
+        if (used.detail.len > 0) {
+            var it = std.mem.splitScalar(u8, used.detail, '\n');
+            const first = it.next() orelse "";
+            reason = c.a.print("{s}: {s}", .{ reason, first }) catch reason;
+        }
+        actions.append(c.a, .{ .path = path, .action = "keep", .reason = reason }) catch oom();
         return false;
     }
     if (!dry_run) removeTree(c, path, dirname(path));
@@ -781,7 +860,18 @@ fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []c
 /// nothing; with `dry_run`, only list them. `grace_hours` applies to every
 /// tree, or with `run_grace` only to the trees whose run recorded no grace
 /// period and to retired module files. Returns the exit status.
-pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, include_failed: bool, lock_timeout: ?f64, run_grace: bool, metrics_file: ?[]const u8) u8 {
+pub fn gc(
+    c: *Ctx,
+    state_root_in: []const u8,
+    grace_hours: f64,
+    dry_run: bool,
+    include_failed: bool,
+    lock_timeout: ?f64,
+    run_grace: bool,
+    usage_log: ?[]const u8,
+    eb_keep_logs: []const u8,
+    metrics_file: ?[]const u8,
+) u8 {
     const a = c.a;
     if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
     const now = c.now_fn();
@@ -844,13 +934,35 @@ pub fn gc(c: *Ctx, state_root_in: []const u8, grace_hours: f64, dry_run: bool, i
                 settled = false;
                 continue;
             }
+            const used = checkUsageLog(c, retired, usage_log, eb_keep_logs);
+            if (used.in_use) {
+                var reason: []const u8 = "usage log reports paths under it";
+                if (used.detail.len > 0) {
+                    var it = std.mem.splitScalar(u8, used.detail, '\n');
+                    const first = it.next() orelse "";
+                    reason = a.print("{s}: {s}", .{ reason, first }) catch reason;
+                }
+                actions.append(a, .{ .path = retired, .action = "keep", .reason = reason }) catch oom();
+                settled = false;
+                continue;
+            }
             actions.append(a, .{ .path = retired, .action = "remove", .reason = why }) catch oom();
             if (dry_run) continue;
             removeTree(c, retired, dirname(retired));
             mods[mi] = dictSet(a, m, "retired_removed_at", .{ .float = now });
             changed = true;
         }
-        const generation_removed = settled and collectGeneration(c, state_root, j, roots, include_failed, dry_run, &actions);
+        const generation_removed = settled and collectGeneration(
+            c,
+            state_root,
+            j,
+            roots,
+            include_failed,
+            dry_run,
+            usage_log,
+            eb_keep_logs,
+            &actions,
+        );
         if (generation_removed) j = dictSet(a, j, "generation_removed_at", .{ .float = now });
         if (changed or generation_removed) {
             if (changed) j = dictSet(a, j, "modules_plan", .{ .list = mods });
@@ -1006,7 +1118,7 @@ test "gc records its completion time after its starting time" {
     const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
     const env: probe.Env = .{ .envp = parent };
     var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
-    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, metrics));
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics));
     try std.testing.expectEqual(@as(usize, 2), Clock.calls);
     try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
 }

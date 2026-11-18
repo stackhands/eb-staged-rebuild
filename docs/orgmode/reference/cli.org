@@ -21,10 +21,12 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--ledger-config FILE] [--build-dir DIR] -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
-eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
-                     [--lock-timeout SECONDS] [--metrics-file PATH]
-eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT] [--dry-run]
-                         [--lock-timeout SECONDS]
+eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
+                     [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
+                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH]
+eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
+                         [--dry-run] [--usage-log FILE]
+                         [--eb-keep-logs EB_KEEP_LOGS] [--lock-timeout SECONDS]
 eb-staged-rebuild status --state-root DIR [--json] [RUN_ID]
 eb-staged-rebuild resolve MODULE_FILE
 eb-staged-rebuild build-events --config FILE --metadata FILE (--deliver | -- COMMAND...)
@@ -175,6 +177,8 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--state-root=     | The state root whose journals name the trees; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required.                                                                                                                                                                              |
 | =--grace-hours=    | Hours to keep every tree after its run published or rolled back, a number 0 or more. Without it, a tree is kept for the hours its run recorded, and the directory of a retired module file for =EB_STAGED_REBUILD_GRACE_HOURS=, or 144; so is a tree whose journal records no number of hours, 0 or more. |
 | =--dry-run=        | Print what would be removed, and remove nothing.                                                                                                                                                                                                                                                          |
+| =--usage-log=      | Check this usage log with =eb-keep-logs used --prefix TREE --require-none= before removing a hidden tree or generation; a hit keeps the path.                                                                                                                                                           |
+| =--eb-keep-logs=   | The =eb-keep-logs= executable to run with =--usage-log=; the default is =eb-keep-logs=.                                                                                                                                                                                                                 |
 | =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
 | =--metrics-file=   | After a completed pass, atomically replace this file with Prometheus text exposition. It cannot be used with =--dry-run=. Without this option, no metrics file is written.                                                                                                                                   |
@@ -195,6 +199,8 @@ Move a module file out of the module tree, once a later =MODULEPATH= entry provi
 | =--module-file=  | The module file to retire, a regular file with a =root= assignment; required.                                                                                      |
 | =--reason=       | Text to keep in the retire record.                                                                                                                                 |
 | =--dry-run=      | Print what would move, and move nothing.                                                                                                                           |
+| =--usage-log=    | Check this usage log with =eb-keep-logs used --prefix SOFTWARE_DIR --require-none= before retiring the module file; a hit refuses the retire.                    |
+| =--eb-keep-logs= | The =eb-keep-logs= executable to run with =--usage-log=; the default is =eb-keep-logs=.                                                        |
 | =--lock-timeout= | Seconds to wait for the state root's lock; the default is 0, which refuses at once.                                                                                |
 
 The file moves to =<state-root>/retired/STAMP/= followed by its absolute path, and the record is named =retire-STAMP=, where =STAMP= is the UTC time as =YYYYMMDDTHHMMSSZ=.

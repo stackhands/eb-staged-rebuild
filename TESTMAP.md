@@ -227,6 +227,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RetireTests.test_retire_moves_module_and_leaves_software | differential "retire" |
 | RetireTests.test_dry_run_changes_nothing | differential "retire --dry-run" |
 | RetireTests.test_dry_run_still_refuses | differential "retire --dry-run, a directory" |
+| RetireTests.test_usage_log_refuses_retire_when_prefix_is_in_use | differential "retire, --usage-log in use" |
+| RetireTests.test_usage_log_allows_retire_when_prefix_is_clear | runs against `TOOL_BIN` |
+| RetireTests.test_usage_log_failure_refuses_without_retiring | differential "retire, --usage-log helper failure" |
 | RetireTests.test_resume_refuses_a_retire_record | differential "resume a retire record" |
 | RetireTests.test_rollback_puts_module_back | differential "rollback the retire", "rollback again" |
 | RetireTests.test_rollback_refuses_to_overwrite_a_new_module_file | differential "rollback over a new module file", "rollback after the new file is gone" |
@@ -278,6 +281,9 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 |---|---|
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
+| ReferenceTests.test_usage_log_keeps_a_retired_tree | differential "gc, --usage-log keeps an in-use tree" |
+| ReferenceTests.test_usage_log_keeps_a_generation | runs against `TOOL_BIN` |
+| ReferenceTests.test_usage_log_failure_refuses_without_deleting | differential "gc, --usage-log helper failure" |
 
 ### tests/test_metrics.py
 

@@ -1,8 +1,10 @@
 """gc refuses an unreadable reference and follows a symlink to a hidden tree."""
 
 import os
+import shutil
 import tempfile
 import unittest
+import sys
 
 from eb_staged_rebuild.engine import Spec, run
 from eb_staged_rebuild.errors import Refused
@@ -10,6 +12,16 @@ from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.gc import collect
 from eb_staged_rebuild.journal import journal_path, load_journal
 from tests.support import PROBES, classic_install, installpath_builder
+
+def _keep_logs_stub(root):
+    script = os.path.join(root, "eb-keep-logs")
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/bin/sh\n"
+            f'exec "{sys.executable}" "{os.path.join(os.path.dirname(__file__), "fake_eb_keep_logs.py")}" "$@"\n'
+        )
+    os.chmod(script, 0o755)
+    return script
 
 
 class ReferenceTests(unittest.TestCase):
@@ -67,6 +79,68 @@ class ReferenceTests(unittest.TestCase):
             actions = collect(state, 1, 1_800_000_000, dry_run=True)
             matched = [action for action in actions if action["path"] == retired]
             self.assertEqual(matched[0]["action"], "keep")
+            self.assertTrue(os.path.isdir(retired))
+
+    def test_usage_log_keeps_a_retired_tree(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _module, retired, _install = self.published(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
+            try:
+                actions = collect(
+                    state,
+                    0,
+                    1_800_000_000,
+                    usage_log=usage,
+                    eb_keep_logs=keep_logs,
+                )
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+            matched = [action for action in actions if action["path"] == retired]
+            self.assertEqual(matched[0]["action"], "keep")
+            self.assertTrue(os.path.isdir(retired))
+
+    def test_usage_log_keeps_a_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _module, retired, _install = self.published(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            generation = os.path.join(state, "generations", "run1")
+            self.assertTrue(os.path.isdir(generation))
+            shutil.rmtree(retired)
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
+            try:
+                actions = collect(
+                    state,
+                    0,
+                    1_800_000_000,
+                    usage_log=usage,
+                    eb_keep_logs=keep_logs,
+                )
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+            matched = [action for action in actions if action["path"] == generation]
+            self.assertEqual(matched[0]["action"], "keep")
+            self.assertTrue(os.path.isdir(generation))
+
+    def test_usage_log_failure_refuses_without_deleting(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, _module, retired, _install = self.published(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "error"
+            try:
+                with self.assertRaisesRegex(Refused, "eb-keep-logs used exited"):
+                    collect(state, 0, 1_800_000_000, usage_log=usage, eb_keep_logs=keep_logs)
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
             self.assertTrue(os.path.isdir(retired))
 
 

@@ -146,6 +146,9 @@ fixture() {
     chmod +x "${root}/eb"
     printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_stack.py" "$@"\n' "${repo_root}" > "${root}/ebstack"
     chmod +x "${root}/ebstack"
+    printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_keep_logs.py" "$@"\n' "${repo_root}" > "${root}/keep-logs"
+    chmod +x "${root}/keep-logs"
+    printf '{"record":"x"}\n' > "${root}/usage.log"
     printf '{"eb_stack": "%s/ebstack", "log": "%s/ledger.jsonl", "key": "%s/key.pem", "head": "%s/head.json", "actor": "ci", "stack": "s", "target": "t"}\n' "${root}" "${root}" "${root}" "${root}" > "${root}/ledger.json"
     mkdir -p "${root}/bev/log" "${root}/bev/keys"
     printf 'fake key\n' > "${root}/bev/keys/key.pem"
@@ -265,10 +268,14 @@ compare_admin() {
 fixture "${work}/py"
 fixture "${work}/zig"
 compare_admin "retire --dry-run" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --dry-run
+compare_admin "retire, --usage-log in use" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "retire, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "retire" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --reason moved
 compare_admin "retire again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "status after retire" status --state-root @ROOT@/state
 compare_admin "gc keeps within grace" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --usage-log keeps an in-use tree" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "gc, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 if [ "$(id -u)" != 0 ]; then
     for impl in py zig; do chmod 0 "${work}/${impl}/modules/all/kept"; done
     compare_admin "gc, an unreadable live module" gc --state-root @ROOT@/state --grace-hours 0
