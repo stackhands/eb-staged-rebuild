@@ -137,6 +137,18 @@ Five test programs run the Python tool and the binary on separate copies of one 
 Python-only internals are covered by the Zig unit test of the same function, named as
 `zig/FILE.zig` test "NAME".
 
+### tests/test_ship.py
+
+The ship module is a separate Python transfer tool and does not change the staged
+rebuild command implemented by the Zig binary.
+
+| test | replacement |
+|---|---|
+| ShipTests.test_a_copy_matches_until_a_byte_or_a_link_changes | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_paths_do_not_escape_the_tree | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_the_command_is_quiet_when_the_tree_matches | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_the_how_to_names_the_command | the documentation build checks the Org guide |
+
 ### tests/test_engine.py
 
 | test | replacement |
