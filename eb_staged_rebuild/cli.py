@@ -119,6 +119,13 @@ def _add_state_root(parser):
     parser.add_argument("--state-root", default=default, required=default is None)
 
 
+def count(value):
+    """argparse type for a number of generations: ASCII digits only."""
+    if not value.isascii() or not value.isdigit():
+        raise ValueError(value)
+    return int(value)
+
+
 def _add_common(parser):
     parser.add_argument("--software", help="live EASYBUILD_INSTALLPATH_SOFTWARE")
     parser.add_argument("--modules", help="live EASYBUILD_INSTALLPATH_MODULES")
@@ -259,6 +266,18 @@ def _parser():
         help="also remove the hidden trees and generation of a failed run that published nothing, after the grace period",
     )
     gc_p.add_argument("--json", action="store_true", help="write collection actions as JSON")
+    gc_p.add_argument(
+        "--keep",
+        type=count,
+        metavar="N",
+        default=None,
+        help="keep each install path's N newest generations that rollback can switch back to",
+    )
+    gc_p.add_argument(
+        "--check-in-use",
+        action="store_true",
+        help="keep a tree or generation that a process or a mount on this node uses",
+    )
 
     retire_p = sub.add_parser(
         "retire",
@@ -394,6 +413,8 @@ def _dispatch(args):
             usage_log=args.usage_log,
             eb_keep_logs=args.eb_keep_logs,
             metrics_file=args.metrics_file,
+            keep=args.keep,
+            check_in_use=args.check_in_use,
         )
         if args.json:
             document = {

@@ -12,7 +12,7 @@ Several rebuilds, or the latest one, can be undone the same way.
 - The run's name and its state root; =status --state-root DIR= lists the runs, and =list --state-root DIR= the trees that each installation has kept.
 - A run that is =complete=.
   A run that failed published nothing, and a run that stopped part way is finished with =resume= first, as in [[file:recover.org][Finish a run that failed or stopped]].
-- The previous tree still on disk, at =software/NAME/.VERSION.RUN_ID=: =gc= removes it once the grace period is over.
+- The previous tree still on disk, at =software/NAME/.VERSION.RUN_ID=: =gc= removes it once the grace period is over, unless =gc --keep= keeps it.
 - The run's tree still at the stable path: after a later run of the same installation, roll that one back first.
 
 ** Steps
