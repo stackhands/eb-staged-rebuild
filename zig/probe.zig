@@ -265,27 +265,6 @@ fn strerror(e: linux.E) []const u8 {
     return common.sys.errnoText(e) orelse @tagName(e);
 }
 
-fn mkdtemp(a: Allocator, dir: []const u8, prefix: []const u8) ![]const u8 {
-    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_";
-    var tries: usize = 0;
-    while (tries < 100) : (tries += 1) {
-        var rnd: [8]u8 = undefined;
-        // A name from bytes getrandom did not fill would not be random.
-        _ = try sys.call(linux.getrandom, .{ &rnd, rnd.len, 0 });
-        for (&rnd) |*b| b.* = alphabet[b.* % alphabet.len];
-        const p = try a.print("{s}/{s}{s}", .{ dir, prefix, rnd });
-        var zb: [sys.path_max:0]u8 = undefined;
-        switch (linux.errno(linux.mkdirat(linux.AT.FDCWD, (try sys.z(&zb, p)).ptr, 0o700))) {
-            .SUCCESS => return p,
-            .EXIST => continue,
-            .ACCES, .PERM => return error.AccessDenied,
-            .NOENT => return error.NotFound,
-            else => return error.Unexpected,
-        }
-    }
-    return error.Exists;
-}
-
 fn mkdir(a: Allocator, p: []const u8) !void {
     _ = a;
     var zb: [sys.path_max:0]u8 = undefined;
@@ -317,7 +296,7 @@ fn probeRenameExchange(a: Allocator, directory: []const u8) !Py {
     put(a, &d, "errno", .null);
     put(a, &d, "error", .null);
     put(a, &d, "flag", .{ .int = rename_exchange });
-    const parent = try mkdtemp(a, directory, ".rename-exchange-");
+    const parent = try fsx.mkdtemp(a, directory, ".rename-exchange-");
     defer fsx.deleteTree(a, fsx.cwd, parent) catch {};
     const left = try std.fs.path.join(a, &.{ parent, "left" });
     const right = try std.fs.path.join(a, &.{ parent, "right" });
@@ -638,7 +617,7 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
             for ([_][]const u8{ "TMPDIR", "TEMP", "TMP" }) |k| if (env.get(k)) |v| if (v.len > 0 and isDir(v)) break :blk v;
             break :blk "/tmp";
         };
-        const root = mkdtemp(a, tmp, "tmp") catch |err| {
+        const root = fsx.mkdtemp(a, tmp, "tmp") catch |err| {
             cli.err(prefix ++ "{t}\n", .{err});
             return sandbox_setup_exit;
         };
@@ -761,4 +740,27 @@ test "parseFrameworkVersion" {
     try std.testing.expectEqual([3]i64{ 5, 4, 1 }, parseFrameworkVersion("This is EasyBuild 5.4.1 (framework: 5.4.1, easyblocks: 5.4.1)").?);
     try std.testing.expectEqual([3]i64{ 5, 3, 0 }, parseFrameworkVersion("This is EasyBuild 5.3.0").?);
     try std.testing.expect(parseFrameworkVersion("eb 5") == null);
+}
+
+test "probeRenameExchange cleans up its fsx.mkdtemp scratch directory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var cwd_buf: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &cwd_buf);
+    const base = try std.fmt.allocPrint(a, "{s}/.zig-cache/esr-probe-mkdtemp-{d}", .{ here, linux.getpid() });
+    try makedirs(a, base);
+    defer fsx.deleteTree(a, fsx.cwd, base) catch {};
+
+    const res = try probeRenameExchange(a, base);
+    var saw_ok = false;
+    for (res.dict) |e| if (std.mem.eql(u8, e.key, "ok")) {
+        saw_ok = (e.value == .bool);
+    };
+    try std.testing.expect(saw_ok);
+    const dir = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(dir);
+    var it = try fsx.DirIter.init(a, dir);
+    defer it.deinit(a);
+    try std.testing.expectEqual(@as(?fsx.Entry, null), try it.next());
 }
