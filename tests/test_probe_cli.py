@@ -35,6 +35,21 @@ def _read(path):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_probe_no_create_refuses_a_missing_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing = os.path.join(root, "missing")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            probe = subprocess.run(
+                [*CLI, "probe", "--path", missing, "--no-create", "--eb", "missing-eb"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
+            self.assertIn(f"probe path does not exist: {missing}", probe.stderr)
+            self.assertFalse(os.path.exists(missing))
+
     def test_unreadable_resolve_exits_2_without_a_traceback(self):
         if os.geteuid() == 0:
             self.skipTest("root can read a mode 000 file")
@@ -68,6 +83,20 @@ class ProbeTests(unittest.TestCase):
         self.assertIn("userns_sandbox", report)
         self.assertEqual(report["flock"]["cross_node"], "unmeasured")
         self.assertFalse(report["easybuild"]["found"])
+
+    def test_probe_require_eb_fails_when_eb_is_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            probe = subprocess.run(
+                [*CLI, "probe", "--path", root, "--require-eb", "--eb", "missing-eb"],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
+            self.assertIn("EasyBuild:", probe.stdout)
+            self.assertIn("probe requires EasyBuild, but it was not found: missing-eb", probe.stderr)
 
 
 class LockTests(unittest.TestCase):

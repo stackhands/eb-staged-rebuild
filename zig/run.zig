@@ -1158,14 +1158,26 @@ fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
     return out.items;
 }
 
-fn validatePublicationSet(r: *R) E!void {
+fn requirePublicationFields(r: *R) E!void {
     for (r.list("modules_plan")) |m| {
         const rel = s(pyfmt.get(m, "rel"));
         const prepared = s(pyfmt.get(m, "prepared"));
+        const new_hash = s(pyfmt.get(m, "new_hash"));
+        if (rel.len == 0 or prepared.len == 0 or new_hash.len == 0)
+            return r.intervene("journal module plan does not record rel, prepared and new_hash", .{});
+    }
+}
+
+fn validatePublicationSet(r: *R) E!void {
+    try requirePublicationFields(r);
+    for (r.list("modules_plan")) |m| {
+        const rel = s(pyfmt.get(m, "rel"));
+        const prepared = s(pyfmt.get(m, "prepared"));
+        const new_hash = s(pyfmt.get(m, "new_hash"));
         const f = fsx.openRegular(fsx.cwd, prepared, true) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
         defer sys.close(f.fd);
         const bytes = fsx.readAll(r.a, f.fd, 1 << 30) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
-        if (!std.mem.eql(u8, sha(r.a, bytes), s(pyfmt.get(m, "new_hash")))) return r.intervene("prepared module bytes for {s} changed", .{rel});
+        if (!std.mem.eql(u8, sha(r.a, bytes), new_hash)) return r.intervene("prepared module bytes for {s} changed", .{rel});
         var why: atomic.Why = .{};
         _ = atomic.readMetadata(r.a, prepared, &why) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, if (err == error.Refused) why.msg else main_mod.osError(r.a, err, prepared) });
     }
@@ -1179,14 +1191,14 @@ fn publish(r: *R) E!void {
         if (live.len > 0 and retired.len > 0) try recoverPair(r, live, retired);
     }
     try validatePublicationSet(r);
-    r.set("state", Py.s("publishing"));
-    try r.save("journal.publishing");
     const run_id = r.str("run_id");
     for (r.list("modules_plan")) |m| {
         try prepareBackup(r, m);
         try prepareSwapSource(r, m, run_id);
     }
     try r.save("journal.prepared");
+    r.set("state", Py.s("publishing"));
+    try r.save("journal.publishing");
     publishSteps(r) catch |err| {
         const first = r.why;
         const kind_err = err;
@@ -1358,6 +1370,7 @@ fn recordFinished(r: *R, config: ?Py, message: []const u8) E!Result {
 /// _publish_recorded: swap only after a required ledger acknowledged every
 /// started record.
 fn publishRecorded(r: *R) E!Result {
+    try requirePublicationFields(r);
     const rc = try preparePublication(r);
     if (rc != 0) return .{ .code = rc, .message = r.str("message") };
     const config = try publisher(r);

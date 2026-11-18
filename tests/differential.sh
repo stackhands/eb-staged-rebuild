@@ -96,6 +96,12 @@ echo '{"schema": 2, "publication": "pointer"}' > "${st}/runs/r4/journal.json"
 compare "status, other publication" status --state-root "${st}"
 echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
 compare "status, plan without a swap" status --state-root "${st}"
+echo '[]' > "${st}/runs/r4/journal.json"
+compare "status, journal array" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": "entry"}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan string" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": [1]}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan number" status --state-root "${st}"
 rm -rf "${st}/runs/r4"
 
 # Probe.
@@ -123,6 +129,13 @@ compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-time
 compare "run, a run id with path components" run --software software --modules modules --state-root state --run-id ../escaped -- demo-1.eb
 compare "resume, a run id with path components" resume --state-root state ../escaped
 compare "rollback, a run id with path components" rollback --state-root state ../escaped
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
@@ -634,6 +647,31 @@ compare_admin "run, symlinked state root" run --software @ROOT@/software --modul
 compare_admin "run, missing prepare" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r11 --skip-live-check --prepare @ROOT@/no-such-policy --module demo/1 -- demo-1.eb
 compare_admin "run, prepare fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r12 --skip-live-check --prepare @ROOT@/prepare-fails --module demo/1 -- demo-1.eb
 for impl in py zig; do cp "${work}/${impl}/prepare-ok" "${work}/${impl}/prepare-fails"; done
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["saved_prepared"] = journal["modules_plan"][0].pop("prepared")
+path.write_text(json.dumps(journal))
+PY
+done
+compare_admin "resume reports an incomplete publication plan" resume --state-root @ROOT@/state r12
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["prepared"] = journal["modules_plan"][0].pop("saved_prepared")
+path.write_text(json.dumps(journal))
+PY
+done
 compare_admin "resume after the prepare is fixed" resume --state-root @ROOT@/state r12
 compare_admin "the prepare ran once" env cat @ROOT@/prepare-count
 compare_admin "rollback a prepared run" rollback --state-root @ROOT@/state r12

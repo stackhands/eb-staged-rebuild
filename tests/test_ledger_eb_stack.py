@@ -192,5 +192,25 @@ class RealEbStackLedgerTests(unittest.TestCase):
             self.assert_protocol(log, head, install)
 
 
+class LedgerConfigValidationTests(unittest.TestCase):
+    def test_load_config_rejects_non_finite_timeout(self):
+        from eb_staged_rebuild.errors import Refused
+        from eb_staged_rebuild.ledger_adapter import load_config
+
+        with tempfile.TemporaryDirectory() as root:
+            for bad in ("NaN", "Infinity", "-Infinity", "0", "-1"):
+                cfg_path = os.path.join(root, f"ledger-{bad}.json")
+                with open(cfg_path, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        '{"eb_stack": "/bin/true", "log": "/tmp/l", "key": "/tmp/k", '
+                        '"head": "/tmp/h", "actor": "a", "stack": "s", "target": "t", '
+                        f'"timeout": {bad}'
+                        "}"
+                    )
+                with self.subTest(bad=bad):
+                    with self.assertRaisesRegex(Refused, "ledger config timeout must be a positive number"):
+                        load_config(cfg_path)
+
+
 if __name__ == "__main__":
     unittest.main()
