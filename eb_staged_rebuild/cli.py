@@ -185,6 +185,7 @@ def _parser():
         action="store_true",
         help="also remove the hidden trees and generation of a failed run that published nothing, after the grace period",
     )
+    gc_p.add_argument("--json", action="store_true", help="write collection actions as JSON")
 
     retire_p = sub.add_parser(
         "retire",
@@ -299,8 +300,21 @@ def _dispatch(args):
             eb_keep_logs=args.eb_keep_logs,
             metrics_file=args.metrics_file,
         )
-        for action in actions:
-            print(f"{action['action']}: {action['path']} ({action['reason']})")
+        if args.json:
+            document = {
+                "actions": [
+                    {
+                        "action": action["action"],
+                        "path": action["path"],
+                        "reason": action["reason"],
+                    }
+                    for action in actions
+                ]
+            }
+            print(json.dumps(document, indent=2, sort_keys=True))
+        else:
+            for action in actions:
+                print(f"{action['action']}: {action['path']} ({action['reason']})")
         return 0
     if args.command == "retire":
         result = retire(

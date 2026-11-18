@@ -210,6 +210,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
+| GarbageCollectionTests.test_gc_default_output_remains_exact_bytes | differential "gc --dry-run, generations" |
 | GarbageCollectionTests.test_gc_removes_a_generation_once_its_hidden_trees_are_gone | differential "gc --dry-run, generations", "gc removes a complete run's generation" |
 | GarbageCollectionTests.test_gc_removes_a_failed_generation_only_with_include_failed | differential "gc --include-failed removes a failed build's generation", "resume builds the removed generation again"; `zig/admin.zig` test "finishedRun: a complete or rolled-back run, and a failed one only with include_failed" |
 | GarbageCollectionTests.test_gc_refuses_a_generation_named_by_a_run_id_that_is_not_a_plain_name | differential "gc refuses a generation for a run id that is not a plain name" |
@@ -521,6 +522,7 @@ site variables through CLI/docs tests and integration coverage.
 | test | replacement |
 |---|---|
 | JsonSchemaTests.test_probe_json_validates | `docs/orgmode/reference/json/probe.schema.json`; Python or `TOOL_BIN` |
+| JsonSchemaTests.test_gc_json_validates | `docs/orgmode/reference/json/gc.schema.json`; differential "gc --json keeps within grace" |
 | JsonSchemaTests.test_status_json_validates | `docs/orgmode/reference/json/status.schema.json` |
 | JsonSchemaTests.test_status_empty_root_validates | status `--json` on an empty state root |
 

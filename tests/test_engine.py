@@ -623,6 +623,16 @@ class GarbageCollectionTests(unittest.TestCase):
             f"remove: {generation} (generation of a complete run)\n",
         )
 
+    def test_gc_default_output_remains_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as root:
+            state, retired = self._published(root, 0)
+            code, out, err = _main(["gc", "--state-root", state, "--dry-run"])
+            expected_code, expected_out = self._removal(state, retired)
+            self.assertEqual(
+                (code, out.encode("utf-8"), err.encode("utf-8")),
+                (expected_code, expected_out.encode("utf-8"), b""),
+            )
+
     def test_gc_keeps_a_tree_for_the_grace_period_its_run_recorded(self):
         with tempfile.TemporaryDirectory() as root:
             state, retired = self._published(root, 0)

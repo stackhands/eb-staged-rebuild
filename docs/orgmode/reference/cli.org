@@ -109,7 +109,7 @@ The lines, in this order:
 | =filesystem: FSTYPE MOUNT=                                                       | The filesystem type and mount point of =--path=.                                                                                                                      |
 | =lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured= | How the state-root lock is taken, and that it was measured on one node only.                                                                                          |
 
-[[file:json-output.org][Machine-readable command output]] names the JSON Schema files for =probe --json= and =status --json=.
+[[file:json-output.org][Machine-readable command output]] names the JSON Schema files for =probe --json=, =gc --json= and =status --json=.
 
 *** run
 
@@ -187,9 +187,12 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--include-failed= | Also remove the hidden trees and generation of a failed run that published nothing, once it is older than the grace period.                                                                                                                                                                                 |
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
 | =--metrics-file=   | After a completed pass, atomically replace this file with Prometheus text exposition. It cannot be used with =--dry-run=. Without this option, no metrics file is written.                                                                                                                                   |
+| =--json=           | Print one JSON document with the collection actions instead of one line per action.                                                                                                                                                                                                                        |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
+With =--json=, the document has one =actions= array in the same order.
+Each item has the string fields =action=, =path= and =reason=; no actions produce ={"actions": []}=.
 The metrics file reports generation directories present, the age of the newest generation whose complete journal, current live module and live-tree stamp show that it remains published, and the time captured after this =gc= pass completes.
 Failed and unfinished generations do not become current merely because their generation directories are newer.
 It does not report bytes freed, because the tool does not know how many storage bytes the filesystem released.

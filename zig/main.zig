@@ -585,7 +585,7 @@ const gc_usage =
     \\                            [--lock-timeout LOCK_TIMEOUT]
     \\                            [--usage-log USAGE_LOG]
     \\                            [--eb-keep-logs EB_KEEP_LOGS]
-    \\                            [--metrics-file PATH] [--include-failed]
+    \\                            [--metrics-file PATH] [--include-failed] [--json]
     \\
 ;
 const gc_help = gc_usage ++
@@ -606,6 +606,7 @@ const gc_help = gc_usage ++
     \\  --include-failed      also remove the hidden trees and generation of a
     \\                        failed run that published nothing, after the grace
     \\                        period
+    \\  --json                write collection actions as JSON
     \\
 ;
 
@@ -729,6 +730,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "lock-timeout", .takes_value = true },
         .{ .name = "metrics-file", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
+        .{ .name = "json", .takes_value = false },
     };
     const who = prog ++ " gc";
     const sr = StateRoot.of(env, gc_usage, gc_help);
@@ -754,6 +756,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         opts[3].value,
         opts[4].value orelse "eb-keep-logs",
         opts[6].value,
+        opts[8].seen,
     );
 }
 
@@ -888,7 +891,7 @@ const StateRoot = struct {
             return .{ .default = null, .usage = usage, .help = help };
         // status --json makes the default usage longer than argparse's width,
         // so the wrapped form is written out rather than derived by bracketing.
-        if (comptime std.mem.indexOf(u8, usage, "[--json]") != null) {
+        if (comptime std.mem.eql(u8, usage, status_usage)) {
             return .{ .default = default, .usage = status_usage_default, .help = status_help_default };
         }
         return .{ .default = default, .usage = bracketed(usage), .help = bracketed(help) };
@@ -1080,7 +1083,7 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\                            [--lock-timeout LOCK_TIMEOUT]
         \\                            [--usage-log USAGE_LOG]
         \\                            [--eb-keep-logs EB_KEEP_LOGS]
-        \\                            [--metrics-file PATH] [--include-failed]
+        \\                            [--metrics-file PATH] [--include-failed] [--json]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(

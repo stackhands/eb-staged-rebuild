@@ -38,6 +38,17 @@ def _run_status(state_root):
     )
 
 
+def _run_gc(state_root):
+    return subprocess.run(
+        [*CLI, "gc", "--state-root", state_root, "--grace-hours", "0", "--dry-run", "--json"],
+        cwd=REPO,
+        env={**os.environ, "PYTHONPATH": REPO},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 class JsonSchemaTests(unittest.TestCase):
     def test_probe_json_validates(self):
         completed = _run_probe()
@@ -74,6 +85,36 @@ class JsonSchemaTests(unittest.TestCase):
             completed = _run_status(root)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         validate(json.loads(completed.stdout), "status.schema.json")
+
+    def test_gc_json_validates(self):
+        with tempfile.TemporaryDirectory() as root:
+            live = os.path.join(root, "software", "demo", "1")
+            retired = os.path.join(root, "software", "demo", ".1.old")
+            os.makedirs(retired)
+            run = os.path.join(root, "state", "runs", "demo")
+            os.makedirs(run)
+            journal = {
+                "schema": 2,
+                "run_id": "demo",
+                "state": "complete",
+                "modules_plan": [
+                    {
+                        "live_software": live,
+                        "retired": retired,
+                        "published_at": 1,
+                    }
+                ],
+            }
+            with open(os.path.join(run, "journal.json"), "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+            completed = _run_gc(os.path.join(root, "state"))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        validate(json.loads(completed.stdout), "gc.schema.json")
+        with tempfile.TemporaryDirectory() as state:
+            completed = _run_gc(state)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {"actions": []})
+        validate(json.loads(completed.stdout), "gc.schema.json")
 
 
 if __name__ == "__main__":
