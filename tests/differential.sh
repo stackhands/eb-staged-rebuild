@@ -646,6 +646,31 @@ compare_admin "run, symlinked state root" run --software @ROOT@/software --modul
 compare_admin "run, missing prepare" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r11 --skip-live-check --prepare @ROOT@/no-such-policy --module demo/1 -- demo-1.eb
 compare_admin "run, prepare fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r12 --skip-live-check --prepare @ROOT@/prepare-fails --module demo/1 -- demo-1.eb
 for impl in py zig; do cp "${work}/${impl}/prepare-ok" "${work}/${impl}/prepare-fails"; done
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["saved_prepared"] = journal["modules_plan"][0].pop("prepared")
+path.write_text(json.dumps(journal))
+PY
+done
+compare_admin "resume reports an incomplete publication plan" resume --state-root @ROOT@/state r12
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["prepared"] = journal["modules_plan"][0].pop("saved_prepared")
+path.write_text(json.dumps(journal))
+PY
+done
 compare_admin "resume after the prepare is fixed" resume --state-root @ROOT@/state r12
 compare_admin "the prepare ran once" env cat @ROOT@/prepare-count
 compare_admin "rollback a prepared run" rollback --state-root @ROOT@/state r12
