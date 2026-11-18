@@ -304,6 +304,8 @@ test "required exchange reports the failed filesystem probe" {
 /// then print the dry run or hand the run to run.zig. Returns the exit status.
 pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     var spec = spec_in;
+    if (spec.run_id) |run_id| if (!admin.plainRunId(run_id))
+        refuse("run id is not a plain name: '{s}'", .{run_id});
     checkRoots(a, spec);
     spec.software = admin.abspath(a, spec.software);
     spec.modules = admin.abspath(a, spec.modules);

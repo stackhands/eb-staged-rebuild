@@ -15,6 +15,29 @@ LEDGER_SCHEMA = 4
 GENERATION_POINTER_SCHEMAS = (1, 3)
 
 
+def plain_run_id(run_id):
+    """Return whether ``run_id`` is one non-special path component."""
+    return (
+        isinstance(run_id, str)
+        and run_id not in ("", ".", "..")
+        and "/" not in run_id
+        and "\0" not in run_id
+    )
+
+
+def require_plain_run_id(run_id):
+    """Return a safe run id, or refuse a value that can leave its state directory."""
+    if not plain_run_id(run_id):
+        raise Refused(f"run id is not a plain name: {run_id!r}")
+    return run_id
+
+
+def require_matching_run_id(data, run_id):
+    """Require a journal to name the directory from which it was read."""
+    if not plain_run_id(data.get("run_id")) or data["run_id"] != run_id:
+        raise NeedsIntervention("journal run id does not match its directory")
+
+
 def journal_path(state_root, run_id):
     """Return ``STATE_ROOT/runs/RUN_ID/journal.json``."""
     return os.path.join(os.fspath(state_root), "runs", run_id, "journal.json")

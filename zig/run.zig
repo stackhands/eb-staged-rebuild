@@ -1580,12 +1580,15 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
 /// resume: finish or undo the run the journal names, as its state says,
 /// under the state root's lock.
 pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) E!Result {
+    if (!admin.plainRunId(run_id)) main_mod.refuse("run id is not a plain name: '{s}'", .{run_id});
     const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
     const st = fsx.statAt(fsx.cwd, path, false) catch {
         main_mod.refuse("no journal at {s}", .{path});
     };
     if (!st.isReg()) main_mod.refuse("no journal at {s}", .{path});
     var j = main_mod.loadJournal(a, path);
+    if (!admin.matchingRunId(j, run_id))
+        main_mod.refuse("journal run id does not match its directory", .{});
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
     var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, j, lock_timeout), .path = path };
     defer main_mod.last_why = r.why;
@@ -1593,6 +1596,8 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
     const l = try lockRoot(&r);
     defer l.release();
     j = main_mod.loadJournal(a, path);
+    if (!admin.matchingRunId(j, run_id))
+        return r.intervene("journal run id does not match its directory", .{});
     r.journal = j;
     const state_name = r.str("state");
     var published = false;

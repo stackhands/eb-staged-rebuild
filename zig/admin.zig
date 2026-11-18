@@ -72,6 +72,23 @@ pub fn nowSeconds() f64 {
 
 // ---- paths --------------------------------------------------------------
 
+/// Whether a run id is one non-special path component.
+pub fn plainRunId(run_id: []const u8) bool {
+    return run_id.len > 0 and
+        !std.mem.eql(u8, run_id, ".") and
+        !std.mem.eql(u8, run_id, "..") and
+        std.mem.findScalar(u8, run_id, '/') == null and
+        std.mem.findScalar(u8, run_id, 0) == null;
+}
+
+/// Whether a journal records the plain run id of its directory.
+pub fn matchingRunId(journal: Py, run_id: []const u8) bool {
+    const recorded = pyfmt.get(journal, "run_id") orelse return false;
+    return recorded == .str and
+        plainRunId(recorded.str) and
+        std.mem.eql(u8, recorded.str, run_id);
+}
+
 /// os.path.abspath(os.path.normpath(p)).
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
     var full = p;
@@ -523,12 +540,15 @@ pub fn retire(
 /// retired module file back. Returns the exit status.
 pub fn rollback(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
     const a = c.a;
+    if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
     const path = journalPath(a, state_root, run_id);
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
     const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
     if (!st.isReg()) refuse("no journal at {s}", .{path});
     var journal = main_mod.loadJournal(a, path);
+    if (!matchingRunId(journal, run_id))
+        refuse("journal run id does not match its directory", .{});
     if (!eqlStr(pyfmt.get(journal, "kind"), "retire")) {
         const run_mod = @import("run.zig");
         var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
@@ -689,7 +709,7 @@ fn collectGeneration(
 ) bool {
     const what = finishedRun(j, include_failed) orelse return false;
     const rid = str(pyfmt.get(j, "run_id")) orelse "";
-    if (rid.len == 0 or std.mem.eql(u8, rid, ".") or std.mem.eql(u8, rid, "..") or std.mem.findScalar(u8, rid, '/') != null)
+    if (!plainRunId(rid))
         refuse("refusing a journal whose run id is not a plain name", .{});
     const path = std.fs.path.join(c.a, &.{ state_root, "generations", rid }) catch oom();
     if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;

@@ -185,6 +185,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
 | StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
 | StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
+| RunIdBoundaryTests.test_run_id_cannot_escape_the_state_root | differential "run, a run id with path components" |
+| RunIdBoundaryTests.test_resume_and_rollback_reject_path_components | differential "resume, a run id with path components", "rollback, a run id with path components" |
+| RunIdBoundaryTests.test_journal_run_id_must_match_its_directory | `zig/run.zig` enforces the same check before resume and `zig/admin.zig` before rollback |
 
 ### tests/test_retire.py
 
