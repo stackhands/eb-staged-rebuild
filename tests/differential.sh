@@ -119,6 +119,13 @@ compare "a negative number for a command" -5
 compare "a dash for a command" -
 compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
 compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.

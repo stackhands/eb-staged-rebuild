@@ -175,7 +175,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
         };
         o.seen = true;
         if (!o.takes_value) {
-            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ o.name, arg[eq.? + 1 ..] });
+            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument {s}", .{ o.name, repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         if (eq) |e| {
@@ -608,9 +608,9 @@ const gc_help = gc_usage ++
 ;
 
 /// argparse type=float: Python float() of the text.
-fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
+fn floatArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
-    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
+    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: {s}", .{ name, repr(a, v) });
 }
 
 fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
@@ -639,7 +639,7 @@ fn isHours(hours: f64) bool {
 
 /// --grace-hours of run and gc: a float, and a number of hours, 0 or more.
 fn graceArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64 {
-    const hours = floatArg(usage, who, "grace-hours", v);
+    const hours = floatArg(a, usage, who, "grace-hours", v);
     if (!isHours(hours)) usageError(usage, who, "argument --grace-hours: not a number of hours, 0 or more: {s}", .{repr(a, v)});
     return hours;
 }
@@ -696,7 +696,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[6].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
@@ -718,7 +718,7 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     return admin.rollback(&ctx, state_root.?, pos[0], timeout);
 }
@@ -745,7 +745,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[5].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(
@@ -815,7 +815,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         const k = hit orelse usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
         seen[k] = true;
         if (!takes[k]) {
-            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ names[k], arg[eq.? + 1 ..] });
+            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument {s}", .{ names[k], repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         var v: []const u8 = undefined;
@@ -830,9 +830,9 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         if (std.mem.eql(u8, names[k], "module")) modules_list.append(a, v) catch oom() else vals[k] = v;
     }
     if (vals[4]) |b| if (!engine_inList(&backends, b))
-        usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
+        usageError(run_usage, who, "argument --backend: invalid choice: {s} (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{repr(a, b)});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
-    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
+    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(a, run_usage, who, "lock-timeout", v) else null;
     const min_free_cli: ?u128 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
@@ -947,7 +947,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
     const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
@@ -1035,7 +1035,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
-    usageError(top_usage, prog, "argument command: invalid choice: '{s}' (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{cmd});
+    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
 }
 
 /// The message of the last refusal the engine returned as an error.
