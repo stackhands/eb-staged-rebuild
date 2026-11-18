@@ -483,6 +483,7 @@ site variables through CLI/docs tests and integration coverage.
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the output recorded in the Org pages; no binary behaviour |
 | CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
 | CliDocTests.test_first_tutorial_starts_on_clean_ubuntu | `docs/orgmode/tutorials/first-staged-rebuild.org` step check; no binary behaviour |
+| CliDocTests.test_exit_status_docs_cover_probe_refusals | `docs/orgmode/reference/cli.org` and `docs/orgmode/reference/exit-status.org` exit-status check; no binary behaviour |
 
 ### tests/test_probe_cli.py
 
