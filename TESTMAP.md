@@ -167,6 +167,7 @@ rebuild command implemented by the Zig binary.
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
 | TransactionTests.test_failure_on_second_module_restores_both_modules | fail_matrix "two modules: run fails at STEP", every step of `lib/1` and `app/1` |
+| TransactionTests.test_prepare_failure_keeps_the_run_ready_to_resume | fail_matrix "one module: run fails at stage.move:all/demo/1.lua" |
 | TransactionTests.test_an_installed_tool_ignores_the_fail_hook | differential "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" |
 | TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |

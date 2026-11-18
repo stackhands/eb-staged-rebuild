@@ -410,6 +410,27 @@ class TransactionTests(unittest.TestCase):
                         )
                     self.assert_old_live(installed)
 
+    def test_prepare_failure_keeps_the_run_ready_to_resume(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            with self.assertRaises(InjectedCrash):
+                run(
+                    _spec(
+                        software,
+                        modules,
+                        state,
+                        builder,
+                        faults=FaultInjector("stage.move:all/demo/1.lua"),
+                    )
+                )
+            self.assertEqual(
+                load_journal(journal_path(state, "run1"))["state"],
+                "built",
+            )
+            self.assert_old_live(installed)
+            self.assertEqual(resume(state, "run1", builder=builder).returncode, 0)
+            self.assert_new_live(installed)
+
     def test_an_installed_tool_ignores_the_fail_hook(self):
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(
             os.environ, {"EB_STAGED_REBUILD_FAIL_AT": "build.start"}
