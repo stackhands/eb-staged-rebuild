@@ -43,6 +43,8 @@ from eb_staged_rebuild.journal import (
     generation_root as generation_root_for,
     journal_path,
     load_journal,
+    require_matching_run_id,
+    require_plain_run_id,
     run_dir as run_dir_for,
     save_journal,
 )
@@ -1283,6 +1285,8 @@ def _required_exchange_problem(probes):
 
 def run(spec):
     """Build into a new generation, then swap it with the live directory."""
+    if spec.run_id is not None:
+        require_plain_run_id(spec.run_id)
     _check_roots(spec)
     spec.software = abspath(spec.software)
     spec.modules = abspath(spec.modules)
@@ -1361,8 +1365,10 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
 
 def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeout=None):
     """Continue a run. A finished run is a no-op. A rolled-back run is refused."""
+    require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     journal = load_journal(path)
+    require_matching_run_id(journal, run_id)
     if journal.get("kind") == "retire":
         raise Refused(f"run {run_id} is a retire record; rollback restores the module file")
     faults = faults or FaultInjector()
@@ -1372,6 +1378,7 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
     lock.acquire(lock_timeout)
     try:
         journal = load_journal(path)
+        require_matching_run_id(journal, run_id)
         state = journal["state"]
         published = [mod for mod in journal.get("modules_plan") or [] if mod.get("status") == "published"]
         if state == "complete":
@@ -1467,6 +1474,7 @@ def _record_rollback(journal, faults, publisher, finished, started, now, message
 
 def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     """Exchange every retired tree back into place as one recoverable operation."""
+    require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     faults = faults or FaultInjector()
     now = time.time if clock is None else clock
@@ -1474,6 +1482,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     lock.acquire(lock_timeout)
     try:
         journal = load_journal(path)
+        require_matching_run_id(journal, run_id)
         if journal.get("kind") == "retire":
             from eb_staged_rebuild.retire import rollback_retire
 

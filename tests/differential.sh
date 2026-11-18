@@ -119,6 +119,9 @@ compare "a negative number for a command" -5
 compare "a dash for a command" -
 compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
 compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
+compare "run, a run id with path components" run --software software --modules modules --state-root state --run-id ../escaped -- demo-1.eb
+compare "resume, a run id with path components" resume --state-root state ../escaped
+compare "rollback, a run id with path components" rollback --state-root state ../escaped
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.

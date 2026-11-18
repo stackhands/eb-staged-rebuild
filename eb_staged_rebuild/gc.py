@@ -25,7 +25,13 @@ from eb_staged_rebuild.atomicio import read_bytes
 from eb_staged_rebuild.cleanup import remove_generation_tree
 from eb_staged_rebuild.constants import SECONDS_PER_HOUR
 from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.journal import generation_root, journal_path, list_journals, save_journal
+from eb_staged_rebuild.journal import (
+    generation_root,
+    journal_path,
+    list_journals,
+    plain_run_id,
+    save_journal,
+)
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.metrics import write_metrics
 from eb_staged_rebuild.modulefile import parse_root
@@ -73,7 +79,7 @@ def _generation(state_root, journal, roots, include_failed, dry_run, usage_log, 
     if what is None:
         return []
     run_id = journal.get("run_id")
-    if not isinstance(run_id, str) or run_id in ("", ".", "..") or "/" in run_id:
+    if not plain_run_id(run_id):
         raise Refused("refusing a journal whose run id is not a plain name")
     path = generation_root(state_root, run_id)
     if lstat_kind(path) != "dir":

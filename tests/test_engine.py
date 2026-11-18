@@ -10,7 +10,7 @@ from unittest import mock
 
 from eb_staged_rebuild import cli
 from eb_staged_rebuild.engine import Result, Spec, resume, rollback, run
-from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.errors import NeedsIntervention, Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.gc import collect
 from eb_staged_rebuild.journal import journal_path, load_journal
@@ -774,6 +774,51 @@ class GarbageCollectionTests(unittest.TestCase):
                 (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'abc'\n"),
             )
             self.assertFalse(os.path.exists(state))
+
+
+class RunIdBoundaryTests(unittest.TestCase):
+    def test_run_id_cannot_escape_the_state_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+            builder = mock.Mock(return_value=0)
+            escaped = os.path.join(root, "escaped")
+            with self.assertRaisesRegex(
+                Refused,
+                r"run id is not a plain name: '\.\./\.\./escaped'",
+            ):
+                run(_spec(software, modules, state, builder, run_id="../../escaped"))
+            builder.assert_not_called()
+            self.assertFalse(os.path.lexists(escaped))
+
+    def test_resume_and_rollback_reject_path_components(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, "state")
+            for command in (resume, rollback):
+                with self.subTest(command=command.__name__):
+                    with self.assertRaisesRegex(
+                        Refused,
+                        r"run id is not a plain name: '\.\./escaped'",
+                    ):
+                        command(state, "../escaped")
+
+    def test_journal_run_id_must_match_its_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+
+            def fail(_context):
+                return 7
+
+            self.assertEqual(run(_spec(software, modules, state, fail)).returncode, 7)
+            path = journal_path(state, "run1")
+            journal = load_journal(path)
+            journal["run_id"] = "../escaped"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+            with self.assertRaisesRegex(
+                NeedsIntervention,
+                "journal run id does not match its directory",
+            ):
+                resume(state, "run1")
 
 
 class StateRootVariableTests(unittest.TestCase):
