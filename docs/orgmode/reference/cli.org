@@ -13,7 +13,7 @@ This page describes the static binary and the Python package, which behave the s
 #+begin_example
 eb-staged-rebuild [-h] [--version] COMMAND [OPTION...]
 
-eb-staged-rebuild probe [--path DIR] [--eb EB] [--json]
+eb-staged-rebuild probe [--path DIR] [--no-create] [--eb EB] [--require-eb] [--json]
 eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb EB]
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
@@ -86,11 +86,13 @@ Each command takes the options of its section below.
 
 Report what this machine and filesystem support: bubblewrap (=bwrap=), user namespaces, =renameat2(RENAME_EXCHANGE)=, the EasyBuild version, the filesystem, and how the lock works.
 
-| Option   | Meaning                                                                                                   |
-|----------+-----------------------------------------------------------------------------------------------------------|
-| =--path= | A directory on the filesystem to probe, normally the software tree; the default is the current directory. |
-| =--eb=   | The EasyBuild command to ask for its version; the default is =EB_STAGED_REBUILD_EB=, or =eb=.             |
-| =--json= | Print the report as JSON, indented and with the keys sorted, instead of the lines below.                  |
+| Option         | Meaning                                                                                                   |
+|----------------+-----------------------------------------------------------------------------------------------------------|
+| =--path=       | A directory on the filesystem to probe, normally the software tree; the default is the current directory. |
+| =--no-create=  | Refuse with status 1 when =--path= does not exist, instead of creating that directory for the probe.      |
+| =--eb=         | The EasyBuild command to ask for its version; the default is =EB_STAGED_REBUILD_EB=, or =eb=.             |
+| =--require-eb= | Refuse with status 1 when the =--eb= command is not found; the probe report is still printed first.        |
+| =--json=       | Print the report as JSON, indented and with the keys sorted, instead of the lines below.                  |
 
 The lines, in this order:
 

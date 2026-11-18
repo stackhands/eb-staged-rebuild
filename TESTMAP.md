@@ -486,6 +486,8 @@ site variables through CLI/docs tests and integration coverage.
 
 | test | replacement |
 |---|---|
+| ProbeTests.test_probe_no_create_refuses_a_missing_path | runs against `TOOL_BIN` |
+| ProbeTests.test_probe_require_eb_fails_when_eb_is_missing | runs against `TOOL_BIN` |
 | ProbeTests.test_unreadable_resolve_exits_2_without_a_traceback | differential "resolve an unreadable file" (not as root) |
 | ProbeTests.test_rename_exchange_reports_a_result_for_this_directory | differential "probe --json", "probe text" |
 | ProbeTests.test_probe_all_has_the_open_questions | differential "probe --json" |
