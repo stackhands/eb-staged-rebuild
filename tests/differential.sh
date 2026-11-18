@@ -43,7 +43,8 @@ printf 'local root = "/tmp/\xc3\xa9t\xc3\xa9"\n' > "${m}/utf8.lua"
 ln -s "${m}/lua.lua" "${m}/link.lua"
 ln -s "${s}/done/1" "${s}/linkroot"
 printf 'local root = "%s/linkroot"\n' "${s}" > "${m}/linkroot.lua"
-for f in lua.lua tcl tclq empty.lua ebdir.lua missing.lua noroot.lua spread.lua escaped.lua utf8.lua link.lua linkroot.lua; do
+printf 'local root = "/bad\300\252"\n' > "${m}/non-utf8.lua"
+for f in lua.lua tcl tclq empty.lua ebdir.lua missing.lua noroot.lua spread.lua escaped.lua utf8.lua non-utf8.lua link.lua linkroot.lua; do
     compare "resolve ${f}" resolve "${m}/${f}"
 done
 compare "resolve a directory" resolve "${m}"
