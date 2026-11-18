@@ -308,6 +308,19 @@ eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
 eb-staged-rebuild: run example-userns published 1 module(s)
 #+end_example
 
+** When user namespaces are not allowed
+
+When =probe= reports =user-namespace sandbox: not usable= as well as =bwrap: not usable=, many sites restrict unprivileged user namespaces even when =unshare= is installed.
+=--backend auto= then takes the =installpath= backend: EasyBuild installs into the generation with =--installpath-software= and =--installpath-modules= only, without a separate sandbox process.
+
+#+begin_src bash
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-installpath \
+  --backend installpath -- Example-1.0-GCCcore-15.2.0.eb
+#+end_src
+
+The generation tree still stays separate from the live tree until publication.
+[[file:../explanation/isolation.org][How a build is kept off the live tree]] compares what each backend protects; the install-path fallback leaves the live trees writable for the duration of the =eb= process, which is why bubblewrap or user namespaces are preferred when they work.
+
 The new installation belongs to that account:
 
 #+begin_src bash
