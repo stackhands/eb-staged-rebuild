@@ -8,8 +8,10 @@ digraph staging {
     build [label="EasyBuild installs into the run's generation,\n<state-root>/generations/RUN_ID, not into the live tree"];
     check [shape=diamond, label="Did the build succeed, is its tree complete,\nand is the live tree as it was?", fillcolor="#ffffff"];
     failed [label="The run fails:\nthe live tree and the module file are untouched"];
-    plan [label="The new module file is prepared, with root set to the stable path;\nthe paths the build wrote into files are changed to it too"];
-    move [label="The new tree moves beside the live one:\nsoftware/Example/.1.0-GCCcore-15.2.0.RUN_ID"];
+    plan [label="The new module file is prepared,\nwith root set to the stable path"];
+    verify [shape=diamond, label="With --verify: does the new tree pass the checks\nbefore publication, or is --force given?", fillcolor="#ffffff"];
+    held [label="The run stays built:\nthe live tree and the module file are untouched"];
+    move [label="The paths the build wrote into files are changed to the stable path,\nand the new tree moves beside the live one:\nsoftware/Example/.1.0-GCCcore-15.2.0.RUN_ID"];
     exchange [label="renameat2(RENAME_EXCHANGE) swaps the two names:\nthe stable path holds the new tree, the hidden name the old one"];
     module [label="The new module file replaces the old one\nin the same directory, with one rename"];
     grace [label="The old tree waits under the hidden name:\nrollback swaps it back, gc removes it after the grace period"];
@@ -17,5 +19,8 @@ digraph staging {
     before -> build -> check;
     check -> failed [label=" no"];
     check -> plan [label=" yes"];
-    plan -> move -> exchange -> module -> grace;
+    plan -> verify;
+    verify -> held [label=" no"];
+    verify -> move [label=" yes, or no --verify"];
+    move -> exchange -> module -> grace;
 }

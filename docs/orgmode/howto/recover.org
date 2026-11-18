@@ -158,6 +158,7 @@ The run's journal in the state root records how far it got, and =resume= goes on
 
    A run that is =created=, =building= or =failed= builds its generation again, with the arguments it was started with.
    One that is =built= or =publishing= has its generation already, and only publishes it.
+   A run that was started or resumed with =--verify= has its generation checked before it publishes, unless it stopped in the middle of its publication.
 
 ** Check that it worked
 
@@ -190,6 +191,7 @@ Example 1.0
 | Message                                                                                   | Cause                                                                                                                  | What to do                                                                                                                      |
 |-------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------|
 | =eb-staged-rebuild: eb exited N; live modules were not changed=                           | The build failed again, with EasyBuild's status N.                                                                     | Correct what EasyBuild's output names, and resume again.                                                                        |
+| =eb-staged-rebuild: verify failed; the live directory was not swapped. ...=               | The new tree fails the checks of =--verify=, and the run stays =built=.                                                | See [[file:verify-a-stage.org][Check a rebuild before it goes live]].                                                                                        |
 | =eb-staged-rebuild: live software directory changed during the build; not published: REL= | Something other than this run changed the installation while the run was building; the run compares it with its start. | Find what changed it. A new run records the installation as it is now; =--skip-live-check= turns the comparison off.            |
 | =eb-staged-rebuild: no journal at PATH=                                                   | No run of that name in that state root.                                                                                | Check the name with =status=, and the state root.                                                                               |
 | =eb-staged-rebuild: run RUN_ID has an interrupted rollback; run rollback again=           | The machine stopped after a published tree was exchanged with its previous tree.                                       | Run =rollback= with the same state root and run id to complete the rollback.                                                     |
@@ -201,6 +203,7 @@ Example 1.0
 ** Related
 
 - [[file:rebuild.org][Rebuild an installed module]]
+- [[file:verify-a-stage.org][Check a rebuild before it goes live]]
 - [[file:roll-back.org][Put the previous installation back]]
 - [[file:../explanation/journal.org][What the journal records]], for each state and what =resume= does from it
 - [[file:../reference/exit-status.org][Exit status]]

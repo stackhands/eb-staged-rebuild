@@ -31,7 +31,7 @@ HEAD=$SITE/ledger-heads/head.json
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns build-dir no-easyconfig not-installed ledger-setup ledger-run
-ledger-rollback"
+ledger-rollback verify"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -203,6 +203,20 @@ case_ledger-rollback() {
     step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
 }
 
+case_verify() {
+    # The builder's EasyBuild configuration leaves the new tree readable by
+    # its owner only.
+    export EASYBUILD_UMASK=077
+    STATUS=2 run_example example-6 --verify
+    unset EASYBUILD_UMASK
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
+    step 1 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 cat "$STATE/runs/example-6/verify.json"
+    step 0 chmod -R go+rX "$STATE/generations/example-6/software/Example/1.0-GCCcore-15.2.0"
+    step 0 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
 clean() {
     rm -rf "${SITE:?}/software" "${SITE:?}/modules" "${SITE:?}/sources" "${SITE:?}/bin" "${SITE:?}/standin" \
         "$STATE" "${SITE:?}/build" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" \
