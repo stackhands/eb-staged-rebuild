@@ -11,6 +11,11 @@ eb-staged-rebuild rebuilds an existing EasyBuild installation in a versioned gen
 
 EasyBuild `--rebuild` and `--force` empty an existing install before the new install has passed its sanity checks. This program sends EasyBuild at `<state-root>/generations/<run-id>` and exchanges the live directory only after that generation is complete.
 
+On EESSI's CernVM-FS repositories you do not need it: the publish transaction is the atomic swap. EESSI's rebuild hook ([`eb_hooks.py`](https://github.com/EESSI/software-layer-scripts/blob/main/eb_hooks.py), `pre_fetch_hook_remove_install_dir_for_rebuilds`) warns that a rebuild over a live install can pick up its old files ([easybuild-framework#5362](https://github.com/easybuilders/easybuild-framework/issues/5362)), and removes the old install early only when `EESSI_FORCE_EARLY_REMOVAL_OF_INSTALL_DIR` is set, which EESSI's install script does for `/cvmfs` targets.
+It is for a stack on NFS, Lustre or GPFS that jobs read while it is rebuilt, where there is no transaction.
+
+EasyBuild's own `--bwrap` builds the new tree at a temporary path with the real path bound over it, and writes `bwrap_info.json` there; moving the tree into place is left to the caller. With `--backend bwrap`, the first one `auto` tries, this program runs that build and does the move: it exchanges the finished tree with the live one with `renameat2(RENAME_EXCHANGE)`, or with three ordinary renames that restore both names on failure where the filesystem refuses rename flags, publishes the module file with a same-directory replace, and keeps the previous tree for jobs that still have it open. `installpath` and `userns` are for hosts without bubblewrap and rewrite the generation path in each file before the exchange.
+
 Documentation: <https://stackhands.github.io/eb-staged-rebuild/>, built from the Org pages in `docs/orgmode/`: a tutorial, how-to guides, explanation, and a reference, including the API generated from the Python and Zig code.
 
 ```console
@@ -74,12 +79,12 @@ eb-staged-rebuild is one of the [stackhands](https://github.com/stackhands) tool
 
 | Tool | Job | Docs |
 |---|---|---|
-| [eb-pipeline](https://github.com/stackhands/eb-pipeline) | Run a site's EasyBuild build lists from one TOML file through eb-stack, eb-keep-logs and eb-staged-rebuild | [README](https://github.com/stackhands/eb-pipeline#readme) |
-| [eb-stack](https://github.com/stackhands/eb-stack) | Solve, shard and plan an EasyBuild build list; admit builds under a scratch inode budget | [docs](https://eb-stack.rgoswami.me/) |
-| **eb-staged-rebuild** | Rebuild an installation in a staged tree and swap it in, so running jobs keep their paths | [docs](https://stackhands.github.io/eb-staged-rebuild/) |
-| [eessi-arch-guard](https://github.com/stackhands/eessi-arch-guard) | Reload EESSI in a Slurm task that inherited it for another CPU or GPU | [docs](https://stackhands.github.io/eessi-arch-guard/) |
-| [eb-local](https://github.com/stackhands/eb-local) | Install software with EasyBuild on top of EESSI into a directory a user or project owns | [docs](https://stackhands.github.io/eb-local/) |
-| [eb-keep-logs](https://github.com/stackhands/eb-keep-logs) | Keep a failed build's EasyBuild log and command output; rotate a pipeline's log tree | [docs](https://stackhands.github.io/eb-keep-logs/) |
+| [eb-stack](https://github.com/stackhands/eb-stack) | Turn conda-forge, Spack, PyPI, CRAN and Cargo recipes into easyconfigs; solve, shard and plan an EasyBuild build list | [docs](https://eb-stack.rgoswami.me/) |
+| **eb-staged-rebuild** | Rebuild an installation beside the live one and swap it in, for a stack outside CernVM-FS that jobs read during the rebuild | [docs](https://stackhands.github.io/eb-staged-rebuild/) |
+| [eessi-arch-guard](https://github.com/stackhands/eessi-arch-guard) | Reload EESSI in a Slurm task that inherited a stack loaded for another CPU or GPU, as srun from a login shell does | [docs](https://stackhands.github.io/eessi-arch-guard/) |
+| [eb-local](https://github.com/stackhands/eb-local) | Build on EESSI-extend inside a Slurm job's node-local disk, compile your own code with RPATH, list and uninstall per CPU target | [docs](https://stackhands.github.io/eb-local/) |
+| [eb-keep-logs](https://github.com/stackhands/eb-keep-logs) | Keep a failed EasyBuild command's own output, which --tmp-logdir does not; rotate a pipeline's log tree | [docs](https://stackhands.github.io/eb-keep-logs/) |
+| [eb-pipeline](https://github.com/stackhands/eb-pipeline) | Drive a site's EasyBuild builds from one site file, through eb-stack, eb-staged-rebuild and eb-keep-logs | [docs](https://stackhands.github.io/eb-pipeline/) |
 | [rfc9162](https://github.com/stackhands/rfc9162) | Append-only Merkle logs hashed as RFC 9162, with tiled storage and signed checkpoints | [docs](https://stackhands.github.io/rfc9162/) |
 | [zig-common](https://github.com/stackhands/zig-common) | The shared Zig library under the Zig tools: system calls, checked files, child processes | [docs](https://stackhands.github.io/zig-common/) |
 <!-- stackhands:end -->
