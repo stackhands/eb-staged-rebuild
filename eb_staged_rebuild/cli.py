@@ -138,6 +138,8 @@ def _parser():
     gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
     gc_p.add_argument("--lock-timeout", type=float, default=None)
+    gc_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
+    gc_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
     gc_p.add_argument(
         "--metrics-file",
         metavar="PATH",
@@ -157,6 +159,8 @@ def _parser():
     retire_p.add_argument("--module-file", required=True, help="module file to retire")
     retire_p.add_argument("--reason", default=None)
     retire_p.add_argument("--dry-run", action="store_true")
+    retire_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
+    retire_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
     retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
@@ -255,6 +259,8 @@ def _dispatch(args):
             include_failed=args.include_failed,
             lock_timeout=args.lock_timeout,
             run_grace=args.grace_hours is None,
+            usage_log=args.usage_log,
+            eb_keep_logs=args.eb_keep_logs,
             metrics_file=args.metrics_file,
         )
         for action in actions:
@@ -267,6 +273,8 @@ def _dispatch(args):
             reason=args.reason,
             dry_run=args.dry_run,
             lock_timeout=args.lock_timeout,
+            usage_log=args.usage_log,
+            eb_keep_logs=args.eb_keep_logs,
         )
         return result.returncode
     if args.command == "status":

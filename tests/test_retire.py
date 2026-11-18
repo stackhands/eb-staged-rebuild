@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+import sys
 
 from eb_staged_rebuild.engine import Spec, resume, rollback, run
 from eb_staged_rebuild.errors import NeedsIntervention, Refused
@@ -61,6 +62,16 @@ def _class_links(modules, module):
 def _journal(state, run_id):
     return [j for j in list_journals(state) if j["run_id"] == run_id][0]
 
+def _keep_logs_stub(root):
+    script = os.path.join(root, "eb-keep-logs")
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/bin/sh\n"
+            f'exec "{sys.executable}" "{os.path.join(os.path.dirname(__file__), "fake_eb_keep_logs.py")}" "$@"\n'
+        )
+    os.chmod(script, 0o755)
+    return script
+
 
 class RetireTests(unittest.TestCase):
     def test_retire_moves_module_and_leaves_software(self):
@@ -96,6 +107,51 @@ class RetireTests(unittest.TestCase):
             _sw, mods, state, _install, _module, _text = _tree(root)
             with self.assertRaises(Refused):
                 retire(state, os.path.join(mods, "all"), dry_run=True)
+
+    def test_usage_log_refuses_retire_when_prefix_is_in_use(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, _mods, state, _install, module, text = _tree(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
+            try:
+                with self.assertRaises(Refused):
+                    retire(state, module, usage_log=usage, eb_keep_logs=keep_logs)
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+            self.assertEqual(_read(module), text)
+
+    def test_usage_log_allows_retire_when_prefix_is_clear(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, _mods, state, _install, module, _text = _tree(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "clear"
+            try:
+                result = retire(state, module, usage_log=usage, eb_keep_logs=keep_logs, clock=Clock())
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(os.path.lexists(module))
+
+    def test_usage_log_failure_refuses_without_retiring(self):
+        with tempfile.TemporaryDirectory() as root:
+            _sw, _mods, state, _install, module, text = _tree(root)
+            keep_logs = _keep_logs_stub(root)
+            usage = os.path.join(root, "usage.log")
+            with open(usage, "w", encoding="utf-8") as handle:
+                handle.write("{}\n")
+            os.environ["FAKE_KEEP_LOGS_MODE"] = "error"
+            try:
+                with self.assertRaises(Refused):
+                    retire(state, module, usage_log=usage, eb_keep_logs=keep_logs)
+            finally:
+                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+            self.assertEqual(_read(module), text)
 
     def test_resume_refuses_a_retire_record(self):
         with tempfile.TemporaryDirectory() as root:

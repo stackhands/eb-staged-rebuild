@@ -539,7 +539,9 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
 const retire_usage =
     \\usage: eb-staged-rebuild retire [-h] --state-root STATE_ROOT
     \\                                --module-file MODULE_FILE [--reason REASON]
-    \\                                [--dry-run] [--lock-timeout LOCK_TIMEOUT]
+    \\                                [--dry-run] [--usage-log USAGE_LOG]
+    \\                                [--eb-keep-logs EB_KEEP_LOGS]
+    \\                                [--lock-timeout LOCK_TIMEOUT]
     \\
 ;
 const retire_help = retire_usage ++
@@ -551,6 +553,11 @@ const retire_help = retire_usage ++
     \\                        module file to retire
     \\  --reason REASON
     \\  --dry-run
+    \\  --usage-log USAGE_LOG
+    \\                        usage log checked with eb-keep-logs used --require-
+    \\                        none
+    \\  --eb-keep-logs EB_KEEP_LOGS
+    \\                        eb-keep-logs executable
     \\  --lock-timeout LOCK_TIMEOUT
     \\                        seconds to wait for the lock (default: refuse at once)
     \\
@@ -576,6 +583,8 @@ const gc_usage =
     \\usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
     \\                            [--grace-hours GRACE_HOURS] [--dry-run]
     \\                            [--lock-timeout LOCK_TIMEOUT]
+    \\                            [--usage-log USAGE_LOG]
+    \\                            [--eb-keep-logs EB_KEEP_LOGS]
     \\                            [--metrics-file PATH] [--include-failed]
     \\
 ;
@@ -587,6 +596,11 @@ const gc_help = gc_usage ++
     \\  --grace-hours GRACE_HOURS
     \\  --dry-run
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --usage-log USAGE_LOG
+    \\                        usage log checked with eb-keep-logs used --require-
+    \\                        none
+    \\  --eb-keep-logs EB_KEEP_LOGS
+    \\                        eb-keep-logs executable
     \\  --metrics-file PATH   atomically write Prometheus metrics after garbage
     \\                        collection
     \\  --include-failed      also remove the hidden trees and generation of a
@@ -641,6 +655,8 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "module-file", .takes_value = true },
         .{ .name = "reason", .takes_value = true },
         .{ .name = "dry-run", .takes_value = false },
+        .{ .name = "usage-log", .takes_value = true },
+        .{ .name = "eb-keep-logs", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
     };
     const who = prog ++ " retire";
@@ -655,9 +671,9 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[4].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
-    return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout);
+    return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
 
 fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
@@ -687,6 +703,8 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "grace-hours", .takes_value = true },
         .{ .name = "dry-run", .takes_value = false },
+        .{ .name = "usage-log", .takes_value = true },
+        .{ .name = "eb-keep-logs", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
         .{ .name = "metrics-file", .takes_value = true },
         .{ .name = "include-failed", .takes_value = false },
@@ -701,10 +719,21 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[3].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
-    return admin.gc(&ctx, state_root.?, grace, opts[2].seen, opts[5].seen, timeout, opts[1].value == null, opts[4].value);
+    return admin.gc(
+        &ctx,
+        state_root.?,
+        grace,
+        opts[2].seen,
+        opts[7].seen,
+        timeout,
+        opts[1].value == null,
+        opts[3].value,
+        opts[4].value orelse "eb-keep-logs",
+        opts[6].value,
+    );
 }
 
 const run_usage = @embedFile("run_usage.txt");
@@ -1025,13 +1054,17 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\usage: eb-staged-rebuild gc [-h] [--state-root STATE_ROOT]
         \\                            [--grace-hours GRACE_HOURS] [--dry-run]
         \\                            [--lock-timeout LOCK_TIMEOUT]
+        \\                            [--usage-log USAGE_LOG]
+        \\                            [--eb-keep-logs EB_KEEP_LOGS]
         \\                            [--metrics-file PATH] [--include-failed]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(
         \\usage: eb-staged-rebuild retire [-h] [--state-root STATE_ROOT]
         \\                                --module-file MODULE_FILE [--reason REASON]
-        \\                                [--dry-run] [--lock-timeout LOCK_TIMEOUT]
+        \\                                [--dry-run] [--usage-log USAGE_LOG]
+        \\                                [--eb-keep-logs EB_KEEP_LOGS]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
         \\
     , StateRoot.bracketed(retire_usage));
     try expect(comptime StateRoot.bracketed(gc_usage) ++ gc_help[gc_usage.len..], StateRoot.bracketed(gc_help));
