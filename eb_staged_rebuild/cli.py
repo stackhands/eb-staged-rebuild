@@ -49,6 +49,16 @@ def _hours(text):
     return value
 
 
+def _bytes(text):
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid integer value: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"not a number of bytes, 0 or more: {text!r}")
+    return value
+
+
 def _grace(value):
     if value is not None:
         return value
@@ -120,6 +130,13 @@ def _parser():
         default=None,
         metavar="DIR",
         help="scratch build directory passed to eb as --buildpath",
+    )
+    run_p.add_argument(
+        "--min-free-bytes",
+        type=_bytes,
+        default=None,
+        metavar="BYTES",
+        help="refuse before the build unless the generation filesystem has at least BYTES available",
     )
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
@@ -233,6 +250,7 @@ def _dispatch(args):
             prepare_executable=args.prepare,
             ledger_config=args.ledger_config,
             build_dir=args.build_dir,
+            min_free_bytes=args.min_free_bytes,
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")

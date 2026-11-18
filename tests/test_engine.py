@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from eb_staged_rebuild import cli
-from eb_staged_rebuild.engine import Spec, resume, rollback, run
+from eb_staged_rebuild.engine import Result, Spec, resume, rollback, run
 from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.gc import collect
@@ -117,6 +117,59 @@ def _main(argv, env=None):
         except SystemExit as exc:
             code = exc.code
     return code, out.getvalue(), err.getvalue()
+
+
+class FreeSpaceTests(unittest.TestCase):
+    def test_default_command_output_and_status_stay_byte_identical(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, builder = _fixture(root)
+            out, err = io.StringIO(), io.StringIO()
+            with (
+                mock.patch(
+                    "eb_staged_rebuild.engine.os.statvfs",
+                    side_effect=AssertionError("default run checked free space"),
+                ),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(err),
+            ):
+                result = run(_spec(software, modules, state, builder))
+            expected = (
+                f"eb-staged-rebuild: run run1 backend installpath generation "
+                f"{state}/generations/run1\n"
+                "eb-staged-rebuild: swapped all/demo/1.lua (rename-fallback)\n"
+                "eb-staged-rebuild: published module all/demo/1.lua\n"
+                "eb-staged-rebuild: run run1 published 1 module(s)\n"
+            ).encode()
+        self.assertEqual(
+            (result.returncode, out.getvalue().encode(), err.getvalue().encode()),
+            (0, expected, b""),
+        )
+
+    def test_command_leaves_the_guard_disabled_when_the_option_is_absent(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"]
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertIsNone(called.call_args.args[0].min_free_bytes)
+
+    def test_minimum_free_space_refuses_before_the_journal_and_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+            builder = mock.Mock(return_value=0)
+            spec = _spec(software, modules, state, builder)
+            spec.min_free_bytes = 4096
+            space = mock.Mock(f_bavail=3, f_frsize=1024)
+            with mock.patch("eb_staged_rebuild.engine.os.statvfs", return_value=space):
+                with self.assertRaisesRegex(
+                    Refused,
+                    r"generation filesystem has 3072 bytes available; "
+                    r"--min-free-bytes requires 4096",
+                ):
+                    run(spec)
+            builder.assert_not_called()
+            self.assertFalse(os.path.exists(os.path.join(state, "runs")))
 
 
 class TransactionTests(unittest.TestCase):

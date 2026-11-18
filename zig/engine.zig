@@ -44,6 +44,7 @@ pub const Spec = struct {
     prepare_executable: ?[]const u8 = null,
     ledger_config: ?[]const u8 = null,
     build_dir: ?[]const u8 = null,
+    min_free_bytes: ?u64 = null,
 };
 
 // ---- eb arguments, as builders.py shapes them -----------------------------

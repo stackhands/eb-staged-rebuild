@@ -93,6 +93,7 @@ class Spec:
     ledger_config: str = None
     ledger_policy: dict = None
     build_dir: str = None
+    min_free_bytes: int = None
 
 
 @dataclass
@@ -202,6 +203,18 @@ def _check_install_dir(software, rel):
     kind = lstat_kind(path)
     if kind != "dir":
         raise Refused(f"{path} is {_NOT_A_DIRECTORY[kind]}, not an existing rebuild directory")
+
+
+def _check_free_space(path, minimum):
+    if minimum is None:
+        return
+    info = os.statvfs(path)
+    available = info.f_bavail * info.f_frsize
+    if available < minimum:
+        raise Refused(
+            f"generation filesystem has {available} bytes available; "
+            f"--min-free-bytes requires {minimum}"
+        )
 
 
 def strip_escapes(text):
@@ -1283,6 +1296,7 @@ def run(spec):
     lock = FileLock(spec.state_root)
     lock.acquire(spec.lock_timeout)
     try:
+        _check_free_space(spec.state_root, spec.min_free_bytes)
         if os.path.exists(journal_path(spec.state_root, run_id)):
             raise Refused(f"run {run_id} already exists; resume it or choose another --run-id")
         os.makedirs(run_dir_for(spec.state_root, run_id), exist_ok=True)

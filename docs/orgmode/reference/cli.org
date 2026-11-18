@@ -18,7 +18,8 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
-                      [--ledger-config FILE] [--build-dir DIR] -- EASYCONFIG [EB-ARGUMENT...]
+                      [--ledger-config FILE] [--build-dir DIR] [--min-free-bytes BYTES]
+                      -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run] [--include-failed]
@@ -128,8 +129,12 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--prepare=         | The absolute path of a program to run with the path of =prepare-context.json=, after the build and before the exchange; a status other than 0 stops the run with that status.                          |
 | =--ledger-config=   | A JSON file that names an eb-stack ledger to record each publication in.                                                                                                                               |
 | =--build-dir=       | A scratch build directory passed to EasyBuild as =--buildpath= during the build. Refused when inside the generation root or the live =--software= or =--modules= trees. When omitted, EasyBuild keeps its own default build path. |
+| =--min-free-bytes=  | Refuse before the journal and build unless the generation filesystem has at least this many bytes available to the caller. The default does not check free space.                                                             |
 
 Once it has checked them, =run= makes a relative =--software=, =--modules=, =--state-root= or =--build-dir= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
+When =--min-free-bytes= is set, =run= reads the filesystem's available blocks after taking the state-root lock and before creating the run journal or starting the build command.
+It compares the available block count times the fragment size with =BYTES=.
+This is a reserve threshold, not an estimate of the rebuilt installation's size.
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
 Every module that list names, except one marked =[x]= (installed, and left alone), must be an existing directory =software/NAME/VERSION=.
 When the dry run marks =[ ]= (not installed) a module that =--module= does not name, =run= asks =eb --extended-dry-run= with the same arguments, =--stop=fetch= and =--ignore-locks=, and leaves out each module marked =[ ]= that EasyBuild would not build.

@@ -27,6 +27,8 @@ A job that starts after the exchange loads the new installation; one that is run
 - The installation to rebuild, a real directory =software/NAME/VERSION=; a package that is not installed yet is EasyBuild's to install.
 - Room for a second copy of the installation on the software tree's filesystem.
   The new tree is built in the /state root/, =/opt/site/.eb-staged-rebuild= unless =--state-root= names another directory, which has to be on that filesystem.
+  If the site requires a fixed reserve, add =--min-free-bytes BYTES= to the run.
+  The command then refuses before the rebuild starts when the generation filesystem has less than that reserve available.
 
 ** Steps
 
