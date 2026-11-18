@@ -317,6 +317,7 @@ compare_admin "run, relative prepare" run --software @ROOT@/software --modules @
 compare_admin "run, negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --min-free-bytes=-1 -- x.eb
 compare_admin "run, whitespace-padded negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules "--min-free-bytes= -1 " -- x.eb
 compare_admin "run --dry-run, whitespace-padded --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run "--min-free-bytes= 4096 " --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, maximum u128 --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --min-free-bytes 340282366920938463463374607431768211455 --module demo/1 -- demo-1.eb
 compare_admin "retire, no module file" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/none.lua
 compare_admin "retire, missing options" retire
 compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
