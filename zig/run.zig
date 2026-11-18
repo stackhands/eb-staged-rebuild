@@ -1605,6 +1605,11 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
         published = true;
     };
     if (std.mem.eql(u8, state_name, "complete")) {
+        for (r.list("modules_plan")) |m| {
+            if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "restoring")) {
+                return r.refuse("run {s} has an interrupted rollback; run rollback again", .{run_id});
+            }
+        }
         const m = try a.print("run {s} is already complete", .{run_id});
         return recordFinished(&r, try publisher(&r), m);
     }
