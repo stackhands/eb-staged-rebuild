@@ -275,6 +275,7 @@ compare_admin "retire" retire --state-root @ROOT@/state --module-file @ROOT@/mod
 compare_admin "retire again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "status after retire" status --state-root @ROOT@/state
 compare_admin "gc keeps within grace" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc --json keeps within grace" gc --state-root @ROOT@/state --dry-run --json
 compare_admin "gc, --usage-log keeps an in-use tree" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "gc, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 if [ "$(id -u)" != 0 ]; then

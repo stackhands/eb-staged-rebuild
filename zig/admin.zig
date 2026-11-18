@@ -648,6 +648,20 @@ fn num(v: ?Py) ?f64 {
 
 const Action = struct { path: []const u8, action: []const u8, reason: []const u8 };
 
+fn gcDocument(a: Allocator, actions: []const Action) Py {
+    var rows: std.ArrayList(Py) = .empty;
+    for (actions) |act| {
+        var row: std.ArrayList(Py.Entry) = .empty;
+        row.append(a, .{ .key = "action", .value = Py.s(act.action) }) catch oom();
+        row.append(a, .{ .key = "path", .value = Py.s(act.path) }) catch oom();
+        row.append(a, .{ .key = "reason", .value = Py.s(act.reason) }) catch oom();
+        rows.append(a, .{ .dict = row.items }) catch oom();
+    }
+    var top: std.ArrayList(Py.Entry) = .empty;
+    top.append(a, .{ .key = "actions", .value = .{ .list = rows.items } }) catch oom();
+    return .{ .dict = top.items };
+}
+
 fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
     const st = pyfmt.get(j, "state");
     if (eqlStr(st, "complete")) return "complete run";
@@ -871,6 +885,7 @@ pub fn gc(
     usage_log: ?[]const u8,
     eb_keep_logs: []const u8,
     metrics_file: ?[]const u8,
+    json_output: bool,
 ) u8 {
     const a = c.a;
     if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
@@ -1006,7 +1021,13 @@ pub fn gc(
         }
     }
     if (metrics_file) |path| writeMetrics(c, path, state_root, journals);
-    for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
+    if (json_output) {
+        const out = json.dumps(a, gcDocument(a, actions.items), 2, true) catch return 1;
+        cli.put(1, out);
+        cli.put(1, "\n");
+    } else {
+        for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
+    }
     return 0;
 }
 
@@ -1118,7 +1139,7 @@ test "gc records its completion time after its starting time" {
     const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
     const env: probe.Env = .{ .envp = parent };
     var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
-    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics));
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false));
     try std.testing.expectEqual(@as(usize, 2), Clock.calls);
     try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
 }

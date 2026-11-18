@@ -4,7 +4,7 @@
 
 * Machine-readable command output
 
-=probe --json=, =status --json=, and =resolve= print one JSON document on stdout.
+=probe --json=, =gc --json=, =status --json=, and =resolve= print one JSON document on stdout.
 =build-events= and =ledger-maintenance= print JSON on success as [[file:cli.org][The command line]] describes.
 
 ** JSON Schema files
@@ -14,6 +14,7 @@ Draft 2020-12 schemas live beside this page:
 | Output | Schema file | Notes |
 |--------+-------------+-------|
 | =probe --json= | =json/probe.schema.json= | Capability report for the chosen directory and EasyBuild command |
+| =gc --json= | =json/gc.schema.json= | One object with an =actions= array; no actions produce ={"actions": []}= |
 | =status --json= | =json/status.schema.json= | One object with a =runs= array; an empty root is ={"runs": []}= |
 
 ** =resolve=
@@ -29,7 +30,8 @@ Usage errors exit 2 before any JSON is printed.
 | Command | JSON on stdout | Exit 0 | Exit 1 | Exit 2 |
 |---------+----------------+--------+--------+--------|
 | =probe --json= | When the probe finishes | Report printed | Out of memory in the binary, or an unexpected Python traceback | Refused or an operating-system error |
+| =gc --json= | After the collection pass | Document printed, including ={"actions": []}= | Out of memory in the binary, or an unexpected Python traceback | Refused or an operating-system error |
 | =status --json= | When journals were read | Document printed, including ={"runs": []}= | — | Refused, including an unknown =RUN_ID= |
 | =resolve= | Always when the path was read | Complete installation named | Not a regular file, or not complete | Refused or unreadable file |
 
-Both the Python package and the Zig binary must satisfy these schemas for =probe --json= and =status --json=.
+Both the Python package and the Zig binary must satisfy these schemas for =probe --json=, =gc --json= and =status --json=.
