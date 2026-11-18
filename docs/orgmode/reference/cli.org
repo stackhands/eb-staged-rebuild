@@ -271,6 +271,7 @@ When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printe
 | Status | Meaning                                                                                                                          |
 |--------+----------------------------------------------------------------------------------------------------------------------------------|
 |      0 | Done, or nothing to do.                                                                                                          |
+|      1 | =probe=: =--no-create= refused a missing =--path=, or =--require-eb= did not find the =--eb= command.                            |
 |      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                             |
 |      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.                   |
 |     75 | A ledger did not acknowledge a record; the message ends with the command that delivers it, =run resume= or =run rollback again=. |
