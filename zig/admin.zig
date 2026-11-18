@@ -366,6 +366,11 @@ fn statDev(c: *Ctx, p: []const u8) u64 {
     return st.dev;
 }
 
+/// Whether two existing paths are on the same filesystem.
+pub fn sameFilesystem(c: *Ctx, first: []const u8, second: []const u8) bool {
+    return statDev(c, first) == statDev(c, second);
+}
+
 /// Rename `source` onto `destination` once the file's bytes are durable.
 fn move(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8) void {
     const f = c.faults();
@@ -457,7 +462,7 @@ pub fn retire(
         link.* = dictSet(a, entry, "status", Py.s("pending"));
     }
     atomic.makedirs(dirname(destination)) catch |err| refuse("{s}", .{main_mod.osError(a, err, dirname(destination))});
-    if (statDev(c, dirname(p.module)) != statDev(c, dirname(destination))) {
+    if (!sameFilesystem(c, dirname(p.module), dirname(destination))) {
         discardEmpty(a, top);
         refuse("{s} and the state root are on different filesystems; retire needs one atomic rename, so put --state-root on the same filesystem as the module tree", .{p.module});
     }
@@ -465,7 +470,7 @@ pub fn retire(
         const live = str(pyfmt.get(link, "live_path")).?;
         const kept = dirname(str(pyfmt.get(link, "retired_path")).?);
         atomic.makedirs(kept) catch |err| refuse("{s}", .{main_mod.osError(a, err, kept)});
-        if (statDev(c, dirname(live)) != statDev(c, kept)) {
+        if (!sameFilesystem(c, dirname(live), kept)) {
             discardEmpty(a, top);
             refuse("{s} and the state root are on different filesystems; retire needs one atomic rename, so put --state-root on the same filesystem as the module tree", .{live});
         }

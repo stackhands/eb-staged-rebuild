@@ -476,6 +476,13 @@ site variables through CLI/docs tests and integration coverage.
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
 
+### tests/test_stage_filesystem.py
+
+| test | replacement |
+|---|---|
+| StageFilesystemTests.test_default_run_keeps_exact_status_and_stream_bytes | differential "run, installpath" checks the default command's status and streams |
+| StageFilesystemTests.test_different_filesystem_refuses_before_the_journal_and_build | differential "run refuses a state root on another filesystem before the build" |
+
 ### tests/test_json_schemas.py
 
 | test | replacement |

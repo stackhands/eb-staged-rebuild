@@ -72,12 +72,9 @@ def _unique(state_root, now):
     return candidate
 
 
-def _check_same_filesystem(module, destination_parent):
-    if os.stat(os.path.dirname(module)).st_dev != os.stat(destination_parent).st_dev:
-        raise Refused(
-            f"{module} and the state root are on different filesystems; "
-            "retire needs one atomic rename, so put --state-root on the same filesystem as the module tree"
-        )
+def _check_same_filesystem(source_parent, destination_parent, message):
+    if os.stat(source_parent).st_dev != os.stat(destination_parent).st_dev:
+        raise Refused(message)
 
 
 def _links_to(module):
@@ -193,10 +190,20 @@ def retire(
         ]
         os.makedirs(os.path.dirname(destination), exist_ok=True)
         try:
-            _check_same_filesystem(module, os.path.dirname(destination))
+            _check_same_filesystem(
+                os.path.dirname(module),
+                os.path.dirname(destination),
+                f"{module} and the state root are on different filesystems; "
+                "retire needs one atomic rename, so put --state-root on the same filesystem as the module tree",
+            )
             for link in links:
                 os.makedirs(os.path.dirname(link["retired_path"]), exist_ok=True)
-                _check_same_filesystem(link["live_path"], os.path.dirname(link["retired_path"]))
+                _check_same_filesystem(
+                    os.path.dirname(link["live_path"]),
+                    os.path.dirname(link["retired_path"]),
+                    f"{link['live_path']} and the state root are on different filesystems; "
+                    "retire needs one atomic rename, so put --state-root on the same filesystem as the module tree",
+                )
         except Refused:
             _discard_empty(top)
             raise
