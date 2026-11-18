@@ -364,6 +364,7 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | PrepareRecoveryTests.test_empty_program_is_refused_by_the_api | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_empty_program_is_refused_before_cli_dispatch | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_failed_policy_retry_preserves_the_built_generation | differential "run, prepare fails", "resume after the prepare is fixed" (resumed from built, no build), "the prepare ran once" |
+| PrepareRecoveryTests.test_resume_reports_an_incomplete_publication_plan | differential "resume reports an incomplete publication plan" |
 | PrepareRecoveryTests.test_child_signal_has_a_shell_exit_status | `zig/builders.zig` test "a command killed by a signal has a shell exit status" |
 | PrepareRecoveryTests.test_policy_journal_requires_schema_two | differential "run, prepare fails" (journal `schema` compared) |
 
