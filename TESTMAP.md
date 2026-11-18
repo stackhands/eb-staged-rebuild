@@ -258,6 +258,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ModuleFileTests.test_rewrite_does_not_eat_a_longer_prefix | `zig/modulefile.zig` test "loads, identity and rewriting" |
 | ModuleFileTests.test_new_path_that_contains_the_old_path_is_not_doubled | `zig/modulefile.zig` test "a new path that contains the old path is not doubled" |
 | ModuleFileTests.test_refuses_a_file_with_no_root | `zig/modulefile.zig` test "loads, identity and rewriting" |
+| ModuleFileTests.test_resolve_refuses_non_utf8_module_text | differential "resolve non-utf8.lua" |
 
 ### tests/test_gc_references.py
 
@@ -366,6 +367,7 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | PrepareRecoveryTests.test_empty_program_is_refused_by_the_api | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_empty_program_is_refused_before_cli_dispatch | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_failed_policy_retry_preserves_the_built_generation | differential "run, prepare fails", "resume after the prepare is fixed" (resumed from built, no build), "the prepare ran once" |
+| PrepareRecoveryTests.test_resume_reports_an_incomplete_publication_plan | differential "resume reports an incomplete publication plan" |
 | PrepareRecoveryTests.test_child_signal_has_a_shell_exit_status | `zig/builders.zig` test "a command killed by a signal has a shell exit status" |
 | PrepareRecoveryTests.test_policy_journal_requires_schema_two | differential "run, prepare fails" (journal `schema` compared) |
 
@@ -481,6 +483,7 @@ site variables through CLI/docs tests and integration coverage.
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the output recorded in the Org pages; no binary behaviour |
 | CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
 | CliDocTests.test_first_tutorial_starts_on_clean_ubuntu | `docs/orgmode/tutorials/first-staged-rebuild.org` step check; no binary behaviour |
+| CliDocTests.test_exit_status_docs_cover_probe_refusals | `docs/orgmode/reference/cli.org` and `docs/orgmode/reference/exit-status.org` exit-status check; no binary behaviour |
 
 ### tests/test_probe_cli.py
 
@@ -496,6 +499,12 @@ site variables through CLI/docs tests and integration coverage.
 | StatusJsonTests.test_status_json_of_an_empty_root_is_an_empty_document | differential "status --json, no runs dir" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
+
+### tests/test_journal_shape.py
+
+| test | replacement |
+|---|---|
+| JournalShapeTests.test_invalid_record_shapes_need_intervention | differential "status, journal array", "status, journal plan string", "status, journal plan number" |
 
 ### tests/test_stage_filesystem.py
 

@@ -917,8 +917,20 @@ def _restore_publish_baseline(journal):
         ) from error
 
 
+def _require_publication_fields(journal):
+    for mod in journal["modules_plan"]:
+        if not all(
+            isinstance(mod.get(field), str) and mod[field]
+            for field in ("rel", "prepared", "new_hash")
+        ):
+            raise NeedsIntervention(
+                "journal module plan does not record rel, prepared and new_hash"
+            )
+
+
 def _validate_publication_set(journal):
     """Refuse before any live name moves when prepared access metadata cannot be read."""
+    _require_publication_fields(journal)
     for mod in journal["modules_plan"]:
         try:
             prepared = read_bytes(mod["prepared"])
@@ -1194,6 +1206,7 @@ def _record_finished(spec, journal, faults, publisher, message):
 
 def _publish_recorded(spec, journal, faults):
     """Swap only after a required ledger has acknowledged every started record."""
+    _require_publication_fields(journal)
     rc = _prepare_publication(spec, journal, faults)
     if rc != 0:
         return Result(rc, journal["run_id"], "failed", journal["message"], _command_text(journal))
@@ -1671,7 +1684,10 @@ def describe_module(path):
     kind = lstat_kind(path)
     if kind != "file":
         return {"path": os.fspath(path), "kind": kind, "complete": False, "root": None}
-    text = read_bytes(path).decode("utf-8")
+    try:
+        text = read_bytes(path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused(f"{path} is not UTF-8 text") from exc
     syntax, root = parse_root(text)
     return {
         "path": os.fspath(path),

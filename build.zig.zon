@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .zig_common = .{
-            .url = "git+https://github.com/stackhands/zig-common#v0.8.1",
-            .hash = "zig_common-0.8.1-kBaPebgtAwBole26eQY2FNhyv-weVJPVgRBzkVySHIe-",
+            .url = "git+https://github.com/stackhands/zig-common#v0.10.0",
+            .hash = "zig_common-0.10.0-kBaPebVtBABxNPUshBTfOZOiLCQhOaXdCAfkd4sSq8Ju",
         },
     },
     .paths = .{
