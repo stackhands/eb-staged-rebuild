@@ -308,10 +308,7 @@ pub fn loadJournal(a: Allocator, path: []const u8) Py {
     if (!std.unicode.utf8ValidateSlice(data)) needsIntervention("journal cannot be read: {s}: not UTF-8 text", .{path});
     const parsed = json.parse(a, data) catch needsIntervention("journal cannot be read: {s}: not valid JSON", .{path});
     const j = json.toPy(a, parsed) catch needsIntervention("journal cannot be read: {s}: not valid JSON", .{path});
-    if (j != .dict) {
-        cli.err("Traceback: AttributeError: journal is not a JSON object: {s}\n", .{path});
-        std.process.exit(1);
-    }
+    if (j != .dict) needsIntervention("journal is not a JSON object: {s}", .{path});
     const sch = pyfmt.get(j, "schema");
     const sch_int: ?i64 = if (sch) |s| switch (s) {
         .int => |n| n,
@@ -353,10 +350,10 @@ pub fn requireDirectorySwap(a: Allocator, j: Py) void {
     if (!pyfmt.truthy(plan)) return;
     const items = switch (plan.?) {
         .list => |l| l,
-        else => typeError("modules_plan is not a list"),
+        else => needsIntervention("journal modules_plan is not a list", .{}),
     };
     for (items) |m| {
-        if (m != .dict) typeError("a modules_plan entry is not an object");
+        if (m != .dict) needsIntervention("journal modules_plan entry is not an object", .{});
         if (pyfmt.get(m, "live_software") == null or pyfmt.get(m, "retired") == null)
             needsIntervention("journal does not record a directory swap; a generation-pointer plan is not applied", .{});
     }
