@@ -1379,6 +1379,17 @@ const StatFs = extern struct {
     spare: [4]isize,
 };
 
+fn availableBytes(info: StatFs) u128 {
+    const blocks: u128 = if (info.blocks_available > 0) @intCast(info.blocks_available) else 0;
+    const unit: u128 = if (info.fragment_size > 0)
+        @intCast(info.fragment_size)
+    else if (info.block_size > 0)
+        @intCast(info.block_size)
+    else
+        0;
+    return blocks * unit;
+}
+
 fn checkFreeSpace(r: *R) E!void {
     const minimum = r.spec.min_free_bytes orelse return;
     var path_buf: [sys.path_max:0]u8 = undefined;
@@ -1388,9 +1399,7 @@ fn checkFreeSpace(r: *R) E!void {
     const result = linux.syscall2(.statfs, @intFromPtr(path.ptr), @intFromPtr(&info));
     if (linux.errno(result) != .SUCCESS)
         return r.refuse("cannot inspect free space on {s}", .{r.spec.state_root});
-    const blocks: u128 = if (info.blocks_available > 0) @intCast(info.blocks_available) else 0;
-    const fragment_size: u128 = if (info.fragment_size > 0) @intCast(info.fragment_size) else 0;
-    const available = blocks * fragment_size;
+    const available = availableBytes(info);
     if (available < minimum)
         return r.refuse(
             "generation filesystem has {d} bytes available; --min-free-bytes requires {d}",
@@ -2145,4 +2154,16 @@ test "notADirectory says what the path is instead" {
     try std.testing.expectEqualStrings("a file", notADirectory("file"));
     try std.testing.expectEqualStrings("a symlink", notADirectory("symlink"));
     try std.testing.expectEqualStrings("a special file", notADirectory("other"));
+}
+
+test "availableBytes falls back to block_size and multiplies in u128 without overflow" {
+    var info = std.mem.zeroes(StatFs);
+    info.blocks_available = 10;
+    info.block_size = 4096;
+    info.fragment_size = 0;
+    try std.testing.expectEqual(@as(u128, 40960), availableBytes(info));
+
+    info.fragment_size = 1 << 30;
+    info.blocks_available = 1 << 40;
+    try std.testing.expectEqual(@as(u128, 1) << 70, availableBytes(info));
 }
