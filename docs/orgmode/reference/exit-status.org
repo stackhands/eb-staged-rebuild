@@ -21,6 +21,11 @@ The status each command exits with, and what it means for the state root and the
 A run that the tree check or the live check stopped after the build exits 2, with its journal =failed=; one whose publication failed in the middle exits 2, with its journal =built= and the old trees back.
 =status= says which.
 
+Pre-build refusals that exit 2 before touching the live tree include:
+- =--min-free-bytes= / =EB_STAGED_REBUILD_MIN_FREE_BYTES=: the generation filesystem has fewer available bytes than requested.
+- =--require-exchange=: =renameat2(RENAME_EXCHANGE)= probe failed on the live filesystem.
+- =--ledger-config=: =eb-staged-rebuild: ledger config KEY must be ...= (including non-finite or non-positive =timeout=).
+
 ** See also
 
 - [[file:cli.org][The eb-staged-rebuild command]]
