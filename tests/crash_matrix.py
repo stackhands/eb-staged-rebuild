@@ -360,9 +360,17 @@ def run_matrix(fixture):
             fixture.build(root)
             assert finish(impl, fixture, fixture.run_args(root, "r1"), root) == 0
             how = kill_at(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], step, root)
+            resume_rc = None
+            if step.startswith("journal.restore:") and step.endswith(".write"):
+                resume_rc = finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
             rc = finish(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
-            return {"kill": how, "rollback_rc": rc, **outcome(fixture, root, "r1")}
-        failures += compare(f"{fixture.name}: rollback killed at {step}", fixture, each_impl("crash-rb", body), "rollback")
+            return {"kill": how, "resume_rc": resume_rc, "rollback_rc": rc, **outcome(fixture, root, "r1")}
+        results = each_impl("crash-rb", body)
+        failures += compare(f"{fixture.name}: rollback killed at {step}", fixture, results, "rollback")
+        if step.startswith("journal.restore:") and step.endswith(".write"):
+            if any(results[impl]["resume_rc"] != 2 for impl in ("py", "zig")):
+                print(f"BAD  {fixture.name}: resume reports rollback killed at {step}: {results}")
+                failures += 1
     return failures, len(steps) + len(rollback_steps) + len(total_extra)
 
 

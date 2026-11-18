@@ -1375,6 +1375,13 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
         state = journal["state"]
         published = [mod for mod in journal.get("modules_plan") or [] if mod.get("status") == "published"]
         if state == "complete":
+            if any(
+                mod.get("status") == "restoring"
+                for mod in journal.get("modules_plan") or []
+            ):
+                raise Refused(
+                    f"run {run_id} has an interrupted rollback; run rollback again"
+                )
             message = f"run {run_id} is already complete"
             return _record_finished(spec, journal, faults, _publisher(journal), message)
         if state == "rolled_back":
