@@ -1,0 +1,1 @@
+The tests of the bounded ledger call no longer fail under load: their helper processes write each pid and progress file under a temporary name and rename it into place, so a test never reads a file that a helper killed in the middle of writing it left empty.

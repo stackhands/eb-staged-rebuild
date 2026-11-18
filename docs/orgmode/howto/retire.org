@@ -26,6 +26,7 @@ A link elsewhere in the tree is not discovered.
    #+end_src
 
    #+begin_example
+   eb-staged-rebuild: would retire the link /opt/site/modules/tools/Example/1.0-GCCcore-15.2.0.lua
    eb-staged-rebuild: would retire /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua (software directory /opt/site/software/Example/1.0-GCCcore-15.2.0 is left in place)
    #+end_example
 
@@ -37,7 +38,8 @@ A link elsewhere in the tree is not discovered.
    #+end_src
 
    #+begin_example
-   eb-staged-rebuild: retired /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua -> /opt/site/.eb-staged-rebuild/retired/20261117T014940Z/opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua; software directory /opt/site/software/Example/1.0-GCCcore-15.2.0 left in place
+   eb-staged-rebuild: retired the link /opt/site/modules/tools/Example/1.0-GCCcore-15.2.0.lua -> /opt/site/.eb-staged-rebuild/retired/20261117T152145Z/opt/site/modules/tools/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: retired /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua -> /opt/site/.eb-staged-rebuild/retired/20261117T152145Z/opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua; software directory /opt/site/software/Example/1.0-GCCcore-15.2.0 left in place
    #+end_example
 
    The record is named after the time of the move, as the directory under =retired/= is.
@@ -48,11 +50,11 @@ A link elsewhere in the tree is not discovered.
 The record says what moved, and the software directory it left:
 
 #+begin_src bash
-eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild retire-20261117T014940Z
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild retire-20261117T152145Z
 #+end_src
 
 #+begin_example
-retire-20261117T014940Z  retired  retire  /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
+retire-20261117T152145Z  retired  retire  /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
   software directory /opt/site/software/Example/1.0-GCCcore-15.2.0
 #+end_example
 
@@ -80,15 +82,16 @@ manual: /opt/site/software/Example/1.0-GCCcore-15.2.0 (ready to remove by hand a
 To put the module file and its links back, roll the record back:
 
 #+begin_src bash
-eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild retire-20261117T014940Z
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild retire-20261117T152145Z
 ls -lA /opt/site/modules/all/Example
 #+end_src
 
 #+begin_example
 eb-staged-rebuild: restored /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua
-eb-staged-rebuild: run retire-20261117T014940Z rolled back; /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua restored
+eb-staged-rebuild: restored the link /opt/site/modules/tools/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run retire-20261117T152145Z rolled back; /opt/site/modules/all/Example/1.0-GCCcore-15.2.0.lua restored
 total 4
--rw-r--r-- 1 alice alice 717 Nov 17 01:48 1.0-GCCcore-15.2.0.lua
+-rw-r--r-- 1 alice alice 717 Nov 17 15:20 1.0-GCCcore-15.2.0.lua
 #+end_example
 
 =docs/examples/site.sh= in the repository runs these steps as its case =retire=.

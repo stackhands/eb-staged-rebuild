@@ -403,6 +403,7 @@ compare_admin "rollback the exchange-required run" rollback --state-root @ROOT@/
 compare_admin "resume a rolled-back run" resume --state-root @ROOT@/state r2
 compare_admin "run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id r4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r5 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback a run a later run replaced" rollback --state-root @ROOT@/state r4
 compare_admin "status, ledger run" status --state-root @ROOT@/state r5
 compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
