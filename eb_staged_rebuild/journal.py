@@ -80,7 +80,14 @@ def _require_directory_swap(data):
         )
     if data.get("kind") == "retire":
         return
-    for mod in data.get("modules_plan") or []:
+    plan = data.get("modules_plan")
+    if not plan:
+        return
+    if not isinstance(plan, list):
+        raise NeedsIntervention("journal modules_plan is not a list")
+    for mod in plan:
+        if not isinstance(mod, dict):
+            raise NeedsIntervention("journal modules_plan entry is not an object")
         if "live_software" not in mod or "retired" not in mod:
             raise NeedsIntervention(
                 "journal does not record a directory swap; "
@@ -100,6 +107,8 @@ def load_journal(path):
         data = json.loads(read_bytes(path).decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise NeedsIntervention(f"journal cannot be read: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise NeedsIntervention(f"journal is not a JSON object: {path}")
     schema = data.get("schema")
     if schema in GENERATION_POINTER_SCHEMAS:
         raise NeedsIntervention(

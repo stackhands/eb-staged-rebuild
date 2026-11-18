@@ -492,6 +492,12 @@ site variables through CLI/docs tests and integration coverage.
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
 
+### tests/test_journal_shape.py
+
+| test | replacement |
+|---|---|
+| JournalShapeTests.test_invalid_record_shapes_need_intervention | differential "status, journal array", "status, journal plan string", "status, journal plan number" |
+
 ### tests/test_stage_filesystem.py
 
 | test | replacement |

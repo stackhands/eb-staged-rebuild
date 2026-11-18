@@ -95,6 +95,12 @@ echo '{"schema": 2, "publication": "pointer"}' > "${st}/runs/r4/journal.json"
 compare "status, other publication" status --state-root "${st}"
 echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
 compare "status, plan without a swap" status --state-root "${st}"
+echo '[]' > "${st}/runs/r4/journal.json"
+compare "status, journal array" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": "entry"}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan string" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": [1]}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan number" status --state-root "${st}"
 rm -rf "${st}/runs/r4"
 
 # Probe.
