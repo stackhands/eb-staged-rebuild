@@ -23,7 +23,7 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--require-exchange] -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild verify --state-root DIR [--lock-timeout SECONDS] STAGE
-eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
+eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] (RUN_ID | --latest | --to GEN)
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
                      [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
                      [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH] [--json]
@@ -51,8 +51,8 @@ positional arguments:
     run                 build and atomically swap a staged tree
     resume              continue a run after a crash
     verify              check a built run's stage before it is published
-    rollback            restore the previous module files, or put a retired
-                        module file back
+    rollback            switch back to the previous generation or a named one,
+                        or put a retired module file back
     gc                  remove hidden retired siblings after the grace period
     retire              move a module file out of the module tree after its
                         package is published elsewhere
@@ -71,6 +71,7 @@ options:
 The first argument is the command, and =COMMAND --help= prints that command's options.
 For =run=, every argument after =--= goes to EasyBuild: the easyconfig, and any of =eb='s own options.
 For =resume=, =rollback= and =status=, =RUN_ID= names a run, or a retire record, in the state root.
+For =rollback --to=, =GEN= names a =complete= run.
 For =verify=, =STAGE= names a =built= run.
 
 ** Options
@@ -197,15 +198,23 @@ It exits 0 when the generation passes, and 1 when it fails.
 *** rollback
 
 Put back what the run =RUN_ID= replaced: the previous trees and module files of a =complete= run, or the module file and its recorded links from a retire record.
+With =--latest= instead of =RUN_ID=, roll back the newest =complete= run, by the time its publication completed.
+One of =RUN_ID=, =--latest= and =--to= is required.
 
 | Option           | Meaning                                                                                                           |
 |------------------+-------------------------------------------------------------------------------------------------------------------|
 | =--state-root=   | The state root that holds the run; the default is =EB_STAGED_REBUILD_STATE_ROOT=, and one of the two is required. |
 | =--lock-timeout= | Seconds to wait for the state root's lock; without it the wait has no limit.                                      |
+| =--to=           | Roll back every run published over the run =GEN=, in one pass.                                                    |
+| =--latest=       | Roll back the newest =complete= run.                                                                              |
 
 The replacement stays at the hidden name =software/NAME/.VERSION.RUN_ID= until =gc= removes it.
 A run in any other state is refused, except one that is rolled back already: that prints so and exits 0.
 So is a run whose tree is no longer the one at the stable path, such as one a later run of the same installation replaced, before anything changes: roll back the later run first.
+
+With =--to=, each installation of =GEN= holds the tree =GEN= published again, and the tree of each run rolled back is at its own hidden name; when no run was published over =GEN=, it prints that =GEN= is already live.
+Any two of =RUN_ID=, =--latest= and =--to= together are refused.
+[[file:../explanation/publication.org][How a rebuild is published]] gives the steps of the pass, and [[file:../howto/roll-back.org][Put the previous installation back]] the messages of a refusal.
 
 *** gc
 

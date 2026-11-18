@@ -47,8 +47,8 @@ const top_help = top_usage ++
     \\    run                 build and atomically swap a staged tree
     \\    resume              continue a run after a crash
     \\    verify              check a built run's stage before it is published
-    \\    rollback            restore the previous module files, or put a retired
-    \\                        module file back
+    \\    rollback            switch back to the previous generation or a named one,
+    \\                        or put a retired module file back
     \\    gc                  remove hidden retired siblings after the grace period
     \\    retire              move a module file out of the module tree after its
     \\                        package is published elsewhere
@@ -638,19 +638,22 @@ const retire_help = retire_usage ++
 ;
 const rollback_usage =
     \\usage: eb-staged-rebuild rollback [-h] --state-root STATE_ROOT
-    \\                                  [--lock-timeout LOCK_TIMEOUT]
+    \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+    \\                                  [--latest]
     \\                                  run_id
     \\
 ;
 const rollback_help = rollback_usage ++
     \\
     \\positional arguments:
-    \\  run_id
+    \\  run_id                the run to roll back, unless --latest or --to is given
     \\
     \\options:
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --to GEN              roll back every run published over run GEN
+    \\  --latest              roll back the newest complete run
     \\
 ;
 const gc_usage =
@@ -815,6 +818,8 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env, top_extra
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "to", .takes_value = true },
+        .{ .name = "latest", .takes_value = false },
     };
     const who = prog ++ " rollback";
     const sr = StateRoot.of(env, rollback_usage, rollback_help);
@@ -822,14 +827,15 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env, top_extra
     var leftovers: std.ArrayList([]const u8) = .empty;
     const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
+    // --latest and --to name the runs instead of the run id.
     var need: std.ArrayList([]const u8) = .empty;
     if (state_root == null) need.append(a, "--state-root") catch oom();
-    if (pos.len == 0) need.append(a, "run_id") catch oom();
+    if (pos.len == 0 and opts[2].value == null and !opts[3].seen) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     var ctx = adminCtx(a, env);
-    return admin.rollback(&ctx, state_root.?, pos[0], timeout);
+    return admin.rollback(&ctx, state_root.?, if (pos.len > 0) pos[0] else null, opts[2].value, opts[3].seen, timeout);
 }
 
 fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
@@ -1259,7 +1265,8 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
     , StateRoot.bracketed(verify_usage));
     try expect(
         \\usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]
-        \\                                  [--lock-timeout LOCK_TIMEOUT]
+        \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+        \\                                  [--latest]
         \\                                  run_id
         \\
     , StateRoot.bracketed(rollback_usage));

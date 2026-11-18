@@ -58,6 +58,7 @@ fn published(state: ?[]const u8) ?[]const u8 {
     const s = state orelse return null;
     if (std.mem.eql(u8, s, "complete")) return "replaced";
     if (std.mem.eql(u8, s, "rolled_back")) return "rolled back";
+    if (std.mem.eql(u8, s, "rolling_back")) return "rolling back";
     return null;
 }
 

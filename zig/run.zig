@@ -5,6 +5,8 @@
 //! live directory and write the module files; with a ledger configuration,
 //! publish.zig records each stage. Every step is journaled before it
 //! happens; a failure while publishing puts the old live trees back.
+//! rollbackTo undoes every run published over an earlier one in one pass,
+//! and newestComplete names the run that rollback --latest undoes.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -1712,6 +1714,7 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
         return recordFinished(&r, try publisher(&r), m);
     }
     if (std.mem.eql(u8, state_name, "rolled_back")) return r.refuse("run {s} was rolled back; start a new run", .{run_id});
+    if (std.mem.eql(u8, state_name, "rolling_back")) return r.refuse("{s}", .{rollingBack(a, j)});
     if (std.mem.eql(u8, state_name, "created") or std.mem.eql(u8, state_name, "building") or std.mem.eql(u8, state_name, "failed")) {
         if (published) return r.intervene("run {s} is {s} but a module was already published", .{ run_id, state_name });
         log("resume {s} from {s}: rebuilding the unpublished generation", .{ run_id, state_name });
@@ -1728,6 +1731,7 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
 pub fn rollbackRun(r: *R) E!Result {
     const a = r.a;
     const run_id = r.str("run_id");
+    if (std.mem.eql(u8, r.str("state"), "rolling_back")) return r.refuse("{s}", .{rollingBack(a, r.journal)});
     const config = try publisher(r);
     var finished: publish_mod.Corrects = .empty;
     var started = false;
@@ -1904,6 +1908,282 @@ fn restorePublished(r: *R) E!void {
         r.setItem("modules_plan", i, "status", Py.s("published"));
     }
     try createLinks(r, .{});
+}
+
+/// _rolling_back: the refusal for a run an interrupted rollback --to marked.
+fn rollingBack(a: Allocator, j: Py) []const u8 {
+    var target: std.ArrayList(u8) = .empty;
+    pyfmt.str(&target, a, pyfmt.get(j, "rollback_to")) catch oom();
+    return a.print("run {s} is rolling back to {s}; run rollback --to {s} to finish", .{ s(pyfmt.get(j, "run_id")), target.items, target.items }) catch oom();
+}
+
+fn pyStr(a: Allocator, v: ?Py) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    pyfmt.str(&out, a, v) catch oom();
+    return out.items;
+}
+
+/// _when: a recorded time, or null for anything that is not a number.
+fn when(v: ?Py) ?f64 {
+    const x = v orelse return null;
+    return switch (x) {
+        .int => |n| @floatFromInt(n),
+        .float => |f| f,
+        else => null,
+    };
+}
+
+/// _completed: runs order by completion time, then run id.
+fn completedLess(x: Py, y: Py) bool {
+    const xw = when(pyfmt.get(x, "completed_at")) orelse 0;
+    const yw = when(pyfmt.get(y, "completed_at")) orelse 0;
+    if (xw != yw) return xw < yw;
+    return json.pyTextLess(s(pyfmt.get(x, "run_id")), s(pyfmt.get(y, "run_id")));
+}
+
+fn isRetire(j: Py) bool {
+    return admin.eqlStr(pyfmt.get(j, "kind"), "retire");
+}
+
+/// _newest_complete: the run rollback --latest undoes.
+pub fn newestComplete(r: *R) E![]const u8 {
+    var best: ?Py = null;
+    for (main_mod.listJournals(r.a, r.spec.state_root)) |j| {
+        if (isRetire(j) or !admin.eqlStr(pyfmt.get(j, "state"), "complete")) continue;
+        if (best == null or completedLess(best.?, j)) best = j;
+    }
+    const b = best orelse return r.refuse("no complete run to roll back", .{});
+    return s(pyfmt.get(b, "run_id"));
+}
+
+fn livePaths(a: Allocator, j: Py) []const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    const v = pyfmt.get(j, "modules_plan") orelse return &.{};
+    if (v != .list) return &.{};
+    for (v.list) |m| out.append(a, admin.abspath(a, s(pyfmt.get(m, "live_software")))) catch oom();
+    return out.items;
+}
+
+fn holds(items: []const []const u8, x: []const u8) bool {
+    for (items) |y| if (std.mem.eql(u8, x, y)) return true;
+    return false;
+}
+
+fn completedLessCtx(_: void, x: Run, y: Run) bool {
+    return completedLess(x.journal, y.journal);
+}
+
+/// One run rollback --to undoes: its journal as this pass changes it.
+const Run = struct { path: []const u8, journal: Py };
+
+/// _runs_over: the complete runs published after `target` on one of its
+/// install paths, and the runs an interrupted rollback --to marked; oldest
+/// first.
+fn runsOver(r: *R, journals: []const Py, target: Py) E![]Run {
+    const a = r.a;
+    const gen = s(pyfmt.get(target, "run_id"));
+    const ours = livePaths(a, target);
+    var chosen: std.ArrayList(Run) = .empty;
+    for (journals) |j| {
+        if (isRetire(j) or std.mem.eql(u8, s(pyfmt.get(j, "run_id")), gen)) continue;
+        const state_name = pyfmt.get(j, "state");
+        const pick = if (admin.eqlStr(state_name, "rolling_back"))
+            true
+        else if (admin.eqlStr(state_name, "complete") and completedLess(target, j)) blk: {
+            for (livePaths(a, j)) |live| if (holds(ours, live)) break :blk true;
+            break :blk false;
+        } else false;
+        if (pick) chosen.append(a, .{ .path = runJournal(a, r.spec.state_root, s(pyfmt.get(j, "run_id"))), .journal = j }) catch oom();
+    }
+    std.mem.sort(Run, chosen.items, {}, completedLessCtx);
+    for (chosen.items) |undo| {
+        for (livePaths(a, undo.journal)) |live| for (journals) |later| {
+            if (isRetire(later) or !admin.eqlStr(pyfmt.get(later, "state"), "complete")) continue;
+            var named = false;
+            for (chosen.items) |c| named = named or std.mem.eql(u8, s(pyfmt.get(c.journal, "run_id")), s(pyfmt.get(later, "run_id")));
+            if (named or !completedLess(undo.journal, later) or !holds(livePaths(a, later), live)) continue;
+            const id = s(pyfmt.get(later, "run_id"));
+            return r.refuse("run {s} published {s} after run {s}; roll back run {s} first", .{ id, live, s(pyfmt.get(undo.journal, "run_id")), id });
+        };
+    }
+    return chosen.items;
+}
+
+fn runJournal(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
+    return std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" }) catch oom();
+}
+
+/// A plan entry of one chosen run: indices, so that it is read back after
+/// the journal changes.
+const Link = struct { run: usize, mod: usize };
+
+fn planItem(runs: []const Run, l: Link) Py {
+    return pyfmt.get(runs[l.run].journal, "modules_plan").?.list[l.mod];
+}
+
+fn runId(runs: []const Run, l: Link) []const u8 {
+    return s(pyfmt.get(runs[l.run].journal, "run_id"));
+}
+
+/// _rotation_stage: how many runs of `chain` already hold their own tree at
+/// their retired path, read from the run markers.
+fn rotationStage(r: *R, gen: []const u8, live: []const u8, chain: []const Link, runs: []const Run, ours: bool) E!usize {
+    const a = r.a;
+    const n = chain.len;
+    var i: usize = 0;
+    while (i + 1 < n) : (i += 1) try recoverPair(r, s(pyfmt.get(planItem(runs, chain[i + 1]), "retired")), s(pyfmt.get(planItem(runs, chain[i]), "retired")));
+    try recoverPair(r, live, s(pyfmt.get(planItem(runs, chain[n - 1]), "retired")));
+    var kept: std.ArrayList([]const u8) = .empty;
+    for (chain) |l| kept.append(a, s(pyfmt.get(planItem(runs, l), "retired"))) catch oom();
+    kept.append(a, live) catch oom();
+    for (kept.items) |p| {
+        const k = kind(p);
+        if (!std.mem.eql(u8, k, "dir")) return r.refuse("cannot roll back to {s}: {s} is {s}, not a kept tree", .{ gen, p, k });
+    }
+    const names = a.alloc([]const u8, n) catch oom();
+    const held = a.alloc(?[]const u8, n) catch oom();
+    for (chain, 0..) |l, k| {
+        names[k] = runId(runs, l);
+        held[k] = treeRunId(a, kept.items[k]);
+    }
+    const live_id = treeRunId(a, live);
+    var stage: usize = 0;
+    while (stage < n and held[stage] != null and std.mem.eql(u8, held[stage].?, names[stage])) stage += 1;
+    var first: ?[]const u8 = live_id;
+    var placed = true;
+    if (stage < n) {
+        first = held[stage];
+        placed = live_id != null and std.mem.eql(u8, live_id.?, names[n - 1]);
+        for (stage + 1..n) |k| placed = placed and held[k] != null and std.mem.eql(u8, held[k].?, names[k - 1]);
+    }
+    const named = first != null and holds(names, first.?);
+    const not_gen = first == null or !std.mem.eql(u8, first.?, gen);
+    if (named or !placed or (ours and not_gen)) return r.intervene("cannot roll back {s} to {s}: its trees are not where the journals put them", .{ live, gen });
+    return stage;
+}
+
+/// Point `r` at one chosen run, so that its journal methods act on it.
+fn select(r: *R, undo: *const Run) void {
+    r.journal = undo.journal;
+    r.path = undo.path;
+}
+
+/// _rollback_to: undo every run published over generation `gen`. Each
+/// install path switches once, straight to the tree `gen` left there, and
+/// each undone run's tree ends at its own retired path. The runs are marked
+/// rolling_back first, so running the same command again finishes an
+/// interrupted pass.
+pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
+    const a = r.a;
+    const state_root = r.spec.state_root;
+    const journals = main_mod.listJournals(a, state_root);
+    var found: ?Py = null;
+    for (journals) |j| if (std.mem.eql(u8, s(pyfmt.get(j, "run_id")), gen)) {
+        found = j;
+        break;
+    };
+    const target = found orelse return r.refuse("no journal at {s}", .{runJournal(a, state_root, gen)});
+    if (isRetire(target)) return r.refuse("run {s} is a retire record, not a published generation", .{gen});
+    if (!admin.eqlStr(pyfmt.get(target, "state"), "complete")) return r.refuse("run {s} is {s}; rollback --to returns to a complete run", .{ gen, pyStr(a, pyfmt.get(target, "state")) });
+    for (journals) |j| if (admin.eqlStr(pyfmt.get(j, "state"), "rolling_back") and !admin.eqlStr(pyfmt.get(j, "rollback_to"), gen)) return r.refuse("{s}", .{rollingBack(a, j)});
+    const runs = try runsOver(r, journals, target);
+    if (runs.len == 0) {
+        for (livePaths(a, target)) |live| {
+            const holder = treeRunId(a, live);
+            if (holder != null and std.mem.eql(u8, holder.?, gen)) continue;
+            const why = if (holder != null and holder.?.len > 0) try a.print("run {s} replaced it", .{holder.?}) else "the tree there has no run marker";
+            return r.refuse("run {s} is not live at {s}: {s}; finish or roll back that run first", .{ gen, live, why });
+        }
+        const m = try a.print("run {s} is already live", .{gen});
+        log("{s}", .{m});
+        return .{ .code = 0, .message = m };
+    }
+    if (runs.len == 1 and admin.eqlStr(pyfmt.get(runs[0].journal, "state"), "complete")) {
+        r.path = runs[0].path;
+        r.journal = main_mod.loadJournal(a, r.path);
+        return rollbackRun(r);
+    }
+    var ledgered: std.ArrayList([]const u8) = .empty;
+    for (runs) |undo| if (pyfmt.truthy(pyfmt.get(undo.journal, "ledger_config"))) ledgered.append(a, s(pyfmt.get(undo.journal, "run_id"))) catch oom();
+    if (ledgered.items.len > 0) return r.refuse("rollback --to {s} would pass over runs that record to a ledger ({s}); roll them back one at a time", .{ gen, std.mem.join(a, ", ", ledgered.items) catch oom() });
+    const ours = livePaths(a, target);
+    var chains: std.StringArrayHashMapUnmanaged(std.ArrayList(Link)) = .empty;
+    for (runs, 0..) |undo, k| {
+        const mods = pyfmt.get(undo.journal, "modules_plan") orelse continue;
+        if (mods != .list) continue;
+        for (mods.list, 0..) |m, i| {
+            const got = chains.getOrPut(a, admin.abspath(a, s(pyfmt.get(m, "live_software")))) catch oom();
+            if (!got.found_existing) got.value_ptr.* = .empty;
+            got.value_ptr.append(a, .{ .run = k, .mod = i }) catch oom();
+        }
+    }
+    for (chains.keys(), chains.values()) |live, chain| {
+        const one = admin.abspath(a, s(pyfmt.get(planItem(runs, chain.items[0]), "live_module")));
+        for (chain.items[1..]) |l| if (!std.mem.eql(u8, admin.abspath(a, s(pyfmt.get(planItem(runs, l), "live_module"))), one))
+            return r.refuse("cannot roll back {s} to {s}: the runs over it wrote different module files", .{ live, gen });
+    }
+    const stages = a.alloc(usize, chains.count()) catch oom();
+    for (chains.keys(), chains.values(), 0..) |live, chain, k| stages[k] = try rotationStage(r, gen, live, chain.items, runs, holds(ours, live));
+    for (runs) |*undo| {
+        if (admin.eqlStr(pyfmt.get(undo.journal, "state"), "rolling_back")) continue;
+        select(r, undo);
+        r.set("state", Py.s("rolling_back"));
+        r.set("rollback_to", Py.s(gen));
+        r.set("message", Py.s(try a.print("rolling back to {s}", .{gen})));
+        try r.save(try a.print("journal.rolling_back:{s}", .{r.str("run_id")}));
+        undo.journal = r.journal;
+    }
+    var methods: std.StringHashMapUnmanaged([]const u8) = .empty;
+    for (chains.keys(), chains.values(), 0..) |live, chain, k| {
+        const items = chain.items;
+        select(r, &runs[items[items.len - 1].run]);
+        for (stages[k]..items.len) |index| {
+            const m = planItem(runs, items[index]);
+            const rel = s(pyfmt.get(m, "rel"));
+            const method = if (index + 1 < items.len)
+                try swapPair(r, s(pyfmt.get(planItem(runs, items[index + 1]), "retired")), s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.rotate:{s}:{s}", .{ rel, runId(runs, items[index]) }))
+            else
+                try swapPair(r, live, s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.swap:{s}", .{rel}));
+            methods.put(a, try a.print("{s}\x00{s}", .{ runId(runs, items[index]), live }), method) catch oom();
+        }
+        const first = planItem(runs, items[0]);
+        const last = planItem(runs, items[items.len - 1]);
+        try restoreOldModule(r, dictSet(a, first, "new_hash", pyfmt.get(last, "new_hash") orelse .null), r.faults());
+        log("restored {s}", .{s(pyfmt.get(first, "rel"))});
+    }
+    var undone: std.ArrayList([]const u8) = .empty;
+    var k = runs.len;
+    while (k > 0) {
+        k -= 1;
+        select(r, &runs[k]);
+        for (r.list("links_plan"), 0..) |l, i| {
+            if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
+            const path = s(pyfmt.get(l, "live_path"));
+            if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
+                try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
+                sys.unlinkat(fsx.cwd, path, 0) catch {};
+                atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            }
+            r.setItem("links_plan", i, "created", .{ .bool = false });
+            r.setItem("links_plan", i, "status", Py.s("removed"));
+        }
+        const id = r.str("run_id");
+        for (r.list("modules_plan"), 0..) |m, i| {
+            const previous = s(pyfmt.get(m, "rollback_method"));
+            const recorded = methods.get(try a.print("{s}\x00{s}", .{ id, admin.abspath(a, s(pyfmt.get(m, "live_software"))) }));
+            r.setItem("modules_plan", i, "status", Py.s("restored"));
+            r.setItem("modules_plan", i, "rollback_method", Py.s(recorded orelse if (previous.len > 0) previous else "recovered"));
+        }
+        r.set("state", Py.s("rolled_back"));
+        r.set("rolled_back_at", .{ .float = now() });
+        r.set("message", Py.s(try a.print("rolled back to {s}", .{gen})));
+        try r.save(try a.print("journal.rolled_back:{s}", .{id}));
+        runs[k].journal = r.journal;
+        undone.append(a, id) catch oom();
+    }
+    const m = try a.print("rolled back to {s}: runs {s} rolled back; replacements kept at their retired paths", .{ gen, std.mem.join(a, ", ", undone.items) catch oom() });
+    log("{s}", .{m});
+    return .{ .code = 0, .message = m };
 }
 
 test "relsFromDryRun" {
