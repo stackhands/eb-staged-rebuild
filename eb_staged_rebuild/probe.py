@@ -41,6 +41,7 @@ def _run(cmd, timeout, env=None):
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             env=env,
             check=False,
