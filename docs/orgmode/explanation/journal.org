@@ -38,7 +38,8 @@ What =resume= does follows from the state:
 | =complete=                      | delivers ledger records that are still pending, and otherwise says the run is complete |
 | =rolled_back=                   | refuses: start a new run                                                               |
 
-A run that a preparation program or a pending ledger record stopped stays =built=, and =resume= runs that step again.
+A run that a preparation program, directory preparation, or a pending ledger record stopped stays =built=, and =resume= runs that step again.
+The state changes to =publishing= only after every directory is ready for the swap.
 [[py:eb_staged_rebuild.engine.resume]] and [[zig:eb-staged-rebuild.engine.run_mod.resumeRun]] decide.
 
 *** Which tree is which

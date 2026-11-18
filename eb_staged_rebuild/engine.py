@@ -920,8 +920,6 @@ def _recover_swap_names(journal):
 def _publish(spec, journal, faults):
     _recover_swap_names(journal)
     _validate_publication_set(journal)
-    journal["state"] = "publishing"
-    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     clock = _clock(spec)
     for mod in journal["modules_plan"]:
         _prepare_module_backup(mod, faults)
@@ -932,6 +930,8 @@ def _publish(spec, journal, faults):
         faults,
         "journal.prepared",
     )
+    journal["state"] = "publishing"
+    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     try:
         _normalize_publish_baseline(journal)
         for mod in journal["modules_plan"]:
