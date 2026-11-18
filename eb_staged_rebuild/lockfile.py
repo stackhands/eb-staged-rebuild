@@ -36,7 +36,7 @@ def _take(lock_fn, fd, deadline):
             if exc.errno not in (errno.EAGAIN, errno.EACCES):
                 raise
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if not (remaining > 0):
                 raise TimeoutError from exc
             time.sleep(min(LOCK_RETRY_INTERVAL_SECONDS, remaining))
 

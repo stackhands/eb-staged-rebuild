@@ -152,6 +152,7 @@ with failing calls injected through `state.lock_ops` and the other process a for
 | test_cluster_lock.ClusterLockTests.test_gate_fifo_is_refused_without_blocking | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
 | test_cluster_lock.ClusterLockTests.test_symlink_state_root_is_refused | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
 | test_cluster_lock.ClusterLockTests.test_lock_files_are_owner_only | `zig/rootlock.zig` test "a hard-linked gate is not truncated and a symlink root is refused" |
+| test_cluster_lock.ClusterLockTests.test_nan_timeout_does_not_hang_on_contended_lock | `zig/run.zig` clamps `NaN` `lock_timeout` to 0 ms, exiting 2 immediately on a held lock |
 
 ## tests/test_probe_cli.py: the lock wait
 

@@ -188,6 +188,37 @@ class ClusterLockTests(unittest.TestCase):
             finally:
                 lock.release()
 
+    def test_nan_timeout_does_not_hang_on_contended_lock(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as root:
+            holder = FileLock(root)
+            holder.acquire(0)
+            try:
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "eb_staged_rebuild.cli",
+                        "gc",
+                        "--state-root",
+                        root,
+                        "--lock-timeout",
+                        "nan",
+                    ],
+                    capture_output=True,
+                    timeout=2,
+                )
+            finally:
+                holder.release()
+            self.assertEqual(proc.returncode, 2)
+            self.assertEqual(proc.stdout, b"")
+            self.assertEqual(
+                proc.stderr,
+                f"eb-staged-rebuild: another eb-staged-rebuild holds the lock at {root}/.lock\n".encode(),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
