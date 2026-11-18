@@ -542,3 +542,26 @@ test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by r
     const head = try fsx.readAll(a, sfd, 64);
     try std.testing.expect(std.mem.startsWith(u8, head, "/stable/lib\x00"));
 }
+
+test "rewriteTree refuses an unreadable subdirectory" {
+    if (linux.getuid() == 0) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-unreadable-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o755);
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    var why_write: atomic.Why = .{};
+    const demo = try std.fmt.allocPrint(a, "{s}/bin/demo", .{root});
+    try common.atomic.atomicWrite(a, demo, "#!/state/generations/run1/bin/python\n", .{}, &why_write);
+    const denied = try std.fmt.allocPrint(a, "{s}/denied", .{root});
+    const denied_z = try sys.z(&zb, denied);
+    try std.testing.expect(linux.errno(linux.mkdirat(fsx.cwd, denied_z.ptr, 0o700)) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.chmod(denied_z.ptr, 0)) == .SUCCESS);
+    defer _ = linux.chmod(denied_z.ptr, 0o700);
+    var why: []const u8 = "";
+    try std.testing.expectError(error.Refused, rewriteTree(a, root, "/state/generations/run1", "/stable", &why));
+    try std.testing.expect(std.mem.startsWith(u8, why, "Permission denied"));
+}

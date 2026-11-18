@@ -270,9 +270,7 @@ def _contains(ranges, size, old):
             return True
         tail = window[-keep:] if keep else b""
         cursor = start + len(blob)
-    if size > cursor and old in tail + (b"\x00" * min(size - cursor, keep)):
-        return True
-    return False
+    return bool(size > cursor and old in tail + (b"\x00" * min(size - cursor, keep)))
 
 
 def _image(ranges, size):
@@ -294,6 +292,13 @@ def _discard(path):
         os.unlink(path)
     except FileNotFoundError:
         pass
+
+
+def _walk_or_refuse(root):
+    def _walk_error(exc):
+        raise Refused(f"rewrite tree is unreadable: {root}") from exc
+
+    return os.walk(root, followlinks=False, onerror=_walk_error)
 
 
 def _commit(names, ready):
@@ -450,7 +455,7 @@ def _recover(root):
     and only its directory entry is left.
     """
     found = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in _walk_or_refuse(root):
         dirnames[:] = [name for name in dirnames if not os.path.islink(os.path.join(dirpath, name))]
         for name in filenames:
             path = os.path.join(dirpath, name)
@@ -465,7 +470,7 @@ def _recover(root):
         except ValueError:
             continue
         names = []
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for dirpath, dirnames, filenames in _walk_or_refuse(root):
             dirnames[:] = [name for name in dirnames if not os.path.islink(os.path.join(dirpath, name))]
             for name in filenames:
                 path = os.path.join(dirpath, name)
@@ -494,7 +499,7 @@ def rewrite_tree(root, old, new):
         return
     links = []
     files = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in _walk_or_refuse(root):
         kept = []
         for name in dirnames:
             child = os.path.join(dirpath, name)
