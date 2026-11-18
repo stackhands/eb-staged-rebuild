@@ -613,12 +613,18 @@ fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8)
     return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
 }
 
-fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u64 {
-    const value = std.fmt.parseInt(i128, v, 10) catch
-        usageError(usage, who, "argument --min-free-bytes: invalid integer value: {s}", .{repr(a, v)});
-    if (value < 0 or value > std.math.maxInt(u64))
-        usageError(usage, who, "argument --min-free-bytes: not a number of bytes, 0 or more: {s}", .{repr(a, v)});
+fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
+    const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
+    const value = std.fmt.parseInt(i128, t, 10) catch return error.NotAnInteger;
+    if (value < 0) return error.BelowZero;
     return @intCast(value);
+}
+
+fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u128 {
+    return parseBytes(v) catch |err| switch (err) {
+        error.NotAnInteger => usageError(usage, who, "argument --min-free-bytes: invalid integer value: {s}", .{repr(a, v)}),
+        error.BelowZero => usageError(usage, who, "argument --min-free-bytes: not a number of bytes, 0 or more: {s}", .{repr(a, v)}),
+    };
 }
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
@@ -827,7 +833,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
     const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
-    const min_free_cli: ?u64 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
+    const min_free_cli: ?u128 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
     const modules = nonEmpty(vals[1]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_MODULES"));
@@ -842,7 +848,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     } else false;
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
     const grace = grace_cli orelse envGrace(a, env);
-    const min_free_bytes = min_free_cli orelse envMinFreeBytes(a, env);
+    const min_free_bytes: ?u128 = if (min_free_cli) |v| v else if (envMinFreeBytes(a, env)) |v| v else null;
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     if (vals[13]) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
     return engine.run(a, env, .{
@@ -1094,4 +1100,11 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
 test "run help includes --build-dir" {
     try std.testing.expect(std.mem.indexOf(u8, run_usage, "[--build-dir DIR]") != null);
     try std.testing.expect(std.mem.indexOf(u8, run_help, "--build-dir DIR") != null);
+}
+
+test "parseBytes trims whitespace and accepts integers above u64::MAX" {
+    try std.testing.expectEqual(@as(u128, 4096), try parseBytes(" \t4096\n"));
+    try std.testing.expectEqual(@as(u128, 18446744073709551616), try parseBytes("18446744073709551616"));
+    try std.testing.expectError(error.BelowZero, parseBytes(" -1 "));
+    try std.testing.expectError(error.NotAnInteger, parseBytes("   "));
 }
