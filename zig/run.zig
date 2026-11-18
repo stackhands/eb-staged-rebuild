@@ -1191,14 +1191,14 @@ fn publish(r: *R) E!void {
         if (live.len > 0 and retired.len > 0) try recoverPair(r, live, retired);
     }
     try validatePublicationSet(r);
-    r.set("state", Py.s("publishing"));
-    try r.save("journal.publishing");
     const run_id = r.str("run_id");
     for (r.list("modules_plan")) |m| {
         try prepareBackup(r, m);
         try prepareSwapSource(r, m, run_id);
     }
     try r.save("journal.prepared");
+    r.set("state", Py.s("publishing"));
+    try r.save("journal.publishing");
     publishSteps(r) catch |err| {
         const first = r.why;
         const kind_err = err;

@@ -59,13 +59,20 @@ const top_help = top_usage ++
     \\
 ;
 
-const probe_usage = "usage: eb-staged-rebuild probe [-h] [--path PATH] [--eb EB] [--json]\n";
+const probe_usage =
+    \\usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB]
+    \\                               [--require-eb] [--json]
+    \\
+;
 const probe_help = probe_usage ++
     \\
     \\options:
-    \\  -h, --help   show this help message and exit
-    \\  --path PATH  directory on the filesystem to probe (default: .)
+    \\  -h, --help    show this help message and exit
+    \\  --path PATH   directory on the filesystem to probe (default: .)
+    \\  --no-create   refuse when --path does not exist instead of creating it for
+    \\                the probe
     \\  --eb EB
+    \\  --require-eb  refuse when the EasyBuild command is not available
     \\  --json
     \\
 ;
@@ -175,7 +182,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
         };
         o.seen = true;
         if (!o.takes_value) {
-            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ o.name, arg[eq.? + 1 ..] });
+            if (eq != null) usageError(usage, who, "argument --{s}: ignored explicit argument {s}", .{ o.name, repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         if (eq) |e| {
@@ -301,10 +308,7 @@ pub fn loadJournal(a: Allocator, path: []const u8) Py {
     if (!std.unicode.utf8ValidateSlice(data)) needsIntervention("journal cannot be read: {s}: not UTF-8 text", .{path});
     const parsed = json.parse(a, data) catch needsIntervention("journal cannot be read: {s}: not valid JSON", .{path});
     const j = json.toPy(a, parsed) catch needsIntervention("journal cannot be read: {s}: not valid JSON", .{path});
-    if (j != .dict) {
-        cli.err("Traceback: AttributeError: journal is not a JSON object: {s}\n", .{path});
-        std.process.exit(1);
-    }
+    if (j != .dict) needsIntervention("journal is not a JSON object: {s}", .{path});
     const sch = pyfmt.get(j, "schema");
     const sch_int: ?i64 = if (sch) |s| switch (s) {
         .int => |n| n,
@@ -346,10 +350,10 @@ pub fn requireDirectorySwap(a: Allocator, j: Py) void {
     if (!pyfmt.truthy(plan)) return;
     const items = switch (plan.?) {
         .list => |l| l,
-        else => typeError("modules_plan is not a list"),
+        else => needsIntervention("journal modules_plan is not a list", .{}),
     };
     for (items) |m| {
-        if (m != .dict) typeError("a modules_plan entry is not an object");
+        if (m != .dict) needsIntervention("journal modules_plan entry is not an object", .{});
         if (pyfmt.get(m, "live_software") == null or pyfmt.get(m, "retired") == null)
             needsIntervention("journal does not record a directory swap; a generation-pointer plan is not applied", .{});
     }
@@ -608,9 +612,9 @@ const gc_help = gc_usage ++
 ;
 
 /// argparse type=float: Python float() of the text.
-fn floatArg(usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
+fn floatArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, v: []const u8) f64 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
-    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: '{s}'", .{ name, v });
+    return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: {s}", .{ name, repr(a, v) });
 }
 
 fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
@@ -639,7 +643,7 @@ fn isHours(hours: f64) bool {
 
 /// --grace-hours of run and gc: a float, and a number of hours, 0 or more.
 fn graceArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64 {
-    const hours = floatArg(usage, who, "grace-hours", v);
+    const hours = floatArg(a, usage, who, "grace-hours", v);
     if (!isHours(hours)) usageError(usage, who, "argument --grace-hours: not a number of hours, 0 or more: {s}", .{repr(a, v)});
     return hours;
 }
@@ -704,7 +708,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: f64 = if (opts[6].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
@@ -726,7 +730,7 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     return admin.rollback(&ctx, state_root.?, pos[0], timeout);
 }
@@ -753,7 +757,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[5].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(
@@ -823,7 +827,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         const k = hit orelse usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
         seen[k] = true;
         if (!takes[k]) {
-            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument '{s}'", .{ names[k], arg[eq.? + 1 ..] });
+            if (eq != null) usageError(run_usage, who, "argument --{s}: ignored explicit argument {s}", .{ names[k], repr(a, arg[eq.? + 1 ..]) });
             continue;
         }
         var v: []const u8 = undefined;
@@ -838,9 +842,9 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         if (std.mem.eql(u8, names[k], "module")) modules_list.append(a, v) catch oom() else vals[k] = v;
     }
     if (vals[4]) |b| if (!engine_inList(&backends, b))
-        usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
+        usageError(run_usage, who, "argument --backend: invalid choice: {s} (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{repr(a, b)});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
-    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
+    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(a, run_usage, who, "lock-timeout", v) else null;
     const min_free_cli: ?u128 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
@@ -955,7 +959,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var all_extra = extra;
     for (pos[1..]) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
     const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
@@ -970,7 +974,9 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
 fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     var opts = [_]Opt{
         .{ .name = "path", .takes_value = true },
+        .{ .name = "no-create", .takes_value = false },
         .{ .name = "eb", .takes_value = true },
+        .{ .name = "require-eb", .takes_value = false },
         .{ .name = "json", .takes_value = false },
     };
     var extra: std.ArrayList([]const u8) = .empty;
@@ -979,19 +985,33 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     for (pos) |p| all_extra.append(a, p) catch oom();
     unrecognized(a, all_extra.items);
     const eb_default = env.get("EB_STAGED_REBUILD_EB") orelse "eb";
-    const eb = opts[1].value orelse eb_default;
+    const eb = opts[2].value orelse eb_default;
     const directory = blk: {
         if (opts[0].value) |p| if (p.len > 0) break :blk p;
         var rb: [sys.path_max]u8 = undefined;
         break :blk a.dupe(u8, fsx.realpath(fsx.cwd, ".", &rb) catch ".") catch ".";
     };
+    if (opts[1].seen) {
+        _ = fsx.statAt(fsx.cwd, directory, true) catch {
+            cli.err("probe path does not exist: {s}\n", .{directory});
+            return 1;
+        };
+    }
     const report = probe.probeAll(a, env, directory, eb) catch |err| refuse("{s}", .{osError(a, err, directory)});
-    if (opts[2].seen) {
+    if (opts[4].seen) {
         const out = json.dumps(a, report, 2, true) catch return 1;
         cli.put(1, out);
         cli.put(1, "\n");
     } else {
         probe.printText(a, report);
+    }
+    if (opts[3].seen) {
+        const easybuild = pyfmt.get(report, "easybuild");
+        const found = if (easybuild) |eb_report| pyfmt.truthy(pyfmt.get(eb_report, "found")) else false;
+        if (!found) {
+            cli.err("probe requires EasyBuild, but it was not found: {s}\n", .{eb});
+            return 1;
+        }
     }
     return 0;
 }
@@ -1043,7 +1063,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
-    usageError(top_usage, prog, "argument command: invalid choice: '{s}' (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{cmd});
+    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
 }
 
 /// The message of the last refusal the engine returned as an error.
@@ -1115,4 +1135,11 @@ test "parseBytes trims whitespace and accepts integers above u64::MAX" {
     try std.testing.expectEqual(@as(u128, 18446744073709551616), try parseBytes("18446744073709551616"));
     try std.testing.expectError(error.BelowZero, parseBytes(" -1 "));
     try std.testing.expectError(error.NotAnInteger, parseBytes("   "));
+}
+
+test "probe help includes --no-create" {
+    try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--no-create]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_help, "--no-create") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--require-eb]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, probe_help, "--require-eb") != null);
 }

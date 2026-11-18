@@ -159,6 +159,7 @@ rebuild command implemented by the Zig binary.
 | FreeSpaceTests.test_option_takes_precedence_over_the_environment | differential "run, --min-free-bytes instead of a bad environment reserve" |
 | FreeSpaceTests.test_environment_reserve_is_a_nonnegative_64_bit_integer | differential "run, a free-space reserve below 0 in the environment", "run, a free-space reserve in the environment that is not an integer", "run, an empty free-space reserve in the environment", "run, an environment reserve above the supported range" |
 | FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
+| FreeSpaceTests.test_minimum_free_space_falls_back_to_f_bsize_when_f_frsize_is_zero | `zig/run.zig` test "availableBytes falls back to block_size and multiplies in u128 without overflow" |
 | ExchangeRequirementTests.test_default_cli_output_and_status_are_exact_bytes | differential "run, installpath" omits the option |
 | ExchangeRequirementTests.test_requirement_refuses_before_the_journal_and_build | `zig/engine.zig` test "required exchange reports the failed filesystem probe" |
 | ExchangeRequirementTests.test_supported_requirement_is_recorded_and_uses_exchange | differential "run, installpath, exchange required", "rollback the exchange-required run" |
@@ -167,6 +168,7 @@ rebuild command implemented by the Zig binary.
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
 | TransactionTests.test_failure_on_second_module_restores_both_modules | fail_matrix "two modules: run fails at STEP", every step of `lib/1` and `app/1` |
+| TransactionTests.test_prepare_failure_keeps_the_run_ready_to_resume | fail_matrix "one module: run fails at stage.move:all/demo/1.lua" |
 | TransactionTests.test_an_installed_tool_ignores_the_fail_hook | differential "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" |
 | TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
@@ -479,11 +481,14 @@ site variables through CLI/docs tests and integration coverage.
 | CliDocTests.test_build_dir_how_to_documents_the_flag | `docs/examples/site.sh` case `build-dir` runs `--build-dir` with the binary and `docs/orgmode/howto/set-a-build-directory.org` records it |
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the output recorded in the Org pages; no binary behaviour |
 | CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
+| CliDocTests.test_first_tutorial_starts_on_clean_ubuntu | `docs/orgmode/tutorials/first-staged-rebuild.org` step check; no binary behaviour |
 
 ### tests/test_probe_cli.py
 
 | test | replacement |
 |---|---|
+| ProbeTests.test_probe_no_create_refuses_a_missing_path | runs against `TOOL_BIN` |
+| ProbeTests.test_probe_require_eb_fails_when_eb_is_missing | runs against `TOOL_BIN` |
 | ProbeTests.test_unreadable_resolve_exits_2_without_a_traceback | differential "resolve an unreadable file" (not as root) |
 | ProbeTests.test_rename_exchange_reports_a_result_for_this_directory | differential "probe --json", "probe text" |
 | ProbeTests.test_probe_all_has_the_open_questions | differential "probe --json" |
@@ -492,6 +497,12 @@ site variables through CLI/docs tests and integration coverage.
 | StatusJsonTests.test_status_json_of_an_empty_root_is_an_empty_document | differential "status --json, no runs dir" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
+
+### tests/test_journal_shape.py
+
+| test | replacement |
+|---|---|
+| JournalShapeTests.test_invalid_record_shapes_need_intervention | differential "status, journal array", "status, journal plan string", "status, journal plan number" |
 
 ### tests/test_stage_filesystem.py
 
@@ -556,3 +567,4 @@ it writes, with ids, times and the state root's scope normalized.
 | test | replacement |
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
+| LedgerConfigValidationTests.test_load_config_rejects_non_finite_timeout | `zig/publish.zig` test "isPositiveTimeout rejects non-finite and non-positive values" |

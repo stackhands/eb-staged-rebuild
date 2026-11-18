@@ -213,7 +213,9 @@ def _check_free_space(path, minimum):
     if minimum is None:
         return
     info = os.statvfs(path)
-    available = info.f_bavail * info.f_frsize
+    blocks = info.f_bavail if info.f_bavail > 0 else 0
+    unit = info.f_frsize if info.f_frsize > 0 else (info.f_bsize if info.f_bsize > 0 else 0)
+    available = blocks * unit
     if available < minimum:
         raise Refused(
             f"generation filesystem has {available} bytes available; "
@@ -954,8 +956,6 @@ def _recover_swap_names(journal):
 def _publish(spec, journal, faults):
     _recover_swap_names(journal)
     _validate_publication_set(journal)
-    journal["state"] = "publishing"
-    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     clock = _clock(spec)
     for mod in journal["modules_plan"]:
         _prepare_module_backup(mod, faults)
@@ -966,6 +966,8 @@ def _publish(spec, journal, faults):
         faults,
         "journal.prepared",
     )
+    journal["state"] = "publishing"
+    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     try:
         _normalize_publish_baseline(journal)
         for mod in journal["modules_plan"]:

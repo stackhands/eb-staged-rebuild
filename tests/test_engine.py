@@ -223,6 +223,19 @@ class FreeSpaceTests(unittest.TestCase):
             builder.assert_not_called()
             self.assertFalse(os.path.exists(os.path.join(state, "runs")))
 
+    def test_minimum_free_space_falls_back_to_f_bsize_when_f_frsize_is_zero(self):
+        from eb_staged_rebuild.engine import _check_free_space
+
+        space = mock.Mock(f_bavail=2, f_frsize=0, f_bsize=4096)
+        with mock.patch("eb_staged_rebuild.engine.os.statvfs", return_value=space):
+            _check_free_space(".", 8192)
+            with self.assertRaisesRegex(
+                Refused,
+                r"generation filesystem has 8192 bytes available; "
+                r"--min-free-bytes requires 8193",
+            ):
+                _check_free_space(".", 8193)
+
 
 class ExchangeRequirementTests(unittest.TestCase):
     def test_default_cli_output_and_status_are_exact_bytes(self):
@@ -409,6 +422,27 @@ class TransactionTests(unittest.TestCase):
                             )
                         )
                     self.assert_old_live(installed)
+
+    def test_prepare_failure_keeps_the_run_ready_to_resume(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            with self.assertRaises(InjectedCrash):
+                run(
+                    _spec(
+                        software,
+                        modules,
+                        state,
+                        builder,
+                        faults=FaultInjector("stage.move:all/demo/1.lua"),
+                    )
+                )
+            self.assertEqual(
+                load_journal(journal_path(state, "run1"))["state"],
+                "built",
+            )
+            self.assert_old_live(installed)
+            self.assertEqual(resume(state, "run1", builder=builder).returncode, 0)
+            self.assert_new_live(installed)
 
     def test_an_installed_tool_ignores_the_fail_hook(self):
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(
