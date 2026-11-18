@@ -54,7 +54,7 @@ def _bytes(text):
         value = int(text)
     except ValueError:
         raise argparse.ArgumentTypeError(f"invalid integer value: {text!r}") from None
-    if value < 0:
+    if value < 0 or value > (1 << 64) - 1:
         raise argparse.ArgumentTypeError(f"not a number of bytes, 0 or more: {text!r}")
     return value
 

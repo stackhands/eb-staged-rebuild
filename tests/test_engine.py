@@ -206,6 +206,24 @@ class FreeSpaceTests(unittest.TestCase):
                     (2, b"", f"eb-staged-rebuild: EB_STAGED_REBUILD_MIN_FREE_BYTES {message}\n".encode()),
                 )
 
+    def test_cli_min_free_bytes_rejects_above_u64(self):
+        code, out, err = _main(
+            [
+                "run",
+                "--software",
+                "software",
+                "--modules",
+                "modules",
+                "--min-free-bytes",
+                "18446744073709551616",
+                "--",
+                "demo-1.eb",
+            ]
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("not a number of bytes, 0 or more: '18446744073709551616'", err)
+
     def test_minimum_free_space_refuses_before_the_journal_and_build(self):
         with tempfile.TemporaryDirectory() as root:
             software, modules, state, _installed, _builder = _fixture(root)
