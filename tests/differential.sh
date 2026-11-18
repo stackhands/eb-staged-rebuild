@@ -799,6 +799,35 @@ compare_admin "verify with Lmod" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" 
 compare_admin "resume the verified stage" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ resume --state-root @ROOT@/state v2
 compare_admin "rollback the verified run" rollback --state-root @ROOT@/state v2
 compare_admin "list every generation" list --state-root @ROOT@/state
+# rollback --latest, and rollback --to over more than one run. The
+# prepare-context run left the live tree group-only; verify refuses a stage
+# that would widen it.
+for impl in py zig; do chmod 755 "${work}/${impl}/software/demo/1"; done
+for g in g1 g2 g3; do
+    # shellcheck disable=SC2086
+    compare_admin "run, generation ${g}" env FAKE_EB_MODULE_NOTE="${g}" @CMD@ run ${vr} --run-id "${g}" -- demo-1.eb
+done
+compare_admin "rollback, no run id" rollback --state-root @ROOT@/state
+compare_admin "rollback, a run id and --to" rollback --state-root @ROOT@/state --to g1 g2
+compare_admin "rollback, a run id and --latest" rollback --state-root @ROOT@/state --latest g2
+compare_admin "rollback, --latest and --to" rollback --state-root @ROOT@/state --latest --to g1
+compare_admin "rollback, --to without a value" rollback --state-root @ROOT@/state --to
+compare_admin "rollback, two run ids" rollback --state-root @ROOT@/state g2 g3
+compare_admin "rollback --to, no such run" rollback --state-root @ROOT@/state --to nope
+compare_admin "rollback --to a retire record" rollback --state-root @ROOT@/state --to @RETIRE@
+compare_admin "rollback --to a rolled-back run" rollback --state-root @ROOT@/state --to v1
+compare_admin "rollback --to over two runs" rollback --state-root @ROOT@/state --to g1
+compare_admin "rollback --to the live run" rollback --state-root @ROOT@/state --to g1
+compare_admin "list after rollback --to" list --state-root @ROOT@/state
+compare_admin "rollback --latest" rollback --state-root @ROOT@/state --latest
+# shellcheck disable=SC2086
+compare_admin "run, generation l1" run ${vr} --run-id l1 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, a ledger generation" run ${vr} --run-id l2 --ledger-config @ROOT@/ledger.json -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, generation l3" run ${vr} --run-id l3 -- demo-1.eb
+compare_admin "rollback --to over a ledger run" rollback --state-root @ROOT@/state --to l1
+compare_admin "rollback --latest, no complete run" rollback --latest --state-root @ROOT@/empty
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.

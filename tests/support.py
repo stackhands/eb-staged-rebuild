@@ -478,17 +478,25 @@ class Site:
         self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
 
     def cli(self, *args, **env):
-        clear = [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
-        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=clear)
+        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared())
 
-    def run(self, *options, extra=None, verify=True, run_id="r1", **env):
+    def cleared(self):
+        return [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
+
+    def environ(self, **env):
+        """The environment ``cli`` gives a command, for a process the test starts itself."""
+        kept = {key: value for key, value in os.environ.items() if key not in self.cleared()}
+        return {**kept, **self.env, **env}
+
+    def run(self, *options, extra=None, verify=True, run_id="r1", modules=("demo/1",), **env):
         if extra is not None:
             env["FAKE_EB_EXTRA"] = json.dumps(extra)
         gate = ["--verify"] if verify else []
+        named = [arg for rel in modules for arg in ("--module", rel)]
         return self.cli(
             "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
             "--backend", "installpath", "--eb", self.eb, "--run-id", run_id, "--skip-live-check",
-            "--module", "demo/1", *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
+            *named, *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
         )
 
     def journal_path(self, run_id="r1"):

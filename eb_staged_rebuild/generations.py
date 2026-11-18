@@ -16,7 +16,7 @@ from eb_staged_rebuild.paths import abspath, lstat_kind
 from eb_staged_rebuild.retire import is_retire
 from eb_staged_rebuild.verify import CHECKS
 
-PUBLISHED = {"complete": "replaced", "rolled_back": "rolled back"}
+PUBLISHED = {"complete": "replaced", "rolled_back": "rolled back", "rolling_back": "rolling back"}
 
 
 def _iso(when):
