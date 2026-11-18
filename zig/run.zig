@@ -916,7 +916,9 @@ fn installComplete(a: Allocator, path: []const u8) bool {
 
 // ---- publish --------------------------------------------------------------
 
-fn treeRunId(a: Allocator, path: []const u8) ?[]const u8 {
+/// The run that the .eb-staged-rebuild-complete in the tree at `path` names,
+/// or null when the tree has none or it cannot be read.
+pub fn treeRunId(a: Allocator, path: []const u8) ?[]const u8 {
     const stamp = std.fs.path.join(a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
     if (!isKind(stamp, "file")) return null;
     const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;

@@ -1,0 +1,76 @@
+#+TITLE: The generations of an installation
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The generations of an installation
+
+The trees that the stable path of an installation, =software/NAME/VERSION=, has held and that are still on disk, as =list= prints them.
+Publishing a run exchanges its new tree with the live one, and keeps the tree it replaced at the run's hidden name, =software/NAME/.VERSION.RUN_ID=; rolling the run back exchanges them again, and keeps the tree it took out at that same name.
+Each tree that a run published holds =.eb-staged-rebuild-complete=, which names the run.
+A run's generation that was never published is not one of them.
+
+** list
+
+#+begin_src bash
+eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+#+end_src
+
+#+begin_example
+Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+  live         2026-11-17T15:56:28Z  example-6  verify pass
+  replaced     2026-11-17T15:56:12Z  example-5  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+  rolled back  2026-11-17T15:55:56Z  example-4  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4
+  replaced     2026-11-17T15:55:38Z  example-userns  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+  replaced     2026-11-17T15:55:34Z  example-robot  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns
+  replaced     2026-11-17T15:54:56Z  example-2  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot
+#+end_example
+
+For each installation that the run journals of the state root name, =list= prints its path in the software tree and its absolute path, then a line for each of its generations: the live one first, then the others, the most recently published first.
+Here the tree of =example-6= is live, and each tree that a later run replaced waits at the hidden name of that run: the tree of =example-5= at that of =example-6=, the tree of =example-userns= at that of =example-5=, and so on to the tree of =example-2=, which =example-robot= replaced.
+The tree of =example-4=, which its rollback took out, is at its own hidden name; the rollback had put the tree of =example-userns= back.
+=gc= had removed the older trees.
+Only =example-6= ran with =--verify=, so the other runs have no result of the checks.
+
+=list= takes no lock, and prints =no generations= for a state root without run journals.
+=docs/examples/site.sh= in the repository runs it as its case =list=, after the cases of the how-to guides.
+
+** The columns
+
+| Column    | What it holds                                                                                                |
+|-----------+--------------------------------------------------------------------------------------------------------------|
+| State     | What the tree is now, from the table below.                                                                  |
+| Published | When its run published it, in UTC; =-= for the tree from before the first run.                               |
+| Run       | The run that its =.eb-staged-rebuild-complete= names; =-= when it has none.                                  |
+| Verify    | =verify= and the result of the checks before publication that the run recorded, from the second table below. |
+| Path      | Where the tree is, for a tree that is not live.                                                              |
+
+| State         | The tree                                                                             |
+|---------------+--------------------------------------------------------------------------------------|
+| =live=        | is at the stable path.                                                               |
+| =replaced=    | is one that a later publication replaced; its run is =complete=.                     |
+| =rolled back= | is one that its run's rollback took out; its run is =rolled_back=.                   |
+| =original=    | was there before the first run, and has no =.eb-staged-rebuild-complete=.            |
+| =unknown=     | names a run whose journal is gone, or whose journal does not name this installation. |
+
+| Verify                | The run's journal records                                                       |
+|-----------------------+---------------------------------------------------------------------------------|
+| =pass=                | a generation that passed; the checks it skipped follow, as =(modules skipped)=. |
+| =forced (N problems)= | a generation that failed, and that =--force= published.                         |
+| =fail (N problems)=   | a generation that failed, without =--force=.                                    |
+| =-=                   | no result: a run that nothing checked, or the tree from before the first run.   |
+
+** Not listed
+
+- A hidden tree that =gc= removed.
+- A run's generation that was never published, which stays under =generations/=.
+- The new tree of a run that has not finished publishing it, which can wait at the run's hidden name while the run is =built= or =publishing=.
+- A journal entry without a software tree, a stable path or a hidden name.
+
+** See also
+
+- [[file:cli.org][The eb-staged-rebuild command]], for =list=
+- [[file:verify.org][The checks before publication]]
+- [[file:../howto/roll-back.org][Put the previous installation back]]
+- [[file:../howto/remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:../explanation/publication.org][How a rebuild is published]]
+- [[py:eb_staged_rebuild.generations.generations]]
