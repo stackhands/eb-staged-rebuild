@@ -46,7 +46,7 @@ from eb_staged_rebuild.journal import (
     run_dir as run_dir_for,
     save_journal,
 )
-from eb_staged_rebuild.livecheck import empty_real_dir, same_snapshot, snapshot
+from eb_staged_rebuild.livecheck import empty_real_dir, same_snapshot, snapshot, valid_snapshot
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import install_complete, generation_complete, parse_root
 from eb_staged_rebuild.paths import (
@@ -446,8 +446,28 @@ def _snapshots(spec, rels):
 def _enforce_manifest(spec, journal):
     if spec.skip_live_check:
         return
+    rels = journal.get("module_rels")
+    manifests = journal.get("manifests")
+    if (
+        not isinstance(rels, list)
+        or any(not isinstance(rel, str) for rel in rels)
+        or len(rels) != len(set(rels))
+        or not isinstance(manifests, dict)
+        or set(manifests) != set(rels)
+    ):
+        raise NeedsIntervention("journal manifests do not match its module relations")
+    software = abspath(spec.software)
+    if any(
+        (path := abspath(os.path.join(software, rel))) == software
+        or not is_within(path, software)
+        for rel in rels
+    ):
+        raise NeedsIntervention("journal module relation escapes the software root")
+    for rel, before in manifests.items():
+        if not valid_snapshot(before):
+            raise NeedsIntervention(f"journal manifest for {rel} is malformed")
     changed = []
-    for rel, before in (journal.get("manifests") or {}).items():
+    for rel, before in manifests.items():
         path = os.path.join(spec.software, rel)
         if (
             spec.backend == "bwrap"

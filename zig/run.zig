@@ -669,13 +669,41 @@ fn build(r: *R) E!u8 {
 
 const selfExe = probe.selfExe;
 
+fn countKey(entries: []const Py.Entry, key: []const u8) usize {
+    var count: usize = 0;
+    for (entries) |entry| if (std.mem.eql(u8, entry.key, key)) {
+        count += 1;
+    };
+    return count;
+}
+
 fn enforceManifest(r: *R) E!void {
     if (r.spec.skip_live_check) return;
     const a = r.a;
     var changed: std.ArrayList([]const u8) = .empty;
-    const manifests = r.get("manifests") orelse return;
-    if (manifests != .dict) return;
+    const rels = r.get("module_rels") orelse
+        return r.intervene("journal manifests do not match its module relations", .{});
+    const manifests = r.get("manifests") orelse
+        return r.intervene("journal manifests do not match its module relations", .{});
+    if (rels != .list or manifests != .dict or rels.list.len != manifests.dict.len)
+        return r.intervene("journal manifests do not match its module relations", .{});
+    for (rels.list) |rel| {
+        if (rel != .str or countKey(manifests.dict, rel.str) != 1)
+            return r.intervene("journal manifests do not match its module relations", .{});
+        const path = try std.fs.path.join(a, &.{ r.spec.software, rel.str });
+        if (std.mem.eql(u8, admin.abspath(a, path), admin.abspath(a, r.spec.software)) or
+            !admin.isWithin(a, path, r.spec.software))
+            return r.intervene("journal module relation escapes the software root", .{});
+    }
     for (manifests.dict) |e| {
+        var rel_count: usize = 0;
+        for (rels.list) |rel| if (rel == .str and std.mem.eql(u8, rel.str, e.key)) {
+            rel_count += 1;
+        };
+        if (rel_count != 1)
+            return r.intervene("journal manifests do not match its module relations", .{});
+        if (!livecheck.validSnapshot(e.value))
+            return r.intervene("journal manifest for {s} is malformed", .{e.key});
         const path = try std.fs.path.join(a, &.{ r.spec.software, e.key });
         if (std.mem.eql(u8, r.spec.backend, "bwrap")) {
             const ex = pyfmt.get(e.value, "exists");

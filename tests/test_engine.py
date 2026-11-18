@@ -10,7 +10,7 @@ from unittest import mock
 
 from eb_staged_rebuild import cli
 from eb_staged_rebuild.engine import Result, Spec, resume, rollback, run
-from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.errors import NeedsIntervention, Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.gc import collect
 from eb_staged_rebuild.journal import journal_path, load_journal
@@ -266,6 +266,36 @@ class ExchangeRequirementTests(unittest.TestCase):
             journal = load_journal(journal_path(state, "run1"))
             self.assertIs(journal["require_exchange"], True)
             self.assertEqual(journal["modules_plan"][0]["swap_method"], "renameat2-exchange")
+
+
+class ManifestShapeTests(unittest.TestCase):
+    def test_resume_refuses_a_manifest_value_outside_the_recorded_shape(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+
+            def failed_build(context):
+                builder(context)
+                return 7
+
+            self.assertEqual(
+                run(_spec(software, modules, state, failed_build)).returncode,
+                7,
+            )
+            payload = os.path.join(installed["demo/1"]["install"], "PAYLOAD")
+            with open(payload, "w", encoding="utf-8") as handle:
+                handle.write("operator change\n")
+            path = journal_path(state, "run1")
+            journal = load_journal(path)
+            journal["manifests"] = []
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+
+            with self.assertRaisesRegex(
+                NeedsIntervention,
+                "journal manifests do not match its module relations",
+            ):
+                resume(state, "run1", builder=builder)
+            self.assertEqual(_payload(installed["demo/1"]["install"]), "operator change\n")
 
 
 class TransactionTests(unittest.TestCase):
