@@ -21,14 +21,22 @@ def parse_root(text):
     """Return ``("lua"|"tcl", path)`` or ``(None, None)``."""
     lua = LUA_ROOT.search(text)
     tcl = TCL_ROOT.search(text)
+
+    def _tcl_value(match):
+        if match is None:
+            return None
+        if match.group(1) is not None:
+            return match.group(1)
+        return match.group(2)
+
     if lua and tcl:
         if lua.start() < tcl.start():
             return "lua", lua.group(1)
-        return "tcl", tcl.group(1) or tcl.group(2)
+        return "tcl", _tcl_value(tcl)
     if lua:
         return "lua", lua.group(1)
     if tcl:
-        return "tcl", tcl.group(1) or tcl.group(2)
+        return "tcl", _tcl_value(tcl)
     return None, None
 
 
