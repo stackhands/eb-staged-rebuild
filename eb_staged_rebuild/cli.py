@@ -72,6 +72,24 @@ def _grace(value):
     return hours
 
 
+def _min_free_bytes(value):
+    if value is not None:
+        return value
+    text = os.environ.get("EB_STAGED_REBUILD_MIN_FREE_BYTES")
+    if text is None:
+        return None
+    try:
+        minimum = int(text)
+    except ValueError:
+        raise Refused(f"EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: {text!r}") from None
+    if minimum < 0 or minimum > (1 << 64) - 1:
+        raise Refused(
+            "EB_STAGED_REBUILD_MIN_FREE_BYTES is not a number of bytes, "
+            f"0 through {(1 << 64) - 1}: {text!r}"
+        )
+    return minimum
+
+
 def _add_state_root(parser):
     default = os.environ.get("EB_STAGED_REBUILD_STATE_ROOT") or None
     parser.add_argument("--state-root", default=default, required=default is None)
@@ -254,7 +272,7 @@ def _dispatch(args):
             prepare_executable=args.prepare,
             ledger_config=args.ledger_config,
             build_dir=args.build_dir,
-            min_free_bytes=args.min_free_bytes,
+            min_free_bytes=_min_free_bytes(args.min_free_bytes),
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")

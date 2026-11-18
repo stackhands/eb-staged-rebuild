@@ -29,6 +29,13 @@ A job that starts after the exchange loads the new installation; one that is run
   The new tree is built in the /state root/, =/opt/site/.eb-staged-rebuild= unless =--state-root= names another directory, which has to be on that filesystem.
   If the site requires a fixed reserve, add =--min-free-bytes BYTES= to the run.
   The command then refuses before the rebuild starts when the generation filesystem has less than that reserve available.
+  To apply one reserve to every run by the site account, export it once:
+
+  #+begin_src bash
+  export EB_STAGED_REBUILD_MIN_FREE_BYTES=$((200 * 1024 * 1024 * 1024))
+  #+end_src
+
+  A run can select another reserve with =--min-free-bytes=.
 
 ** Steps
 
