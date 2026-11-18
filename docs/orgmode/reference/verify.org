@@ -80,6 +80,7 @@ When a run starts with =--verify=, its journal records =verify_before_swap= and 
 | =problems=    | The =check= and =message= of each problem, grouped by check.      |
 
 The journal's =verify= holds =result=, =at=, =checks=, =skipped=, =elf_objects=, =report=, the path of =verify.json=, and =forced=, whether =--force= published a generation that failed.
+With =--ledger-config=, the =started=, =finished= and =aborted= ledger records of a run that =--force= published carry =build.verify=: its =result=, =forced= and =checks=, as the journal holds them; the =correction= records of a rollback do not.
 
 *** Output
 
