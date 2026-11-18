@@ -4,7 +4,7 @@
 
 * Files
 
-What eb-staged-rebuild writes, and where: in the state root, beside each installation and module file, and in the directories of =build-events= and =ledger-maintenance=.
+What eb-staged-rebuild writes, and where: in the state root, and beside each installation and module file.
 
 ** The state root
 
@@ -85,42 +85,6 @@ cat /opt/site/software/Example/1.0-GCCcore-15.2.0/.eb-staged-rebuild-complete
 
 The same goes for a Tcl module file, with its own name.
 Symbolic links that EasyBuild made in the generation's module tree, such as the categories of a module naming scheme, are made in the live module tree as well when the name is free.
-
-** build-events
-
-=<outbox>/OPERATION/= holds one operation:
-
-| Path                   | What it holds                                                                                           |
-|------------------------+---------------------------------------------------------------------------------------------------------|
-| =.lock=, =.lock.posix= | The lock of the operation, as for a state root.                                                         |
-| =operation.json=       | The metadata and the configuration the operation was recorded with, its phase and the command's result. |
-| =outbox.json=          | The records, as for a run.                                                                              |
-| =events/=              | The bytes of each record.                                                                               |
-| =head.json=            | The head that eb-stack signed after the last record it acknowledged for this operation.                 |
-
-The operation of the example site:
-
-#+begin_src bash
-ls -A /opt/site/build-events/example-1.0-zen4-5
-#+end_src
-
-#+begin_example
-.lock
-.lock.posix
-events
-head.json
-operation.json
-outbox.json
-#+end_example
-
-** ledger-maintenance
-
-| Path                                  | What it holds                                                                          |
-|---------------------------------------+----------------------------------------------------------------------------------------|
-| =<anchors>/YYYY-MM-DD.head.json=      | The anchor of a day: a head eb-stack signed, which =anchor= never replaces.            |
-| =<anchors>/.lock=, =.lock.posix=      | The lock of the directory of anchors.                                                  |
-| =<out>/index.json=, =<out>/index.md=  | The packages of a history from =project=, with the number of their modules and events. |
-| =<out>/packages/NAME.json=, =NAME.md= | The history of one package: its modules, events and problems.                          |
 
 ** See also
 

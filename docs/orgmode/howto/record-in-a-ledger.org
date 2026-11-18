@@ -65,16 +65,16 @@ The run records =started= before it exchanges the directories and =finished= aft
    eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
    eb-staged-rebuild: run example-4 backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-4
    eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-4 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
-   == Temporary log file in case of crash /tmp/eb-hmoub8cm/easybuild-ku9bcc_h.log
+   == Temporary log file in case of crash /tmp/eb-057e_i2i/easybuild-qfgr8w56.log
    == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
    == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
-   == Temporary log file(s) /tmp/eb-hmoub8cm/easybuild-ku9bcc_h.log* have been removed.
-   == Temporary directory /tmp/eb-hmoub8cm has been removed.
+   == Temporary log file(s) /tmp/eb-057e_i2i/easybuild-qfgr8w56.log* have been removed.
+   == Temporary directory /tmp/eb-057e_i2i has been removed.
    == Building/installing in bwrap namespace
      >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-4/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
      >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-4/bwrap_info.json
      >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-4/modules']
-   == Temporary log file in case of crash /tmp/eb-wdl0q5ug/easybuild-fq919go_.log
+   == Temporary log file in case of crash /tmp/eb-jplkmjnl/easybuild-t1vsb4et.log
    == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
    == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
    == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
@@ -123,12 +123,12 @@ The run records =started= before it exchanges the directories and =finished= aft
    == packaging...
    == ... (took < 1 sec)
    == COMPLETED: Installation ended successfully (took 12 secs)
-   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.015019.log
+   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.172231.log
    == Build succeeded for 1 out of 1 (total: 12 secs)
    == Summary:
       * [SUCCESS] Example/1.0-GCCcore-15.2.0
-   == Temporary log file(s) /tmp/eb-wdl0q5ug/easybuild-fq919go_.log* have been removed.
-   == Temporary directory /tmp/eb-wdl0q5ug has been removed.
+   == Temporary log file(s) /tmp/eb-jplkmjnl/easybuild-t1vsb4et.log* have been removed.
+   == Temporary directory /tmp/eb-jplkmjnl has been removed.
    eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
    eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
    eb-staged-rebuild: run example-4 published 1 module(s)
@@ -136,7 +136,7 @@ The run records =started= before it exchanges the directories and =finished= aft
 
 ** Check that it worked
 
-The run appended a =started= and a =finished= record, after the =finding= that [[file:backfill.org][Record software installed before the ledger]] added for this site:
+The run appended a =started= and a =finished= record:
 
 #+begin_src bash
 /opt/site/bin/eb-stack ledger show --log /opt/site/ledger/stack.jsonl --package Example
@@ -144,22 +144,21 @@ The run appended a =started= and a =finished= record, after the =finding= that [
 
 #+begin_example
 index	ts	action	target	module	actor
-2	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-1	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-0	2026-11-17T01:50:04Z	finding	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-3 of 3 records
+1	2026-11-17T23:22:31Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+0	2026-11-17T23:22:31Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+2 of 2 records
 #+end_example
 
 The signed head, which the run wrote after each record, covers the =finished= record:
 
 #+begin_src bash
 /opt/site/bin/eb-stack ledger verify --log /opt/site/ledger/stack.jsonl --public-key /opt/site/keys/ledger.pub \
-  --record 2 --head /opt/site/ledger-heads/head.json
+  --record 1 --head /opt/site/ledger-heads/head.json
 #+end_src
 
 #+begin_example
-record 2 id 3a09b87620339f9b79f7ddbd86219b93155116af65f905c1f9f38b124b700e29 is in the head of size 3 root d89955534bbfb572d6b209b59bd327802cd379b280cf98667c5beb509582ac64
-tile log size 3 root d89955534bbfb572d6b209b59bd327802cd379b280cf98667c5beb509582ac64 extends the head and holds the same lines
+record 1 id 4f13fb6429c37a771233355b945fb14f278cbd915d16c0aedb9265e7879792e8 is in the head of size 2 root 74da9cb9a8873afa4c8e1cc4f5b321cc203e3f899721ae1a58b4129a5d2dcb15
+tile log size 2 root 74da9cb9a8873afa4c8e1cc4f5b321cc203e3f899721ae1a58b4129a5d2dcb15 extends the head and holds the same lines
 #+end_example
 
 A rollback of the run appends a =correction= of the =finished= record, again as =started= and =finished=:
@@ -173,12 +172,11 @@ eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild example-4
 eb-staged-rebuild: restored all/Example/1.0-GCCcore-15.2.0.lua
 eb-staged-rebuild: run example-4 rolled back; replacement kept at its retired path
 index	ts	action	target	module	actor
-4	2026-11-17T01:50:19Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-3	2026-11-17T01:50:19Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-2	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-1	2026-11-17T01:50:19Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-0	2026-11-17T01:50:04Z	finding	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
-5 of 5 records
+3	2026-11-17T23:22:31Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+2	2026-11-17T23:22:31Z	correction	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+1	2026-11-17T23:22:31Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+0	2026-11-17T23:22:31Z	rebuild-inplace	x86_64/amd/zen4	Example/1.0-GCCcore-15.2.0	alice
+4 of 4 records
 #+end_example
 
 =docs/examples/site.sh= in the repository runs these steps as its cases =ledger-setup=, =ledger-run= and =ledger-rollback=.
@@ -199,8 +197,5 @@ A rollback goes on in the same way, and its records wait for =rollback= to be ru
 
 ** Related
 
-- [[file:build-events.org][Record any build command in the ledger]]
-- [[file:anchor.org][Anchor the ledger once a day]]
-- [[file:package-history.org][Write the history of each package]]
 - [[file:../explanation/ledger.org][What the ledger records]]
 - [[file:../reference/configuration.org][Configuration files]]

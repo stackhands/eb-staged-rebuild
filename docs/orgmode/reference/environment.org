@@ -33,7 +33,7 @@ Each EasyBuild command, the dry runs and the build alike, gets the caller's envi
   With rich, EasyBuild wraps its output at the console width and, once =FORCE_COLOR= is set and not empty, even to =0=, colours it through a pipe too, unless =TERM= is =dumb= or =unknown=.
   The build keeps the caller's output style; an =--output-style= after =--= reaches the dry runs and the build alike.
 
-The =--prepare= program, the command of =build-events= and =eb-stack= get the caller's environment unchanged.
+The =--prepare= program and =eb-stack= get the caller's environment unchanged.
 
 ** For tests
 

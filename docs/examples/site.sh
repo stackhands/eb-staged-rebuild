@@ -11,11 +11,10 @@
 #   docs/examples/site.sh clean     remove what setup made
 #
 # The cases change the site in turn, so run them in the order of $cases.
-# They need the eb-staged-rebuild binary on PATH, since the Python package
-# has its build-events and ledger-maintenance commands as modules only,
-# EasyBuild 5.4.2 as eb, Lmod as LMOD_CMD, bwrap, openssl, an eb-stack 0.7.0
-# binary as EB_STACK_BIN or on PATH, and a $SITE that exists and that you
-# can write. The guides show the output of a run as alice on login1.
+# They need eb-staged-rebuild on PATH, EasyBuild 5.4.2 as eb, Lmod as
+# LMOD_CMD, bwrap, openssl, an eb-stack 0.7.0 binary as EB_STACK_BIN or on
+# PATH, and a $SITE that exists and that you can write. The guides show
+# the output of a run as alice on login1.
 set -euo pipefail
 
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -29,12 +28,10 @@ KEY=$SITE/keys/ledger.pem
 PUB=$SITE/keys/ledger.pub
 LOG=$SITE/ledger/stack.jsonl
 HEAD=$SITE/ledger-heads/head.json
-ANCHORS=$SITE/ledger-anchors
-HISTORY=$SITE/ledger-history
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
-robot userns build-dir no-easyconfig not-installed ledger-setup backfill ledger-run
-ledger-rollback build-events anchor project"
+robot userns build-dir no-easyconfig not-installed ledger-setup ledger-run
+ledger-rollback"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -49,10 +46,6 @@ run_example() {
     shift
     step "${STATUS:-0}" eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
         --run-id "$id" "$@" -- Example-1.0-GCCcore-15.2.0.eb
-}
-
-sha256() {
-    sha256sum "$1" | cut -d' ' -f1
 }
 
 setup() {
@@ -199,44 +192,10 @@ EOF
     step 0 cat "$SITE/etc/ledger.json"
 }
 
-case_backfill() {
-    local log manifest=$HOME/backfill/audit-1.json
-    log=$(ls "$SITE/software/Example/1.0-GCCcore-15.2.0/easybuild/"easybuild-Example-1.0-*.log | head -n 1)
-    install -d "$HOME/backfill"
-    cat >"$manifest" <<EOF
-{
-  "schema": "eb-staged-rebuild/observed-backfill/1",
-  "manifest_id": "audit-1",
-  "observed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "observer": "alice",
-  "stack": "2026.06",
-  "target": "x86_64/amd/zen4",
-  "observations": [
-    {
-      "module": "Example/1.0-GCCcore-15.2.0",
-      "location": "$SITE/software/Example/1.0-GCCcore-15.2.0",
-      "modulefile": {"path": "$MODULE", "sha256": "$(sha256 "$MODULE")"},
-      "provenance": [
-        {"ref": "$log", "kind": "easybuild-log", "sha256": "$(sha256 "$log")"}
-      ],
-      "note": "installed before the site kept a ledger"
-    }
-  ]
-}
-EOF
-    chmod 444 "$manifest"
-    step 0 cat "$manifest"
-    step 0 sha256sum "$manifest"
-    step 0 eb-staged-rebuild ledger-maintenance backfill --eb-stack "$EB_STACK" --log "$LOG" \
-        --public-key "$PUB" --key "$KEY" --head "$HEAD" \
-        --manifest "$manifest" --manifest-sha256 "$(sha256 "$manifest")"
-    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
-}
-
 case_ledger-run() {
     run_example example-4 --ledger-config "$SITE/etc/ledger.json"
     step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
-    step 0 "$EB_STACK" ledger verify --log "$LOG" --public-key "$PUB" --record 2 --head "$HEAD"
+    step 0 "$EB_STACK" ledger verify --log "$LOG" --public-key "$PUB" --record 1 --head "$HEAD"
 }
 
 case_ledger-rollback() {
@@ -244,63 +203,10 @@ case_ledger-rollback() {
     step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
 }
 
-case_build-events() {
-    install -d "$SITE/build-events"
-    cat >"$SITE/etc/build-events.json" <<EOF
-{
-  "eb_stack": "$EB_STACK",
-  "log": "$LOG",
-  "key": "$KEY",
-  "public_key": "$PUB",
-  "outbox": "$SITE/build-events"
-}
-EOF
-    cat >"$HOME/example-5.json" <<EOF
-{
-  "operation": "example-1.0-zen4-5",
-  "actor": "alice",
-  "stack": "2026.06",
-  "target": {"cpu": "x86_64/amd/zen4"},
-  "module": "Example/1.0-GCCcore-15.2.0",
-  "location": "$SITE/software/Example/1.0-GCCcore-15.2.0",
-  "action": "rebuild-inplace",
-  "easyconfig": {"path": "$EASYCONFIGS/Example-1.0-GCCcore-15.2.0.eb"},
-  "modulefile": {"path": "$MODULE"},
-  "tool": {"name": "EasyBuild", "version": "5.4.2"}
-}
-EOF
-    step 0 cat "$SITE/etc/build-events.json" "$HOME/example-5.json"
-    step 0 eb-staged-rebuild build-events --config "$SITE/etc/build-events.json" \
-        --metadata "$HOME/example-5.json" -- \
-        eb-staged-rebuild run --software "$SITE/software" --modules "$SITE/modules" \
-        --run-id example-5 -- Example-1.0-GCCcore-15.2.0.eb
-    step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
-    step 0 ls -A "$SITE/build-events/example-1.0-zen4-5"
-}
-
-case_anchor() {
-    install -d "$ANCHORS"
-    step 0 eb-staged-rebuild ledger-maintenance anchor --eb-stack "$EB_STACK" --log "$LOG" \
-        --public-key "$PUB" --key "$KEY" --anchors "$ANCHORS"
-    step 0 eb-staged-rebuild ledger-maintenance verify-anchors --eb-stack "$EB_STACK" --log "$LOG" \
-        --public-key "$PUB" --anchors "$ANCHORS"
-    step 0 ls -A "$ANCHORS"
-}
-
-case_project() {
-    step 2 eb-staged-rebuild ledger-maintenance project --eb-stack "$EB_STACK" --log "$LOG" \
-        --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
-    step 0 "$EB_STACK" ledger head --log "$LOG" --key "$KEY" --out "$HEAD"
-    step 0 eb-staged-rebuild ledger-maintenance project --eb-stack "$EB_STACK" --log "$LOG" \
-        --public-key "$PUB" --head "$HEAD" --out "$HISTORY"
-    step 0 ls -A "$HISTORY" "$HISTORY/packages"
-    step 0 cat "$HISTORY/packages/Example.md"
-}
-
 clean() {
     rm -rf "${SITE:?}/software" "${SITE:?}/modules" "${SITE:?}/sources" "${SITE:?}/bin" "${SITE:?}/standin" \
-        "$STATE" "${SITE:?}/build" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" "${SITE:?}/build-events" \
-        "$ANCHORS" "$HISTORY" "$EASYCONFIGS" "$HOME/sources" "$HOME/backfill" "$HOME/example-5.json"
+        "$STATE" "${SITE:?}/build" "${SITE:?}/etc" "${SITE:?}/ledger" "${SITE:?}/ledger-heads" \
+        "$EASYCONFIGS" "$HOME/sources"
     if [ -d "$SITE/keys" ]; then
         chmod -R u+w "$SITE/keys"
         rm -rf "$SITE/keys"

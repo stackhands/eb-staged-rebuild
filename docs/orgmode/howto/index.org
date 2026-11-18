@@ -21,9 +21,5 @@ The title names the task.
    export-metrics
    retire
    record-in-a-ledger
-   build-events
-   backfill
-   anchor
-   package-history
    add-a-site-hook
 #+end_export

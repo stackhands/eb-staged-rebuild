@@ -41,14 +41,11 @@ With the ledger required, the default, a run does not exchange anything until it
 A rollback waits for the =started= records of its correction in the same way, and =rollback= run again delivers them and goes on.
 With ="required": false=, the run or the rollback goes on, and the records wait in the outbox for the next =resume= or =rollback=, whichever the message names.
 
-*** Other sources of records
+*** Maintenance belongs to eb-stack
 
-=build-events= records =started= before any build command, and =finished= or =aborted= after it, from metadata that the operator writes for the operation.
-Only the fields of that metadata go into the records: never the command, its arguments or its environment.
-
-=ledger-maintenance backfill= adds a =finding= for each installation in a manifest of observations, dated when the observation was made, and says in the record that no history before it is recorded.
-=ledger-maintenance anchor= keeps one signed head per day, in files that are never replaced, and =verify-anchors= proves that each extends the one before.
-=ledger-maintenance project= writes a page of history for each package from a log that =verify= accepted against a head that covers every record, with each correction applied to the record it corrects.
+eb-staged-rebuild only appends the records of its own runs and rollbacks.
+Reading and maintaining the log is eb-stack's: =eb-stack ledger backfill= records software installed before the ledger, =eb-stack ledger anchor= and =eb-stack ledger verify-anchors= keep and check one signed head per day, and =eb-stack ledger project= writes the history of each package.
+A pipeline that records the outcome of other build commands appends those records itself with =eb-stack ledger append=.
 
 ** What was considered and turned down
 
@@ -57,19 +54,17 @@ Only the fields of that metadata go into the records: never the command, its arg
 - /Signing and proving in eb-staged-rebuild./
   It would tie this program to the ledger's format; it depends only on eb-stack's command line and the first line that prints.
 - /Recording the build command and its environment./
-  They can hold credentials, so only the allowlisted metadata is written.
-- /A finding that looks like an install./
-  A backfill cannot know how the software got there, so its record is a =finding=, at the time of the observation.
+  They can hold credentials, so a record holds only the fields listed above.
+- /Maintenance commands in eb-staged-rebuild./
+  Backfill, anchors and the package history read and sign the ledger as a whole, not one run, so they live with the ledger in eb-stack.
 
 ** Limits
 
-- The ledger records what eb-staged-rebuild and =build-events= did, not every change to the tree: a plain =eb=, a copy or a removal by hand leaves no record.
-- Whoever holds the signing key can sign any log; the daily anchors protect the history only where the key's holder cannot change them.
-- A head signed by =build-events= is in its outbox, not in the head file of =--ledger-config=; sign a current head before =project= reads the log.
+- The ledger records what eb-staged-rebuild did, not every change to the tree: a plain =eb=, a copy or a removal by hand leaves no record.
+- Whoever holds the signing key can sign any log; daily anchors (=eb-stack ledger anchor=) protect the history only where the key's holder cannot change them.
 
 ** Further reading
 
 - [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]] sets up a ledger and records a run and its rollback.
-- [[file:../howto/build-events.org][Record any build command in the ledger]], [[file:../howto/backfill.org][Record software installed before the ledger]], [[file:../howto/anchor.org][Anchor the ledger once a day]] and [[file:../howto/package-history.org][Write the history of each package]] cover the other sources and readers.
-- [[file:../reference/configuration.org][Configuration files]] lists the keys of the ledger configuration, of =build-events= and of a backfill manifest.
-- [[https://github.com/stackhands/eb-stack][stackhands/eb-stack]] is the ledger's own project.
+- [[file:../reference/configuration.org][Configuration files]] lists the keys of the ledger configuration.
+- [[https://github.com/stackhands/eb-stack][stackhands/eb-stack]] is the ledger's own project, with its =ledger= commands.

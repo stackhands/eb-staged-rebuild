@@ -5,7 +5,6 @@
 * Machine-readable command output
 
 =probe --json=, =gc --json=, =status --json=, and =resolve= print one JSON document on stdout.
-=build-events= and =ledger-maintenance= print JSON on success as [[file:cli.org][The command line]] describes.
 
 ** JSON Schema files
 
