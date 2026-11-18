@@ -878,9 +878,13 @@ fn allowExchange(r: *R) bool {
     return pyfmt.truthy(pyfmt.get(ex, "ok"));
 }
 
+fn requireExchange(r: *R) bool {
+    return pyfmt.truthy(r.get("require_exchange"));
+}
+
 fn swapPair(r: *R, live: []const u8, retired: []const u8, faults: atomic.Faults, step: []const u8) E![]const u8 {
     var why: swap.Why = .{};
-    const m = swap.swapDirectories(r.a, live, retired, allowExchange(r), faults, step, &why) catch |err| return switch (err) {
+    const m = swap.swapDirectories(r.a, live, retired, allowExchange(r), !requireExchange(r), faults, step, &why) catch |err| return switch (err) {
         error.Refused => r.refuse("{s}", .{why.msg}),
         error.NeedsIntervention => r.intervene("{s}", .{why.msg}),
         error.Failed => r.refuse("{s}", .{why.msg}),
@@ -1469,6 +1473,7 @@ pub fn run(r: *R, probes: Py) E!Result {
         .{ .key = "eb_executable", .value = Py.s(r.spec.eb_executable) },
         .{ .key = "grace_hours", .value = .{ .float = r.spec.grace_hours } },
         .{ .key = "skip_live_check", .value = .{ .bool = r.spec.skip_live_check } },
+        .{ .key = "require_exchange", .value = .{ .bool = r.spec.require_exchange } },
         .{ .key = "prepare_executable", .value = Py.opt(r.spec.prepare_executable) },
         .{ .key = "ledger_config", .value = Py.opt(r.spec.ledger_config) },
         .{ .key = "ledger_policy", .value = policy },
@@ -1523,6 +1528,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
         .eb_executable = if (s(pyfmt.get(j, "eb_executable")).len > 0) s(pyfmt.get(j, "eb_executable")) else "eb",
         .run_id = s(pyfmt.get(j, "run_id")),
         .skip_live_check = pyfmt.truthy(pyfmt.get(j, "skip_live_check")),
+        .require_exchange = pyfmt.truthy(pyfmt.get(j, "require_exchange")),
         .lock_timeout = lock_timeout,
         .prepare_executable = if (pyfmt.get(j, "prepare_executable")) |p| (if (p == .str) p.str else null) else null,
         .ledger_config = if (pyfmt.get(j, "ledger_config")) |p| (if (p == .str and p.str.len > 0) p.str else null) else null,

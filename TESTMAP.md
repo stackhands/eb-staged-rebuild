@@ -192,6 +192,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | FreeSpaceTests.test_option_takes_precedence_over_the_environment | differential "run, --min-free-bytes instead of a bad environment reserve" |
 | FreeSpaceTests.test_environment_reserve_is_a_nonnegative_64_bit_integer | differential "run, a free-space reserve below 0 in the environment", "run, a free-space reserve in the environment that is not an integer", "run, an empty free-space reserve in the environment", "run, an environment reserve above the supported range" |
 | FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
+| ExchangeRequirementTests.test_default_cli_output_and_status_are_exact_bytes | differential "run, installpath" omits the option |
+| ExchangeRequirementTests.test_requirement_refuses_before_the_journal_and_build | `zig/engine.zig` test "required exchange reports the failed filesystem probe" |
+| ExchangeRequirementTests.test_supported_requirement_is_recorded_and_uses_exchange | differential "run, installpath, exchange required", "rollback the exchange-required run" |
 | TransactionTests.test_success_uses_fallback_and_keeps_old_tree_for_rollback | crash_matrix "fallback: run published" (journal `swap_method` `rename-fallback`, old tree kept as the hidden sibling) and "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
@@ -267,6 +270,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | SwapTests.test_exchange_failure_after_success_restores_live | `zig/swap.zig` test "an exchange whose sync fails is exchanged back"; fail_matrix "one module: run fails at swap:all/demo/1.lua.exchange.after" |
 | SwapTests.test_non_fallback_exchange_error_leaves_live_unchanged | `zig/swap.zig` test "an exchange error other than unsupported leaves live unchanged" |
 | SwapTests.test_unsupported_exchange_uses_fallback | `zig/swap.zig` test "an unsupported exchange uses the fallback" |
+| SwapTests.test_unsupported_exchange_is_refused_when_fallback_is_disabled | `zig/swap.zig` test "an unsupported exchange is refused when fallback is disabled" |
 | SwapTests.test_every_injected_fallback_failure_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" (the injected step precedes the rename that fails) |
 | SwapTests.test_every_rename_error_in_fallback_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" |
 | SwapTests.test_recover_after_first_fallback_rename | `zig/swap.zig` test "recovery after the first fallback rename" |

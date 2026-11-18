@@ -123,7 +123,7 @@ fn strerror(e: linux.E) []const u8 {
 
 /// swap_directories: exchange `live` and `staged` (siblings, both real
 /// directories). Afterwards `staged` holds the retired live tree.
-pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8, allow_exchange: bool, faults: atomic.Faults, step_prefix: []const u8, why: *Why) Error!Method {
+pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8, allow_exchange: bool, allow_fallback: bool, faults: atomic.Faults, step_prefix: []const u8, why: *Why) Error!Method {
     const live = admin.abspath(a, live_in);
     const staged = admin.abspath(a, staged_in);
     try recoverInterrupted(a, live, staged, why);
@@ -150,7 +150,11 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
         }
         if (e != .INVAL and e != .NOSYS and e != .OPNOTSUPP)
             return fail(a, why, error.Failed, "[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) });
+        if (!allow_fallback)
+            return fail(a, why, error.Failed, "[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) });
     }
+    if (!allow_fallback)
+        return fail(a, why, error.Failed, "RENAME_EXCHANGE is required", .{});
     const hold = a.print("{s}" ++ fallback_hold_suffix, .{staged}) catch return error.Failed;
     if (!std.mem.eql(u8, kindOf(hold), "missing")) try recoverInterrupted(a, live, staged, why);
     fallback: {
@@ -195,12 +199,12 @@ test "swap exchanges two sibling directories and back" {
     try atomic.makedirs(try a.print("{s}/S", .{staged}));
     var why: Why = .{};
     for ([_]bool{ true, false }) |allow| {
-        _ = try swapDirectories(a, live, staged, allow, .{}, "swap", &why);
+        _ = try swapDirectories(a, live, staged, allow, true, .{}, "swap", &why);
         try std.testing.expectEqualStrings("dir", kindOf(try a.print("{s}/S", .{live})));
-        _ = try swapDirectories(a, live, staged, allow, .{}, "swap", &why);
+        _ = try swapDirectories(a, live, staged, allow, true, .{}, "swap", &why);
         try std.testing.expectEqualStrings("dir", kindOf(try a.print("{s}/L", .{live})));
     }
-    try std.testing.expectError(error.Refused, swapDirectories(a, live, base, true, .{}, "swap", &why));
+    try std.testing.expectError(error.Refused, swapDirectories(a, live, base, true, true, .{}, "swap", &why));
 }
 
 // Ports of tests/test_swap.py. Each failure the Python test raises through
@@ -269,7 +273,7 @@ test "an exchange whose sync fails is exchanged back" {
     failing_call = 1;
     ops.sync_dir = failingSync;
     var why: Why = .{};
-    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, .{}, "swap", &why));
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     ops.* = .{};
     try expectOriginal(a, p);
 }
@@ -283,7 +287,7 @@ test "an exchange error other than unsupported leaves live unchanged" {
     defer ops.* = .{};
     ops.exchange = deniedExchange;
     var why: Why = .{};
-    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, .{}, "swap", &why));
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     try testing.expectEqualStrings("[Errno 1] renameat2(RENAME_EXCHANGE): Operation not permitted", why.msg);
     ops.* = .{};
     try expectOriginal(a, p);
@@ -298,10 +302,25 @@ test "an unsupported exchange uses the fallback" {
     defer ops.* = .{};
     ops.exchange = unsupportedExchange;
     var why: Why = .{};
-    try testing.expectEqual(Method.@"rename-fallback", try swapDirectories(a, p.live, p.staged, true, .{}, "swap", &why));
+    try testing.expectEqual(Method.@"rename-fallback", try swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     ops.* = .{};
     try testing.expectEqualStrings("new\n", try payload(a, p.live));
     try testing.expectEqualStrings("old\n", try payload(a, p.staged));
+}
+
+test "an unsupported exchange is refused when fallback is disabled" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "required");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer ops.* = .{};
+    ops.exchange = unsupportedExchange;
+    var why: Why = .{};
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, false, .{}, "swap", &why));
+    try testing.expectEqualStrings("[Errno 95] renameat2(RENAME_EXCHANGE): Operation not supported", why.msg);
+    ops.* = .{};
+    try expectOriginal(a, p);
 }
 
 test "every failed fallback rename or sync restores live" {
@@ -319,7 +338,7 @@ test "every failed fallback rename or sync restores live" {
         ops.sync_dir = if (k == 4) failingSync else atomic.fsyncDir;
         if (k == 4) calls = 3;
         var why: Why = .{};
-        try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, false, .{}, "swap", &why));
+        try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
         ops.* = .{};
         try expectOriginal(a, p);
     }

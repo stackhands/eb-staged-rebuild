@@ -88,6 +88,23 @@ class SwapTests(unittest.TestCase):
             self.assertEqual(_payload(live), "new\n")
             self.assertEqual(_payload(staged), "old\n")
 
+    def test_unsupported_exchange_is_refused_when_fallback_is_disabled(self):
+        with tempfile.TemporaryDirectory() as root:
+            live, staged = _pair(root)
+
+            def unsupported(_first, _second):
+                raise OSError(errno.EOPNOTSUPP, "unsupported")
+
+            with self.assertRaises(OSError) as caught:
+                swap_directories(
+                    live,
+                    staged,
+                    allow_fallback=False,
+                    exchange_call=unsupported,
+                )
+            self.assertEqual(caught.exception.errno, errno.EOPNOTSUPP)
+            self.assert_original_pair(live, staged)
+
     def test_every_injected_fallback_failure_restores_live(self):
         steps = (
             "swap.fallback.live-to-hold",

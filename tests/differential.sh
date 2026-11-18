@@ -350,6 +350,8 @@ compare_admin "status after the run" status --state-root @ROOT@/state r2
 compare_admin "resume a complete run" resume --state-root @ROOT@/state r2
 compare_admin "rollback the run" rollback --state-root @ROOT@/state r2
 compare_admin "rollback the run again" rollback --state-root @ROOT@/state r2
+compare_admin "run, installpath, exchange required" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r-required --skip-live-check --require-exchange --module demo/1 -- demo-1.eb
+compare_admin "rollback the exchange-required run" rollback --state-root @ROOT@/state r-required
 compare_admin "resume a rolled-back run" resume --state-root @ROOT@/state r2
 compare_admin "run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id r4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r5 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb

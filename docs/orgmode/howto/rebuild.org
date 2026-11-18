@@ -220,6 +220,20 @@ Example 1.0
 
 =docs/examples/site.sh= in the repository sets up this site with EasyBuild, =bash docs/examples/site.sh setup=, and runs each case of the how-to guides, in order: =probe=, =dry-run= and =rebuild= for this one.
 
+** Require a one-step directory exchange
+
+If the stable installation path must never be absent during publication, add =--require-exchange=:
+
+#+begin_src bash
+eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules \
+  --require-exchange -- Example-1.0-GCCcore-15.2.0.eb
+#+end_src
+
+The command probes the software filesystem before it creates a journal or starts EasyBuild.
+It refuses when =renameat2(RENAME_EXCHANGE)= is unavailable, and it does not change to the ordinary-rename fallback if an exchange is later refused.
+The recorded policy also applies to =resume= and =rollback=.
+Use =run --dry-run --require-exchange= to check the policy without creating a journal or starting a build; it exits 2 when the probe fails.
+
 ** Without bubblewrap
 
 Where bubblewrap cannot run, =--backend auto= takes the =userns= backend if =probe= reports =user-namespace sandbox: usable=, and =--backend userns= asks for it.
