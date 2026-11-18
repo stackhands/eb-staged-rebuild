@@ -6,6 +6,7 @@ const std = @import("std");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
+const pyfmt = @import("pyfmt.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -106,6 +107,35 @@ pub fn snapshot(a: Allocator, path: []const u8) !Py {
     }) };
 }
 
+/// Whether a JSON value has the shape produced by snapshot().
+pub fn validSnapshot(value: Py) bool {
+    if (value != .dict) return false;
+    const exists = pyfmt.get(value, "exists") orelse return false;
+    if (exists != .bool) return false;
+    if (!exists.bool) return value.dict.len == 1;
+    const symlink = pyfmt.get(value, "symlink") orelse return false;
+    if (symlink != .bool) return false;
+    if (symlink.bool) {
+        const target = pyfmt.get(value, "target") orelse return false;
+        return value.dict.len == 3 and target == .str;
+    }
+    const kind = pyfmt.get(value, "kind") orelse return false;
+    if (kind != .str) return false;
+    if (!std.mem.eql(u8, kind.str, "dir")) return value.dict.len == 3;
+    if (value.dict.len != 6) return false;
+    const inode = pyfmt.get(value, "inode") orelse return false;
+    const device = pyfmt.get(value, "device") orelse return false;
+    const entries = pyfmt.get(value, "entries") orelse return false;
+    if (inode != .int or device != .int or entries != .list) return false;
+    for (entries.list) |entry| {
+        if (entry != .list or entry.list.len != 5) return false;
+        const fields = entry.list;
+        if (fields[0] != .str or fields[1] != .str or fields[2] != .int or fields[3] != .int or fields[4] != .str) return false;
+        if (!std.mem.eql(u8, fields[1].str, "file") and !std.mem.eql(u8, fields[1].str, "symlink")) return false;
+    }
+    return true;
+}
+
 /// same_snapshot: equal as JSON values.
 pub fn same(a: Allocator, x: Py, y: Py) bool {
     const sx = json.dumps(a, x, 0, true) catch return false;
@@ -120,4 +150,22 @@ pub fn emptyRealDir(a: Allocator, path: []const u8) bool {
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch return false;
     return (it.next() catch return false) == null;
+}
+
+test "validSnapshot accepts records from snapshot and rejects other JSON shapes" {
+    const a = std.testing.allocator;
+    const missing = Py{ .dict = try a.dupe(Py.Entry, &.{.{ .key = "exists", .value = .{ .bool = false } }}) };
+    defer a.free(missing.dict);
+    try std.testing.expect(validSnapshot(missing));
+    try std.testing.expect(!validSnapshot(.{ .list = &.{} }));
+    const malformed = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "exists", .value = .{ .bool = true } },
+        .{ .key = "symlink", .value = .{ .bool = false } },
+        .{ .key = "kind", .value = Py.s("dir") },
+        .{ .key = "inode", .value = .{ .int = 1 } },
+        .{ .key = "device", .value = .{ .int = 1 } },
+        .{ .key = "entries", .value = .{ .dict = &.{} } },
+    }) };
+    defer a.free(malformed.dict);
+    try std.testing.expect(!validSnapshot(malformed));
 }

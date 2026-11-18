@@ -150,6 +150,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | ExchangeRequirementTests.test_default_cli_output_and_status_are_exact_bytes | differential "run, installpath" omits the option |
 | ExchangeRequirementTests.test_requirement_refuses_before_the_journal_and_build | `zig/engine.zig` test "required exchange reports the failed filesystem probe" |
 | ExchangeRequirementTests.test_supported_requirement_is_recorded_and_uses_exchange | differential "run, installpath, exchange required", "rollback the exchange-required run" |
+| ManifestShapeTests.test_resume_refuses_a_manifest_value_outside_the_recorded_shape | `zig/livecheck.zig` test "validSnapshot accepts records from snapshot and rejects other JSON shapes" |
 | TransactionTests.test_success_uses_fallback_and_keeps_old_tree_for_rollback | crash_matrix "fallback: run published" (journal `swap_method` `rename-fallback`, old tree kept as the hidden sibling) and "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
