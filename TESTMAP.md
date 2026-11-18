@@ -147,6 +147,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | FreeSpaceTests.test_option_takes_precedence_over_the_environment | differential "run, --min-free-bytes instead of a bad environment reserve" |
 | FreeSpaceTests.test_environment_reserve_is_a_nonnegative_64_bit_integer | differential "run, a free-space reserve below 0 in the environment", "run, a free-space reserve in the environment that is not an integer", "run, an empty free-space reserve in the environment", "run, an environment reserve above the supported range" |
 | FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
+| FreeSpaceTests.test_minimum_free_space_falls_back_to_f_bsize_when_f_frsize_is_zero | `zig/run.zig` test "availableBytes falls back to block_size and multiplies in u128 without overflow" |
 | ExchangeRequirementTests.test_default_cli_output_and_status_are_exact_bytes | differential "run, installpath" omits the option |
 | ExchangeRequirementTests.test_requirement_refuses_before_the_journal_and_build | `zig/engine.zig` test "required exchange reports the failed filesystem probe" |
 | ExchangeRequirementTests.test_supported_requirement_is_recorded_and_uses_exchange | differential "run, installpath, exchange required", "rollback the exchange-required run" |

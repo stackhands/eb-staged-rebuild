@@ -213,7 +213,9 @@ def _check_free_space(path, minimum):
     if minimum is None:
         return
     info = os.statvfs(path)
-    available = info.f_bavail * info.f_frsize
+    blocks = info.f_bavail if info.f_bavail > 0 else 0
+    unit = info.f_frsize if info.f_frsize > 0 else (info.f_bsize if info.f_bsize > 0 else 0)
+    available = blocks * unit
     if available < minimum:
         raise Refused(
             f"generation filesystem has {available} bytes available; "
