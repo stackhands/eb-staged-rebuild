@@ -100,7 +100,7 @@ def main():
         return 2
     os.environ["TOOL_BIN"] = os.environ["TOOL_BIN_TEST_OPS"]
     failures = total = 0
-    for fixture in (cm.ONE, cm.TWO):
+    for fixture in (cm.ONE, cm.TWO, cm.VERIFY):
         for step in cm.steps_reached(fixture):
             failures += check(f"{fixture.name}: run fails at {step}", fixture, cm.each_impl("fail", failed_run(fixture, step)), "run")
             total += 1

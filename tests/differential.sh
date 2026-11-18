@@ -6,6 +6,9 @@
 #   TOOL_BIN=zig-out/bin/eb-staged-rebuild bash tests/differential.sh
 set -u
 : "${TOOL_BIN:?}"
+# verify loads module files with $LMOD_CMD and judges ELF objects against
+# EESSI; the cases that want either set it themselves.
+unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/esr-diff.XXXXXX")
 trap 'chmod -R u+rwX "${work}" 2>/dev/null; rm -rf -- "${work}"' EXIT
@@ -117,7 +120,9 @@ if py_version=$(cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_r
 else
     echo "DIFF --version: '${py_version:-}' vs '${zig_version:-}'"; diffs=$((diffs + 1))
 fi
-for c in run resume rollback status gc retire; do compare "${c} -h" "${c}" -h; done
+for c in run resume verify rollback status gc retire; do compare "${c} -h" "${c}" -h; done
+compare "verify, nothing" verify
+compare "verify, two stages" verify --state-root x a b
 # The version the binary reports is the one build.zig.zon declares.
 zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")
 if "${TOOL_BIN}" --version | grep -qF -- "${zon_version}"; then echo "same version as build.zig.zon"; else echo "DIFF version: build.zig.zon says ${zon_version}"; diffs=$((diffs + 1)); fi
@@ -522,6 +527,7 @@ compare_admin "rollback the run with a grace period of -0 hours" rollback --stat
 compare_admin "run, for the state root from the environment" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id s1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status s1
 compare_admin "resume, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume s1
+compare_admin "verify, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify s1
 compare_admin "gc, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --dry-run
 compare_admin "retire --dry-run, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire --module-file @ROOT@/modules/all/demo/1.lua --dry-run
 compare_admin "rollback, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback s1
@@ -530,6 +536,7 @@ compare_admin "status, an empty state root in the environment" env EB_STAGED_REB
 compare_admin "status --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --help
 compare_admin "status, an unknown option with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --nope
 compare_admin "resume --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume --help
+compare_admin "verify --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify --help
 compare_admin "rollback, no run id with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback
 compare_admin "gc, bad grace with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --grace-hours x
 compare_admin "retire, no module file with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire
@@ -735,6 +742,43 @@ compare_admin "run, --build-dir symlink into software" run --software @ROOT@/sof
 compare_admin "run, --build-dir symlink into modules" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-mod-link --dry-run -- demo-1.eb
 compare_admin "run, --build-dir symlink into generation" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-gen-link --dry-run -- demo-1.eb
 compare_admin "run, --build-dir is a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/build-file --dry-run -- demo-1.eb
+# verify: a stage with a missing library, a build directory reference and a
+# link into an EasyBuild temporary directory. A run publishes it as before;
+# with --verify it is not published until it is forced, and a missing Lmod
+# refuses one until Lmod loads it from the stage.
+vx='{"elf": {"bin/demo": {"needed": ["libgone.so.1", "libdemo.so.1"], "runpath": "$ORIGIN/../lib"}, "lib/libdemo.so.1": {"wide": false, "machine": 3}}, "text": {"share/demo.pc": "prefix=@ROOT@/build/demo/1\n"}, "links": {"lib/libt.so": "/tmp/eb-abcd1234/libt.so"}}'
+vr='--software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --skip-live-check --module demo/1'
+# shellcheck disable=SC2086
+compare_admin "run, a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v0 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "a run without --verify writes no report" env ls @ROOT@/state/runs/v0
+compare_admin "rollback the run without --verify" rollback --state-root @ROOT@/state v0
+# shellcheck disable=SC2086
+compare_admin "run, --force without --verify" run ${vr} --force --run-id v9 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run --verify, verify fails" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --verify --run-id v1 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "the verify report" env cat @ROOT@/state/runs/v1/verify.json
+compare_admin "verify the refused stage" verify --state-root @ROOT@/state v1
+compare_admin "verify, no such run" verify --state-root @ROOT@/state nope
+compare_admin "verify a complete run" verify --state-root @ROOT@/state r2
+compare_admin "verify a retire record" verify --state-root @ROOT@/state @RETIRE@
+compare_admin "resume, the journal keeps --verify" resume --state-root @ROOT@/state v1
+compare_admin "resume --force" resume --state-root @ROOT@/state --force v1
+compare_admin "rollback the forced run" rollback --state-root @ROOT@/state v1
+compare_admin "resume --force, a run without --verify" resume --state-root @ROOT@/state --force r2
+compare_admin "resume --verify, a complete run" resume --state-root @ROOT@/state --verify r2
+for impl in py zig; do printf '#!/bin/sh\nexit 42\n' > "${work}/${impl}/prepare-later"; chmod +x "${work}/${impl}/prepare-later"; done
+# shellcheck disable=SC2086
+compare_admin "run, the prepare fails before a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v3 --prepare @ROOT@/prepare-later -- demo-1.eb --buildpath=@ROOT@/build
+for impl in py zig; do printf '#!/bin/sh\nexit 0\n' > "${work}/${impl}/prepare-later"; done
+compare_admin "resume --verify checks the stage" resume --state-root @ROOT@/state --verify v3
+compare_admin "a later resume checks it too" resume --state-root @ROOT@/state v3
+compare_admin "resume --force publishes it" resume --state-root @ROOT@/state --force v3
+compare_admin "rollback the run resumed with --verify" rollback --state-root @ROOT@/state v3
+# shellcheck disable=SC2086
+compare_admin "run --verify, Lmod missing" env LMOD_CMD=@ROOT@/no-lmod @CMD@ run ${vr} --verify --run-id v2 -- demo-1.eb
+compare_admin "verify with Lmod" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ verify --state-root @ROOT@/state v2
+compare_admin "resume the verified stage" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ resume --state-root @ROOT@/state v2
+compare_admin "rollback the verified run" rollback --state-root @ROOT@/state v2
 unset NORM_HASH
 
 # The live-tree snapshot a journal records, compared as JSON.
