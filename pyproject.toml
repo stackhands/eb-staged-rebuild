@@ -12,6 +12,12 @@ license = {text = "MIT"}
 authors = [{name = "Rohit Goswami", email = "rgoswami@ieee.org"}]
 dependencies = []
 
+[project.optional-dependencies]
+docs = [
+    "shtab==1.7.2",
+    "argparse-manpage==4.6",
+]
+
 [project.scripts]
 eb-staged-rebuild = "eb_staged_rebuild.cli:main"
 

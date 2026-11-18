@@ -34,6 +34,38 @@ jobs:
         run: |
           python -m pip install jsonschema
           python -m unittest discover -s tests -v
+      - name: completion and manpage generation pass one
+        uses: stackhands/.github/.github/actions/parser-cli-assets@main
+        with:
+          pythonpath: .
+          parser_ref: eb_staged_rebuild.cli._parser
+          parser_module: eb_staged_rebuild.cli
+          parser_function: _parser
+          prog: eb-staged-rebuild
+          out_completions_dir: ${{ runner.temp }}/esr-cli-one/completions
+          out_man_dir: ${{ runner.temp }}/esr-cli-one/man
+          out_bash_file: eb-staged-rebuild.bash
+          out_zsh_file: _eb-staged-rebuild
+          out_man_file: eb-staged-rebuild.1
+      - name: completion and manpage generation pass two
+        uses: stackhands/.github/.github/actions/parser-cli-assets@main
+        with:
+          pythonpath: .
+          parser_ref: eb_staged_rebuild.cli._parser
+          parser_module: eb_staged_rebuild.cli
+          parser_function: _parser
+          prog: eb-staged-rebuild
+          out_completions_dir: ${{ runner.temp }}/esr-cli-two/completions
+          out_man_dir: ${{ runner.temp }}/esr-cli-two/man
+          out_bash_file: eb-staged-rebuild.bash
+          out_zsh_file: _eb-staged-rebuild
+          out_man_file: eb-staged-rebuild.1
+      - name: completion and manpage generation is reproducible
+        run: |
+          cmp "${RUNNER_TEMP}/esr-cli-one/completions/eb-staged-rebuild.bash" "${RUNNER_TEMP}/esr-cli-two/completions/eb-staged-rebuild.bash"
+          cmp "${RUNNER_TEMP}/esr-cli-one/completions/_eb-staged-rebuild" "${RUNNER_TEMP}/esr-cli-two/completions/_eb-staged-rebuild"
+          cmp "${RUNNER_TEMP}/esr-cli-one/man/eb-staged-rebuild.1" "${RUNNER_TEMP}/esr-cli-two/man/eb-staged-rebuild.1"
+          ls -1 "${RUNNER_TEMP}/esr-cli-one/completions" "${RUNNER_TEMP}/esr-cli-one/man"
       - name: every test that imports the Python code has a TESTMAP.md row
         run: python tests/check_testmap.py
 
@@ -72,6 +104,23 @@ jobs:
       - name: promtool 3.16.0
         uses: ./.github/actions/pinned-promtool
       - run: zig build -Drelease=true
+      - name: generate completion and manpage assets
+        uses: stackhands/.github/.github/actions/parser-cli-assets@main
+        with:
+          pythonpath: .
+          parser_ref: eb_staged_rebuild.cli._parser
+          parser_module: eb_staged_rebuild.cli
+          parser_function: _parser
+          prog: eb-staged-rebuild
+          out_completions_dir: zig-out/share/completions
+          out_man_dir: zig-out/share/man
+          out_bash_file: eb-staged-rebuild.bash
+          out_zsh_file: _eb-staged-rebuild
+          out_man_file: eb-staged-rebuild.1
+      - name: list generated cli assets
+        run: |
+          ls -1 zig-out/share/completions zig-out/share/man
+          test -s zig-out/share/man/eb-staged-rebuild.1
       - name: rebuild stagedemo with the binary
         env:
           EB_STAGED_REBUILD_INTEGRATION: "1"
