@@ -648,6 +648,19 @@ fn envGrace(a: Allocator, env: probe.Env) f64 {
     return hours;
 }
 
+/// EB_STAGED_REBUILD_MIN_FREE_BYTES supplies run's default free-space policy.
+fn envMinFreeBytes(a: Allocator, env: probe.Env) ?u64 {
+    const e = env.get("EB_STAGED_REBUILD_MIN_FREE_BYTES") orelse return null;
+    const minimum = std.fmt.parseInt(i128, e, 10) catch
+        refuse("EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: {s}", .{repr(a, e)});
+    if (minimum < 0 or minimum > std.math.maxInt(u64))
+        refuse(
+            "EB_STAGED_REBUILD_MIN_FREE_BYTES is not a number of bytes, 0 through {d}: {s}",
+            .{ std.math.maxInt(u64), repr(a, e) },
+        );
+    return @intCast(minimum);
+}
+
 fn missing(a: Allocator, usage: []const u8, who: []const u8, names: []const []const u8) void {
     if (names.len == 0) return;
     usageError(usage, who, "the following arguments are required: {s}", .{std.mem.join(a, ", ", names) catch ""});
@@ -814,7 +827,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         usageError(run_usage, who, "argument --backend: invalid choice: '{s}' (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{b});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
     const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(run_usage, who, "lock-timeout", v) else null;
-    const min_free_bytes: ?u64 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
+    const min_free_cli: ?u64 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
     const modules = nonEmpty(vals[1]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_MODULES"));
@@ -829,6 +842,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     } else false;
     if (!has_positional) refuse("pass the easyconfig after --, for example: eb-staged-rebuild run --software S --modules M -- file.eb", .{});
     const grace = grace_cli orelse envGrace(a, env);
+    const min_free_bytes = min_free_cli orelse envMinFreeBytes(a, env);
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     if (vals[13]) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
     return engine.run(a, env, .{

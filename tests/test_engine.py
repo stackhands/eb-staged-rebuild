@@ -106,10 +106,11 @@ def _payload(path):
 
 
 def _main(argv, env=None):
-    """Run the command line with the variables of the grace period and the state root unset unless ``env`` sets them."""
+    """Run the command line with its policy variables unset unless ``env`` sets them."""
     out, err = io.StringIO(), io.StringIO()
     with mock.patch.dict(os.environ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         os.environ.pop("EB_STAGED_REBUILD_GRACE_HOURS", None)
+        os.environ.pop("EB_STAGED_REBUILD_MIN_FREE_BYTES", None)
         os.environ.pop("EB_STAGED_REBUILD_STATE_ROOT", None)
         os.environ.update(env or {})
         try:
@@ -153,6 +154,57 @@ class FreeSpaceTests(unittest.TestCase):
             )
         self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
         self.assertIsNone(called.call_args.args[0].min_free_bytes)
+
+    def test_environment_sets_the_default_reserve(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"],
+                {"EB_STAGED_REBUILD_MIN_FREE_BYTES": "4096"},
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertEqual(called.call_args.args[0].min_free_bytes, 4096)
+
+    def test_option_takes_precedence_over_the_environment(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                [
+                    "run",
+                    "--software",
+                    "software",
+                    "--modules",
+                    "modules",
+                    "--min-free-bytes",
+                    "2048",
+                    "--",
+                    "demo-1.eb",
+                ],
+                {"EB_STAGED_REBUILD_MIN_FREE_BYTES": "site-policy"},
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertEqual(called.call_args.args[0].min_free_bytes, 2048)
+
+    def test_environment_reserve_is_a_nonnegative_64_bit_integer(self):
+        cases = {
+            "": "is not an integer: ''",
+            "site-policy": "is not an integer: 'site-policy'",
+            "-1": "is not a number of bytes, 0 through 18446744073709551615: '-1'",
+            "18446744073709551616": (
+                "is not a number of bytes, 0 through 18446744073709551615: "
+                "'18446744073709551616'"
+            ),
+        }
+        for value, message in cases.items():
+            with self.subTest(value=value):
+                code, out, err = _main(
+                    ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"],
+                    {"EB_STAGED_REBUILD_MIN_FREE_BYTES": value},
+                )
+                self.assertEqual(
+                    (code, out.encode(), err.encode()),
+                    (2, b"", f"eb-staged-rebuild: EB_STAGED_REBUILD_MIN_FREE_BYTES {message}\n".encode()),
+                )
 
     def test_minimum_free_space_refuses_before_the_journal_and_build(self):
         with tempfile.TemporaryDirectory() as root:

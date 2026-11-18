@@ -319,6 +319,7 @@ for impl in py zig; do rm "${work}/${impl}/modules/tools/classy/1.lua"; done
 compare_admin "rollback the retire with class links" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "run --dry-run, auto" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
+compare_admin "run --dry-run, free-space environment unset" env -u EB_STAGED_REBUILD_MIN_FREE_BYTES @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
 compare_admin "run --dry-run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --dry-run -- demo-1.eb -f
 compare_admin "run, no easyconfig" run --software @ROOT@/software --modules @ROOT@/modules --dry-run
 compare_admin "run, no software" run --dry-run -- x.eb
@@ -333,6 +334,7 @@ compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
 # copy's own paths, so hashes are compared only through the files they name.
 export NORM_HASH=1
 compare_admin "run refuses below --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-state --backend installpath --eb @ROOT@/eb --run-id space1 --skip-live-check --min-free-bytes 18446744073709551615 --module demo/1 -- demo-1.eb
+compare_admin "run refuses below the environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551615 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-env-state --backend installpath --eb @ROOT@/eb --run-id space-env --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
 compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom
@@ -435,6 +437,12 @@ compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modu
 compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=abc @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, a free-space reserve below 0 in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a free-space reserve in the environment that is not an integer" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an empty free-space reserve in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES= @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an environment reserve above the supported range" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551616 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, --min-free-bytes instead of a bad environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --min-free-bytes 0 --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad free-space environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
 compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
 compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
 compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb
