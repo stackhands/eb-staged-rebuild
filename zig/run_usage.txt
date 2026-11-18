@@ -6,5 +6,5 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--lock-timeout LOCK_TIMEOUT] [--skip-live-check]
                              [--prepare PREPARE]
                              [--ledger-config LEDGER_CONFIG] [--build-dir DIR]
-                             [--min-free-bytes BYTES]
+                             [--min-free-bytes BYTES] [--require-exchange]
                              ...

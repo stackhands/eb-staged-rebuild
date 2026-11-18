@@ -6,7 +6,7 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--lock-timeout LOCK_TIMEOUT] [--skip-live-check]
                              [--prepare PREPARE]
                              [--ledger-config LEDGER_CONFIG] [--build-dir DIR]
-                             [--min-free-bytes BYTES]
+                             [--min-free-bytes BYTES] [--require-exchange]
                              ...
 
 positional arguments:
@@ -39,3 +39,4 @@ options:
   --min-free-bytes BYTES
                         refuse before the build unless the generation
                         filesystem has at least BYTES available
+  --require-exchange    refuse unless publication can use RENAME_EXCHANGE

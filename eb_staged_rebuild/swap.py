@@ -143,6 +143,7 @@ def swap_directories(
     staged,
     *,
     allow_exchange=True,
+    allow_fallback=True,
     faults=None,
     rename=os.rename,
     exchange_call=None,
@@ -152,7 +153,8 @@ def swap_directories(
 
     ``staged`` contains the candidate tree before the call and the retired live
     tree after a successful call.  Unsupported rename flags select the ordinary
-    rename fallback.  Any other exchange error leaves both names unchanged.
+    rename fallback when ``allow_fallback`` is true.  Any other exchange error
+    leaves both names unchanged.
     """
     live, staged = abspath(live), abspath(staged)
     faults = faults if faults is not None else FaultInjector()
@@ -180,6 +182,8 @@ def swap_directories(
                     ) from recovery_error
             if error.errno not in UNSUPPORTED_EXCHANGE_ERRNOS:
                 raise
+            if not allow_fallback:
+                raise
         except BaseException:
             if exchanged:
                 try:
@@ -191,4 +195,6 @@ def swap_directories(
                         f"{recovery_error}"
                     ) from recovery_error
             raise
+    if not allow_fallback:
+        raise OSError(errno.EOPNOTSUPP, "RENAME_EXCHANGE is required")
     return _fallback_swap(live, staged, faults, rename, step_prefix)

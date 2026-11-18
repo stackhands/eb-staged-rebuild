@@ -40,6 +40,8 @@ Between the first two renames the stable path is missing.
 A failure in the sequence puts the two names back before it is reported, and a run that was killed in it finds the hold name on =resume= and puts the names back then.
 Any other error from the exchange leaves both names as they were.
 The journal records which of the two each module got, as =swap_method=.
+With =--require-exchange=, an unavailable exchange is refused before the journal and build.
+The journal records that policy, and publication, recovery and rollback refuse an unsupported exchange instead of entering the ordinary-rename sequence.
 [[py:eb_staged_rebuild.swap.swap_directories]] and [[zig:eb-staged-rebuild.engine.run_mod.swap.swapDirectories]] do the exchange.
 
 *** The module file
@@ -68,7 +70,7 @@ With a ledger, the rollback adds a =correction= of each =finished= record.
 ** Limits
 
 - Other programs do not take the state root's lock: one that reads the module files while a run publishes several of them can see some new and some old.
-- Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames.
+- Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames, unless =--require-exchange= disables that fallback.
 - The copy of access-control lists has been tested on ext4 only.
 
 ** Further reading

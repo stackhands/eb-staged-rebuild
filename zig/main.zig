@@ -768,8 +768,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " run";
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes", "require-exchange" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true, false };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -865,6 +865,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .ledger_config = vals[12],
         .build_dir = vals[13],
         .min_free_bytes = min_free_bytes,
+        .require_exchange = seen[15],
     });
 }
 

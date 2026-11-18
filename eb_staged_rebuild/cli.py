@@ -156,6 +156,11 @@ def _parser():
         metavar="BYTES",
         help="refuse before the build unless the generation filesystem has at least BYTES available",
     )
+    run_p.add_argument(
+        "--require-exchange",
+        action="store_true",
+        help="refuse unless publication can use RENAME_EXCHANGE",
+    )
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
@@ -274,6 +279,7 @@ def _dispatch(args):
             ledger_config=args.ledger_config,
             build_dir=args.build_dir,
             min_free_bytes=_min_free_bytes(args.min_free_bytes),
+            require_exchange=args.require_exchange,
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")

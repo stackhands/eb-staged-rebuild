@@ -94,6 +94,7 @@ class Spec:
     ledger_policy: dict = None
     build_dir: str = None
     min_free_bytes: int = None
+    require_exchange: bool = False
 
 
 @dataclass
@@ -852,6 +853,7 @@ def _normalize_publish_baseline(journal):
                 live,
                 retired,
                 allow_exchange=_allow_exchange(journal),
+                allow_fallback=not bool(journal.get("require_exchange")),
                 faults=silent,
                 step_prefix=f"recover:{mod['rel']}",
             )
@@ -925,6 +927,7 @@ def _publish(spec, journal, faults):
                 mod["live_software"],
                 mod["retired"],
                 allow_exchange=_allow_exchange(journal),
+                allow_fallback=not bool(journal.get("require_exchange")),
                 faults=faults,
                 step_prefix=f"swap:{mod['rel']}",
             )
@@ -1219,6 +1222,7 @@ def _blank_journal(spec, run_id, probes, rels, left_out):
         "eb_executable": spec.eb_executable,
         "grace_hours": spec.grace_hours,
         "skip_live_check": spec.skip_live_check,
+        "require_exchange": spec.require_exchange,
         "prepare_executable": spec.prepare_executable,
         "ledger_config": spec.ledger_config,
         "ledger_policy": spec.ledger_policy,
@@ -1258,6 +1262,13 @@ def _select_backend(spec, probes):
     return requested, requested
 
 
+def _required_exchange_problem(probes):
+    exchange = probes.get("rename_exchange") or {}
+    where = exchange.get("fstype") or "this filesystem"
+    reason = exchange.get("error") or "the operation is not supported"
+    return f"RENAME_EXCHANGE is required on {where}, but the probe failed: {reason}"
+
+
 def run(spec):
     """Build into a new generation, then swap it with the live directory."""
     _check_roots(spec)
@@ -1280,6 +1291,8 @@ def run(spec):
         )
     if spec.dry_run:
         return _dry_run(spec, probes, faults)
+    if spec.require_exchange and not (probes.get("rename_exchange") or {}).get("ok"):
+        raise Refused(_required_exchange_problem(probes))
     if spec.backend == "bwrap" and not (probes.get("bwrap") or {}).get("usable"):
         reason = (probes.get("bwrap") or {}).get("reason") or "bwrap is not usable"
         raise Refused(f"{reason}; refusing to rebuild in place")
@@ -1329,6 +1342,7 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
         ledger_config=journal.get("ledger_config"),
         ledger_policy=journal.get("ledger_policy"),
         build_dir=journal.get("build_dir"),
+        require_exchange=bool(journal.get("require_exchange")),
     )
 
 
@@ -1379,6 +1393,7 @@ def _restore_published_baseline(journal):
                 mod["live_software"],
                 mod["retired"],
                 allow_exchange=_allow_exchange(journal),
+                allow_fallback=not bool(journal.get("require_exchange")),
                 faults=silent,
                 step_prefix=f"rollback-recover:{mod['rel']}",
             )
@@ -1498,6 +1513,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
                         mod["live_software"],
                         mod["retired"],
                         allow_exchange=_allow_exchange(journal),
+                        allow_fallback=not bool(journal.get("require_exchange")),
                         faults=faults,
                         step_prefix=f"rollback.swap:{mod['rel']}",
                     ).method
@@ -1558,11 +1574,17 @@ def _dry_run(spec, probes, faults):
         + ("yes" if exchange.get("ok") else "no"),
         "easybuild: " + (easybuild.get("version_text") or easybuild.get("reason") or "not found"),
         "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured",
-        "publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback",
+        (
+            "publish: renameat2(RENAME_EXCHANGE) required; ordinary-rename fallback disabled"
+            if spec.require_exchange
+            else "publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback"
+        ),
     ]
     problems = []
     if spec.backend == "bwrap" and not bwrap.get("usable"):
         problems.append(bwrap.get("reason") or "bwrap is not usable")
+    if spec.require_exchange and not exchange.get("ok"):
+        problems.append(_required_exchange_problem(probes))
     rels = list(spec.module_rels)
     for rel in rels:
         path = os.path.join(spec.software, rel)

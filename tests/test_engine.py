@@ -224,6 +224,50 @@ class FreeSpaceTests(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(state, "runs")))
 
 
+class ExchangeRequirementTests(unittest.TestCase):
+    def test_default_cli_output_and_status_are_exact_bytes(self):
+        result = Result(0)
+        with mock.patch("eb_staged_rebuild.cli.run", return_value=result) as called:
+            code, out, err = _main(
+                ["run", "--software", "software", "--modules", "modules", "--", "demo-1.eb"]
+            )
+        self.assertEqual((code, out.encode(), err.encode()), (0, b"", b""))
+        self.assertFalse(called.call_args.args[0].require_exchange)
+
+    def test_requirement_refuses_before_the_journal_and_build(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+            builder = mock.Mock(return_value=0)
+            spec = _spec(software, modules, state, builder)
+            spec.require_exchange = True
+            with self.assertRaisesRegex(
+                Refused,
+                "RENAME_EXCHANGE is required on test, but the probe failed: test",
+            ):
+                run(spec)
+            builder.assert_not_called()
+            self.assertFalse(os.path.exists(os.path.join(state, "runs")))
+
+    def test_supported_requirement_is_recorded_and_uses_exchange(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, builder = _fixture(root)
+            probes = {
+                **PROBES,
+                "rename_exchange": {
+                    "ok": True,
+                    "errno": None,
+                    "error": None,
+                    "fstype": "test",
+                },
+            }
+            spec = _spec(software, modules, state, builder, probes=probes)
+            spec.require_exchange = True
+            self.assertEqual(run(spec).returncode, 0)
+            journal = load_journal(journal_path(state, "run1"))
+            self.assertIs(journal["require_exchange"], True)
+            self.assertEqual(journal["modules_plan"][0]["swap_method"], "renameat2-exchange")
+
+
 class TransactionTests(unittest.TestCase):
     def assert_old_live(self, installed):
         for row in installed.values():

@@ -45,6 +45,7 @@ pub const Spec = struct {
     ledger_config: ?[]const u8 = null,
     build_dir: ?[]const u8 = null,
     min_free_bytes: ?u64 = null,
+    require_exchange: bool = false,
 };
 
 // ---- eb arguments, as builders.py shapes them -----------------------------
@@ -264,6 +265,39 @@ fn strOr(v: ?Py, fallback: []const u8) []const u8 {
     return fallback;
 }
 
+fn exchangeOk(probes: Py) bool {
+    const exchange = pyfmt.get(probes, "rename_exchange") orelse return false;
+    return pyfmt.truthy(pyfmt.get(exchange, "ok"));
+}
+
+fn requiredExchangeProblem(a: Allocator, probes: Py) []const u8 {
+    const exchange = pyfmt.get(probes, "rename_exchange") orelse Py{ .dict = &.{} };
+    return a.print(
+        "RENAME_EXCHANGE is required on {s}, but the probe failed: {s}",
+        .{
+            strOr(pyfmt.get(exchange, "fstype"), "this filesystem"),
+            strOr(pyfmt.get(exchange, "error"), "the operation is not supported"),
+        },
+    ) catch "RENAME_EXCHANGE is required, but the probe failed";
+}
+
+test "required exchange reports the failed filesystem probe" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const exchange: Py = .{ .dict = &.{
+        .{ .key = "ok", .value = .{ .bool = false } },
+        .{ .key = "fstype", .value = Py.s("testfs") },
+        .{ .key = "error", .value = Py.s("not supported here") },
+    } };
+    const probes: Py = .{ .dict = &.{.{ .key = "rename_exchange", .value = exchange }} };
+    try std.testing.expect(!exchangeOk(probes));
+    try std.testing.expectEqualStrings(
+        "RENAME_EXCHANGE is required on testfs, but the probe failed: not supported here",
+        requiredExchangeProblem(a, probes),
+    );
+}
+
 // ---- run ----------------------------------------------------------------
 
 /// run: check the roots and make them absolute, probe, pick the backend,
@@ -282,6 +316,8 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
             log("neither bubblewrap nor the user-namespace sandbox is usable; using the unsandboxed install-path fallback", .{});
     }
     if (spec.dry_run) return dryRun(a, env, spec, probes);
+    if (spec.require_exchange and !exchangeOk(probes))
+        refuse("{s}", .{requiredExchangeProblem(a, probes)});
     var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
     var r: run_mod.R = .{ .a = a, .env = env, .ctx = &ctx, .spec = spec };
     const res = run_mod.run(&r, probes) catch |err| switch (err) {
@@ -319,10 +355,18 @@ fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
     })) catch oom();
     lines.append(a, fmt(a, "easybuild: {s}", .{strOr(pyfmt.get(easybuild, "version_text"), strOr(pyfmt.get(easybuild, "reason"), "not found"))})) catch oom();
     lines.append(a, "lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured") catch oom();
-    lines.append(a, "publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback") catch oom();
+    lines.append(
+        a,
+        if (spec.require_exchange)
+            "publish: renameat2(RENAME_EXCHANGE) required; ordinary-rename fallback disabled"
+        else
+            "publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback",
+    ) catch oom();
     var problems: std.ArrayList([]const u8) = .empty;
     if (std.mem.eql(u8, spec.backend, "bwrap") and !usable(probes, "bwrap"))
         problems.append(a, strOr(pyfmt.get(bwrap, "reason"), "bwrap is not usable")) catch oom();
+    if (spec.require_exchange and !exchangeOk(probes))
+        problems.append(a, requiredExchangeProblem(a, probes)) catch oom();
     for (spec.module_rels) |rel| {
         const path = std.fs.path.join(a, &.{ spec.software, rel }) catch continue;
         if (std.mem.eql(u8, main_mod.lstatKind(path), "symlink")) problems.append(a, fmt(a, "{s} is a symlink", .{path})) catch oom();
