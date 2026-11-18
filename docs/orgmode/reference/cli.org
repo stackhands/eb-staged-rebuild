@@ -25,6 +25,7 @@ eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild verify --state-root DIR [--lock-timeout SECONDS] STAGE
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] (RUN_ID | --latest | --to GEN)
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
+                     [--keep N] [--check-in-use]
                      [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
                      [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH] [--json]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
@@ -232,9 +233,13 @@ After all of a complete or rolled-back run's hidden trees are settled, also remo
 | =--lock-timeout=   | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                                                                                                                              |
 | =--metrics-file=   | After a completed pass, atomically replace this file with Prometheus text exposition. It cannot be used with =--dry-run=. Without this option, no metrics file is written.                                                                                                                                   |
 | =--json=           | Print one JSON document with the collection actions instead of one line per action.                                                                                                                                                                                                                        |
+| =--keep N=         | Keep the =N= newest trees of each installation that =rollback --to= can return to, however old they are.                                                                                                                                                                                                  |
+| =--check-in-use=   | Keep a tree or a generation that a process or a mount of this machine uses.                                                                                                                                                                                                                               |
 
 Each tree gets a line =ACTION: PATH (REASON)=, where =ACTION= is =remove=, =keep= or =manual=.
 =manual= names the stable directory a retire record left in place, which =gc= never removes.
+With =--check-in-use=, =gc= also keeps a tree or a generation that a process or a mount of its own machine uses; [[file:generations.org][The generations of an installation]] gives every reason, and what that check cannot see.
+A tree that =--keep= or that check keeps is not settled, so its run's generation stays too.
 With =--json=, the document has one =actions= array in the same order.
 Each item has the string fields =action=, =path= and =reason=; no actions produce ={"actions": []}=.
 The metrics file reports generation directories present, the age of the newest generation whose complete journal, current live module and live-tree stamp show that it remains published, and the time captured after this =gc= pass completes.

@@ -287,6 +287,16 @@ The Python test also passes the generated text to `promtool check metrics` when 
 | MetricsTests.test_gc_timestamp_is_taken_after_locked_work | `zig/admin.zig` test "gc records its completion time after its starting time" |
 | MetricsTests.test_dry_run_refuses_to_write_metrics | `zig/main.zig` dispatches the same refusal in `admin.gc` |
 
+### tests/test_inuse.py
+
+The scan itself runs against both builds in `tests/test_generations_cli.py` (`GcCliTests`) and in
+differential "gc --check-in-use keeps a tree and a generation in use".
+
+| test | replacement |
+|---|---|
+| ParsingTests.test_mountinfo_fields_are_unescaped_and_a_trees_path_follows_the_mount_that_holds_it | `zig/inuse.zig` test "mountinfo fields are unescaped and a tree's path on its device follows the mount that holds it" |
+| ParsingTests.test_a_maps_line_names_the_file_after_its_first_five_fields | `zig/inuse.zig` test "a maps line names the file after its first five fields" |
+
 ### tests/test_prefix.py
 
 The generation prefix is published by a same-directory replacement. The Zig

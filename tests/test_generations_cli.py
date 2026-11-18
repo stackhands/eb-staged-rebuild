@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -20,6 +21,27 @@ from tests.support import Site, implementations, write
 ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 MISSING = {"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}
 PASS = "pass (modules skipped)"
+# Holds a tree in use the way its first argument names, prints "ready", and
+# exits when its standard input closes.
+HOLDER = r"""
+import ctypes, os, sys
+how, path = sys.argv[1:]
+if how == "open":
+    held = open(path, "rb")
+elif how == "map":
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mmap.restype = ctypes.c_void_p
+    libc.mmap.argtypes = (ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long)
+    fd = os.open(path, os.O_RDONLY)
+    if libc.mmap(None, os.fstat(fd).st_size, 1, 2, fd, 0) == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_errno(), "mmap")
+    os.close(fd)
+elif how == "chroot":
+    os.unshare(os.CLONE_NEWUSER)
+    os.chroot(path)
+print("ready", flush=True)
+sys.stdin.read()
+"""
 
 
 def second(site):
@@ -28,6 +50,12 @@ def second(site):
     write(os.path.join(live, "PAYLOAD"), "old\n")
     write(os.path.join(site.modules, "all", "demo", "2.lua"), f'local root = "{live}"\nsetenv("EBROOTDEMO", root)\n')
     return live
+
+
+def unprivileged_namespaces():
+    if shutil.which("unshare") is None:
+        return False
+    return subprocess.run(["unshare", "-rm", "true"], capture_output=True).returncode == 0
 
 
 def row(state, run, verify, path=None, when=None):
@@ -255,6 +283,185 @@ class RollbackCliTests(Generations):
             self.assertEqual(site.payload(), "r2\n")
             self.assertTrue(self.module(site).endswith("-- r2\n"), self.module(site))
             self.assertEqual(site.journal("r3")["modules_plan"][0]["rollback_method"], "recovered")
+
+
+class GcCliTests(Generations):
+    """gc --keep N, and the trees gc --check-in-use keeps because this node shows them in use."""
+
+    def gc(self, site, *args, command=()):
+        done = subprocess.run(
+            [*command, *site.implementation.command, "gc", "--state-root", site.state, *args],
+            capture_output=True, text=True, env=site.environ(), cwd=site.root, timeout=300,
+        )
+        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stdout + done.stderr)
+        return done.stdout.replace(site.software, "SW").replace(site.root, "ROOT").splitlines()
+
+    def hidden(self, site, run_id):
+        return os.path.join(site.software, "demo", f".1.{run_id}")
+
+    def removed(self, run_id, why="previous live tree", run="complete run"):
+        """The lines for a run's hidden tree and then its generation going."""
+        return [f"remove: SW/demo/.1.{run_id} ({why})", f"remove: ROOT/state/generations/{run_id} (generation of a {run})"]
+
+    def held(self, *command):
+        holder = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait, 60)
+        self.addCleanup(holder.stdin.close)
+        self.assertEqual(holder.stdout.readline(), "ready\n")
+        return holder
+
+    def test_gc_keep_keeps_each_install_paths_newest_generations(self):
+        for site in self.sites():
+            for run_id in ("r1", "r2", "r3", "r4"):
+                self.publish(site, run_id)
+            self.assertEqual(
+                self.gc(site, "--keep", "2", "--grace-hours", "144"),
+                [
+                    "keep: SW/demo/.1.r1 (within grace (previous live tree))",
+                    "keep: SW/demo/.1.r2 (within grace (previous live tree))",
+                    "keep: SW/demo/.1.r3 (kept by --keep 2)",
+                    "keep: SW/demo/.1.r4 (kept by --keep 2)",
+                ],
+            )
+            self.assertEqual(
+                self.gc(site, "--keep", "2", "--grace-hours", "0"),
+                [
+                    *self.removed("r1", "previous live tree, beyond --keep 2"),
+                    *self.removed("r2", "previous live tree, beyond --keep 2"),
+                    "keep: SW/demo/.1.r3 (kept by --keep 2)",
+                    "keep: SW/demo/.1.r4 (kept by --keep 2)",
+                ],
+            )
+            self.assertEqual(
+                self.listed(site),
+                [
+                    "demo/1  SW/demo/1",
+                    row("live", "r4", PASS),
+                    row("replaced", "r3", PASS, "SW/demo/.1.r4"),
+                    row("replaced", "r2", PASS, "SW/demo/.1.r3"),
+                ],
+            )
+            back = site.cli("rollback", "--state-root", site.state, "--to", "r2")
+            self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+            self.assertEqual(site.payload(), "r2\n")
+            self.assertEqual(
+                self.gc(site, "--keep", "2", "--grace-hours", "0"),
+                [
+                    *self.removed("r3", "rolled-back candidate", "rolled-back run"),
+                    *self.removed("r4", "rolled-back candidate", "rolled-back run"),
+                ],
+            )
+            self.assertEqual(self.listed(site), ["demo/1  SW/demo/1", row("live", "r2", PASS)])
+
+    def test_without_check_in_use_gc_removes_a_tree_a_process_uses(self):
+        for site in self.sites():
+            self.publish(site, "r1")
+            self.publish(site, "r2")
+            working = subprocess.Popen(["sleep", "600"], cwd=self.hidden(site, "r1"))
+            self.addCleanup(working.wait, 60)
+            self.addCleanup(working.kill)
+            self.assertEqual(self.gc(site, "--grace-hours", "0"), [*self.removed("r1"), *self.removed("r2")])
+            self.assertFalse(os.path.lexists(self.hidden(site, "r1")))
+
+    def test_gc_check_in_use_keeps_a_tree_a_process_on_this_node_uses(self):
+        namespaces = unprivileged_namespaces()
+        for site in self.sites():
+            for run_id in ("r1", "r2", "r3", "r4", "r5"):
+                self.publish(site, run_id)
+            program = os.path.join(self.hidden(site, "r4"), "bin", "sleep")
+            os.makedirs(os.path.dirname(program))
+            shutil.copy2(shutil.which("sleep"), program)
+            working = subprocess.Popen(["sleep", "600"], cwd=self.hidden(site, "r1"))
+            running = subprocess.Popen([program, "600"], cwd=site.root)
+            for proc in (working, running):
+                self.addCleanup(proc.wait, 60)
+                self.addCleanup(proc.kill)
+            opened = self.held(sys.executable, "-c", HOLDER, "open", os.path.join(self.hidden(site, "r2"), "PAYLOAD"))
+            mapped = self.held(sys.executable, "-c", HOLDER, "map", os.path.join(self.hidden(site, "r3"), "PAYLOAD"))
+            expected = [
+                f"keep: SW/demo/.1.r1 (in use on this node: pid {working.pid} has its working directory in it)",
+                f"keep: SW/demo/.1.r2 (in use on this node: pid {opened.pid} has a file open in it)",
+                f"keep: SW/demo/.1.r3 (in use on this node: pid {mapped.pid} maps a file in it)",
+                f"keep: SW/demo/.1.r4 (in use on this node: pid {running.pid} runs a program in it)",
+                *self.removed("r5"),
+            ]
+            if namespaces:
+                rooted = self.held(sys.executable, "-c", HOLDER, "chroot", self.hidden(site, "r5"))
+                expected[4:] = [f"keep: SW/demo/.1.r5 (in use on this node: pid {rooted.pid} has its root directory in it)"]
+            everything = [line for run_id in ("r1", "r2", "r3", "r4", "r5") for line in self.removed(run_id)]
+            self.assertEqual(self.gc(site, "--grace-hours", "0", "--dry-run"), everything)
+            self.assertEqual(self.gc(site, "--grace-hours", "0", "--dry-run", "--check-in-use"), expected)
+            self.assertEqual(
+                self.gc(site, "--grace-hours", "0", "--keep", "1", "--check-in-use"),
+                expected[:4] + ["keep: SW/demo/.1.r5 (kept by --keep 1)"],
+            )
+            for proc in (working, running):
+                proc.kill()
+                proc.wait(60)
+            for holder in [opened, mapped] + ([rooted] if namespaces else []):
+                holder.stdin.close()
+                holder.wait(60)
+            self.assertEqual(self.gc(site, "--grace-hours", "0", "--check-in-use"), everything)
+
+    def test_gc_check_in_use_keeps_a_generation_a_process_on_this_node_uses(self):
+        for site in self.sites():
+            self.publish(site, "r1")
+            self.publish(site, "r2")
+            generation = os.path.join(site.state, "generations", "r1")
+            working = subprocess.Popen(["sleep", "600"], cwd=generation)
+            self.addCleanup(working.wait, 60)
+            self.addCleanup(working.kill)
+            self.assertEqual(
+                self.gc(site, "--grace-hours", "0", "--check-in-use"),
+                [
+                    "remove: SW/demo/.1.r1 (previous live tree)",
+                    f"keep: ROOT/state/generations/r1 (in use on this node: pid {working.pid} has its working directory in it)",
+                    *self.removed("r2"),
+                ],
+            )
+            self.assertTrue(os.path.isdir(generation))
+            working.kill()
+            working.wait(60)
+            self.assertEqual(self.gc(site, "--grace-hours", "0"), self.removed("r1")[1:])
+
+    @unittest.skipUnless(unprivileged_namespaces(), "needs unprivileged user and mount namespaces")
+    def test_gc_check_in_use_keeps_a_tree_another_mount_namespace_binds(self):
+        for site in self.sites():
+            self.publish(site, "r1")
+            self.publish(site, "r2")
+            target = os.path.join(site.root, "mnt")
+            os.mkdir(target)
+            script = 'mount --bind "$1" "$2" && echo ready && exec cat'
+            bound = self.held("unshare", "-rm", "sh", "-c", script, "sh", self.hidden(site, "r2"), target)
+            self.assertEqual(
+                self.gc(site, "--grace-hours", "0", "--check-in-use"),
+                [
+                    *self.removed("r1"),
+                    f"keep: SW/demo/.1.r2 (in use on this node: mounted at ROOT/mnt in the mount namespace of pid {bound.pid})",
+                ],
+            )
+            bound.stdin.close()
+            bound.wait(60)
+            self.assertEqual(self.gc(site, "--grace-hours", "0"), self.removed("r2"))
+
+    @unittest.skipUnless(unprivileged_namespaces(), "needs unprivileged user and mount namespaces")
+    def test_gc_check_in_use_keeps_a_tree_with_a_mount_point_inside(self):
+        for site in self.sites():
+            self.publish(site, "r1")
+            self.publish(site, "r2")
+            inside = os.path.join(self.hidden(site, "r2"), "sub")
+            os.mkdir(inside)
+            mounted = ["unshare", "-rm", "sh", "-c", 'mount -t tmpfs tmpfs "$0" && exec "$@"', inside]
+            self.assertEqual(
+                self.gc(site, "--grace-hours", "0", "--check-in-use", command=mounted),
+                [
+                    *self.removed("r1"),
+                    "keep: SW/demo/.1.r2 (in use on this node: SW/demo/.1.r2/sub is a mount point)",
+                ],
+            )
+            self.assertTrue(os.path.isfile(os.path.join(self.hidden(site, "r2"), "PAYLOAD")))
+            self.assertEqual(self.gc(site, "--grace-hours", "0"), self.removed("r2"))
 
 
 if __name__ == "__main__":
