@@ -1,0 +1,50 @@
+#+TITLE: Check a copied install
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Check a copied install
+
+Write a checksum list of an install tree, copy the tree to a node that does not share that disk, and check the copy.
+The list records the bytes of each regular file and the text of each symbolic link.
+It is not a software bill of materials, and it is not a signed build cache: those stay with eb-stack and with the publisher.
+Nothing in a rebuild writes this list. You run it when you are about to move a tree.
+
+** Before you start
+
+- The install directory on the node that built it, and a place for the list outside that directory.
+- The same directory layout on the other node, after you have copied it with the tool you already use.
+- The package on =PYTHONPATH=, so =python3 -m eb_staged_rebuild.ship= runs.
+
+** Steps
+
+1. On the build node, write the list:
+
+   #+begin_src bash
+   python3 -m eb_staged_rebuild.ship write /opt/site/install /opt/site/SHIP
+   #+end_src
+
+   The file starts with a header line, ={"kind": "header", "version": 1}=, then one JSON line per file or link, sorted by path.
+   A symbolic link is stored as the path it points at, not the file that path names.
+
+2. Copy the install directory and =SHIP= to the other node. Then check:
+
+   #+begin_src bash
+   python3 -m eb_staged_rebuild.ship verify /opt/site/install /opt/site/SHIP
+   #+end_src
+
+   =matches= and exit 0 mean every listed file has the same bytes and every listed link the same target, with nothing extra and nothing missing.
+   Exit 1 names each difference: =sha256=, =link=, =missing= or =extra=.
+
+** If it fails
+
+| Message | Cause | What to do |
+|---|---|---|
+| =eb-staged-rebuild ship: sha256 PATH= | That file's bytes differ. | Copy the tree again, or rebuild it on this node. |
+| =eb-staged-rebuild ship: link PATH= | A symbolic link points somewhere else. | Copy links as links. A copy that follows them will not match. |
+| =eb-staged-rebuild ship: missing PATH= or =extra PATH= | The trees do not hold the same names. | Compare the two directories. The list does not delete or add files. |
+| =usage: python3 -m eb_staged_rebuild.ship write or verify ROOT MANIFEST= | The arguments were not those two commands. | Pass =write= or =verify=, the directory, and the list. |
+
+** Related
+
+- [[file:rebuild.org][Rebuild into a new generation]], for the tree you may then copy
+- [[https://spack.readthedocs.io/en/latest/binary_caches.html][Spack binary caches]], the signed cache this list is not
