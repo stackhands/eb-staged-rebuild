@@ -53,6 +53,14 @@ pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]cons
         detail.* = component;
         return error.Unsafe;
     }
+    if (fsx.statAt(fsx.cwd, root, false)) |st| {
+        // Keep regular-file roots on the existing Not a directory path and
+        // reject other non-directory inode types early as "exists".
+        if (!st.isDir() and !st.isReg()) return error.Exists;
+    } else |err| switch (err) {
+        error.NotFound => {},
+        else => return err,
+    }
     if (!(privateFile(a, root, ".lock") catch return error.OutOfMemory)) return error.Gate;
     if (!(privateFile(a, root, ".lock.posix") catch return error.OutOfMemory)) return error.NotPrivate;
     const lock = try state.RootLock.acquire(a, root, timeout_ms);
