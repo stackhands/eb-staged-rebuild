@@ -99,7 +99,7 @@ case_fail() {
 }
 
 case_resume() {
-    step 0 cp "$here/site/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
+    step 0 install -m 644 "$here/site/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
     step 0 eb-staged-rebuild resume --state-root "$STATE" example-3
     step 0 eb-staged-rebuild status --state-root "$STATE" example-3
 }
