@@ -1,1 +1,0 @@
-Add `[--require-exchange]` to the `run` synopsis in `cli.org`, list `--min-free-bytes`, `--require-exchange`, and `--ledger-config` pre-build refusals in `exit-status.org`, and note finite `timeout` validation in `configuration.org`.

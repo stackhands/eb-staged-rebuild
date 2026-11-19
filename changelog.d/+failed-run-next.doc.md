@@ -1,1 +1,0 @@
-The rebuild how-to says that `run` is the command that swaps, that `eb exited N; live modules were not changed` means the live tree was not swapped, and that `eb-keep-logs why` reads a log tree of `YYYYMMDD_HHMMSS` runs rather than the state root.

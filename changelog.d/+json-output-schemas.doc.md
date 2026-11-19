@@ -1,1 +1,0 @@
-Draft 2020-12 JSON Schema files for `probe --json` and `status --json` live under the reference docs. Unit tests validate command output against them for both the Python tool and the binary when `TOOL_BIN` is set.
