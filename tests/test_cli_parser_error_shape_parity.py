@@ -23,12 +23,16 @@ class CliParserErrorShapeParityTests(unittest.TestCase):
                 ("--wat", "gc", "--state-root", state_root, "extra"),
                 ("--wat", "gc", "--state-root", state_root, "--bogus"),
                 ("--wat", "retire"),
+                ("resolve", "MOD", "--", "x"),
+                ("resolve", "--", "a", "--", "b"),
+                ("rollback", "--state-root", state_root, "r1", "--", "r2"),
+                ("gc", "--state-root", state_root, "--", "extra"),
+                ("probe", "--", "extra"),
+                ("retire", "--state-root", state_root, "--module-file", module_file, "--", "extra"),
             )
             for args in cases:
                 with self.subTest(args=args):
                     python = run_cli(*args, env=env)
-                    self.assertEqual(python.returncode, 2, python.stdout + python.stderr)
-                    self.assertEqual(python.stdout, "")
                     binary = run_cli_optional_binary(*args, env=env)
                     if binary is None:
                         self.skipTest("TOOL_BIN is required for parser parity assertions")

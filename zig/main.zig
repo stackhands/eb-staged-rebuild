@@ -145,6 +145,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--")) {
+            leftovers.append(a, "--") catch oom();
             for (args[i + 1 ..]) |p| pos.append(a, p) catch oom();
             for (args[i + 1 ..]) |p| leftovers.append(a, p) catch oom();
             break;
@@ -220,17 +221,24 @@ fn unrecognizedMerged(
     extra: []const []const u8,
     leftovers: []const []const u8,
     consumed_positionals: usize,
+    keep_separator: bool,
 ) void {
     var all: std.ArrayList([]const u8) = .empty;
     all.appendSlice(a, top_extra) catch oom();
     all.appendSlice(a, extra) catch oom();
     var consumed = consumed_positionals;
+    // argparse drops only the first "--" of a command with positionals.
+    var dropped = keep_separator;
     for (leftovers) |token| {
-        if (consumed > 0 and !std.mem.eql(u8, token, "--")) {
+        const separator = std.mem.eql(u8, token, "--");
+        if (consumed > 0 and !separator) {
             consumed -= 1;
             continue;
         }
-        if (consumed > 0 and std.mem.eql(u8, token, "--")) continue;
+        if (separator and !dropped) {
+            dropped = true;
+            continue;
+        }
         all.append(a, token) catch oom();
     }
     unrecognized(a, all.items);
@@ -284,7 +292,7 @@ fn cmdResolve(a: Allocator, args: []const []const u8, top_extra: []const []const
     var leftovers: std.ArrayList([]const u8) = .empty;
     const pos = parseOpts(a, args, &opts, resolve_help, resolve_usage, prog ++ " resolve", &extra, &leftovers);
     if (pos.len == 0) usageError(resolve_usage, prog ++ " resolve", "the following arguments are required: module", .{});
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const path = pos[0];
     const kind = lstatKind(path);
     var described: std.ArrayList(Py.Entry) = .empty;
@@ -486,7 +494,7 @@ fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " status", &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default orelse
         usageError(sr.usage, prog ++ " status", "the following arguments are required: --state-root", .{});
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, if (pos.len > 0) 1 else 0);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, if (pos.len > 0) 1 else 0, false);
     var journals = listJournals(a, state_root);
     if (pos.len > 0) {
         const want = pos[0];
@@ -728,7 +736,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (opts[1].value == null) need.append(a, "--module-file") catch oom();
     missing(a, sr.usage, who, need.items);
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
@@ -749,7 +757,7 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env, top_extra
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     return admin.rollback(&ctx, state_root.?, pos[0], timeout);
@@ -774,7 +782,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []co
     _ = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
     if (state_root == null) missing(a, sr.usage, who, &.{"--state-root"});
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
     const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
@@ -802,7 +810,7 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 /// easyconfig arguments (argparse REMAINDER).
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     const who = prog ++ " run";
-    unrecognizedMerged(a, top_extra, &.{}, &.{}, 0);
+    unrecognizedMerged(a, top_extra, &.{}, &.{}, 0, false);
     const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes", "require-exchange" };
     const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true, false };
     var vals: [names.len]?[]const u8 = @splat(null);
@@ -977,7 +985,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
@@ -1001,7 +1009,7 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: [
     var extra: std.ArrayList([]const u8) = .empty;
     var leftovers: std.ArrayList([]const u8) = .empty;
     _ = parseOpts(a, args, &opts, probe_help, probe_usage, prog ++ " probe", &extra, &leftovers);
-    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const eb_default = env.get("EB_STAGED_REBUILD_EB") orelse "eb";
     const eb = opts[2].value orelse eb_default;
     const directory = blk: {
