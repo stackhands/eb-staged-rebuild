@@ -167,7 +167,13 @@ def _run(argv, env=None):
     merged = dict(os.environ)
     if env:
         merged.update(env)
-    return subprocess.run(argv, capture_output=True, text=True, check=False, env=merged)
+    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged)
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        completed.stdout.decode("utf-8", "surrogateescape"),
+        completed.stderr.decode("utf-8", "surrogateescape"),
+    )
 
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
