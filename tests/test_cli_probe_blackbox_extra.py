@@ -4,23 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
-
-def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged = dict(os.environ)
-    if env:
-        merged.update(env)
-    return subprocess.run(
-        [sys.executable, "-m", "eb_staged_rebuild.cli", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=merged,
-    )
+from tests.support import run_cli, run_cli_optional_binary
 
 
 class ProbeBlackBoxExtraTests(unittest.TestCase):
@@ -39,6 +26,21 @@ class ProbeBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
             self.assertEqual(proc.stdout, "")
             self.assertIn(f"probe path does not exist: {missing}", proc.stderr)
+
+    def test_probe_path_that_is_a_file_refuses_with_exit_two(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "path-file")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("marker\n")
+            proc = run_cli("probe", "--path", path, "--json")
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertEqual(proc.stdout, "")
+            self.assertIn("[Errno 17] File exists", proc.stderr)
+            binary = run_cli_optional_binary("probe", "--path", path, "--json")
+            if binary is not None:
+                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+                self.assertEqual(proc.stdout, binary.stdout)
+                self.assertEqual(proc.stderr, binary.stderr)
 
 
 if __name__ == "__main__":
