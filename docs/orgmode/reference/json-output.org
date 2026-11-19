@@ -4,7 +4,9 @@
 
 * Machine-readable command output
 
-=probe --json=, =gc --json=, =status --json=, and =resolve= print one JSON document on stdout.
+=probe --json=, =gc --json= and =status --json= print one JSON document on
+stdout on success. =resolve= prints one JSON document when it can read the
+path.
 
 ** JSON Schema files
 
@@ -22,7 +24,8 @@ newline.
 
 ** =resolve=
 
-=resolve= always prints JSON with sorted keys, indented by two spaces.
+=resolve= prints JSON with sorted keys, indented by two spaces, when the path
+was read.
 It has no =--json= flag: the document is the only output.
 A missing or incomplete installation still prints the document and exits 1.
 
