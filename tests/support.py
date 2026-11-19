@@ -1,7 +1,9 @@
-"""Shared fixtures for eb-staged-rebuild tests."""
+"""Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
 import os
 import stat
+import subprocess
+import sys
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -159,3 +161,25 @@ def restore_os(originals):
 
 def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+def _run(argv, env=None):
+    merged = dict(os.environ)
+    if env:
+        merged.update(env)
+    return subprocess.run(argv, capture_output=True, text=True, check=False, env=merged)
+
+
+def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the Python CLI with ARGS."""
+    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env)
+
+
+def run_cli_optional_binary(
+    *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str] | None:
+    """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
+    tool = os.environ.get("TOOL_BIN")
+    if not tool:
+        return None
+    return _run([tool, *args], env)
