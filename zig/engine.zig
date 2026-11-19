@@ -9,6 +9,7 @@ const main_mod = @import("main.zig");
 const admin = @import("admin.zig");
 const probe = @import("probe.zig");
 const pyfmt = @import("pyfmt.zig");
+const publish_mod = @import("publish.zig");
 const run_mod = @import("run.zig");
 
 const sys = common.sys;
@@ -330,6 +331,13 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
 }
 
 fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
+    if (spec.ledger_config) |path| {
+        var why: []const u8 = "";
+        _ = publish_mod.loadConfig(a, path, &why) catch |err| return switch (err) {
+            error.OutOfMemory => refuse("out of memory", .{}),
+            else => refuse("{s}", .{why}),
+        };
+    }
     const bwrap = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
     const easybuild = pyfmt.get(probes, "easybuild") orelse Py{ .dict = &.{} };
     const exchange = pyfmt.get(probes, "rename_exchange") orelse Py{ .dict = &.{} };
