@@ -312,6 +312,17 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     spec.modules = admin.abspath(a, spec.modules);
     spec.state_root = admin.abspath(a, spec.state_root);
     if (spec.build_dir) |bd| spec.build_dir = admin.abspath(a, bd);
+    var ledger_policy: Py = .null;
+    if (spec.ledger_config) |path| {
+        var why: []const u8 = "";
+        ledger_policy = publish_mod.loadConfig(a, path, &why) catch |err| return switch (err) {
+            error.OutOfMemory => refuse("out of memory", .{}),
+            else => refuse("{s}", .{why}),
+        };
+        if (pyfmt.get(ledger_policy, "path")) |normalized| {
+            if (normalized == .str and normalized.str.len > 0) spec.ledger_config = normalized.str;
+        }
+    }
     const probes = probe.probeAll(a, env, spec.software, spec.eb_executable) catch |err| refuse("{s}", .{main_mod.osError(a, err, spec.software)});
     if (std.mem.eql(u8, spec.backend, "auto")) {
         spec.backend = if (usable(probes, "bwrap")) "bwrap" else if (usable(probes, "userns_sandbox")) "userns" else "installpath";
@@ -323,7 +334,7 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
         refuse("{s}", .{requiredExchangeProblem(a, probes)});
     var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
     var r: run_mod.R = .{ .a = a, .env = env, .ctx = &ctx, .spec = spec };
-    const res = run_mod.run(&r, probes) catch |err| switch (err) {
+    const res = run_mod.run(&r, probes, ledger_policy) catch |err| switch (err) {
         error.OutOfMemory => refuse("out of memory", .{}),
         else => refuse("{s}", .{r.why}),
     };
@@ -331,13 +342,6 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
 }
 
 fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
-    if (spec.ledger_config) |path| {
-        var why: []const u8 = "";
-        _ = publish_mod.loadConfig(a, path, &why) catch |err| return switch (err) {
-            error.OutOfMemory => refuse("out of memory", .{}),
-            else => refuse("{s}", .{why}),
-        };
-    }
     const bwrap = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
     const easybuild = pyfmt.get(probes, "easybuild") orelse Py{ .dict = &.{} };
     const exchange = pyfmt.get(probes, "rename_exchange") orelse Py{ .dict = &.{} };

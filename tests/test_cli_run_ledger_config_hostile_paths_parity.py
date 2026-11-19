@@ -79,6 +79,39 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
                         self.assertEqual(zig.stdout, "")
                         self.assertEqual(zig.stderr, py.stderr)
 
+    def test_run_dry_missing_ledger_config_refuses_before_installpath_log(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            software = os.path.join(root, "software")
+            modules = os.path.join(root, "modules")
+            os.makedirs(software, exist_ok=True)
+            os.makedirs(modules, exist_ok=True)
+            missing = os.path.join(root, "missing-ledger.json")
+            args = (
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--dry-run",
+                "--ledger-config",
+                missing,
+                "--",
+                "demo.eb",
+            )
+            env = {"PATH": ""}
+            py = run_cli(*args, env=env)
+            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
+            self.assertEqual(py.stdout, "")
+            self.assertEqual(
+                py.stderr,
+                f"eb-staged-rebuild: cannot read ledger config {missing}: [Errno 2] No such file or directory: '{missing}'\n",
+            )
+            zig = run_cli_optional_binary(*args, env=env)
+            if zig is not None:
+                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                self.assertEqual(zig.stdout, "")
+                self.assertEqual(zig.stderr, py.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

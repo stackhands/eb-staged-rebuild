@@ -1465,7 +1465,7 @@ fn checkFreeSpace(r: *R) E!void {
 }
 
 /// run without --dry-run.
-pub fn run(r: *R, probes: Py) E!Result {
+pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     const a = r.a;
     if (std.mem.eql(u8, r.spec.backend, "bwrap") and !usable(probes, "bwrap")) {
         const b = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
@@ -1477,15 +1477,7 @@ pub fn run(r: *R, probes: Py) E!Result {
         const reason = if (pyfmt.truthy(pyfmt.get(u, "reason"))) s(pyfmt.get(u, "reason")) else "the user-namespace sandbox is not usable";
         return r.refuse("{s}; refusing to run the userns backend", .{reason});
     }
-    var policy: Py = .null;
-    if (r.spec.ledger_config) |lc| {
-        var why: []const u8 = "";
-        policy = publish_mod.loadConfig(a, lc, &why) catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => r.refuse("{s}", .{why}),
-        };
-        r.spec.ledger_config = s(pyfmt.get(policy, "path"));
-    }
+    const policy: Py = ledger_policy;
     const learned = try learnRels(r);
     const rels = learned.rels;
     for (rels) |rel| try checkInstallDir(r, rel);
