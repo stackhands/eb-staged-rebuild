@@ -664,9 +664,20 @@ fn floatArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, 
 
 fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
-    const value = std.fmt.parseInt(i128, t, 10) catch return error.NotAnInteger;
-    if (value < 0) return error.BelowZero;
-    return @intCast(value);
+    if (t.len > 0 and t[0] == '-') {
+        // "-0" is zero, as Python's int() reads it. Any other negative
+        // integer is below zero, however many digits it has.
+        const digits = t[1..];
+        if (digits.len == 0 or digits[0] == '_' or digits[digits.len - 1] == '_') return error.NotAnInteger;
+        var nonzero = false;
+        for (digits) |ch| {
+            if (ch == '_') continue;
+            if (!std.ascii.isDigit(ch)) return error.NotAnInteger;
+            if (ch != '0') nonzero = true;
+        }
+        return if (nonzero) error.BelowZero else 0;
+    }
+    return std.fmt.parseInt(u128, t, 10) catch error.NotAnInteger;
 }
 
 fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u128 {
@@ -1175,9 +1186,16 @@ test "run help includes --build-dir" {
     try std.testing.expect(std.mem.indexOf(u8, run_help, "--build-dir DIR") != null);
 }
 
-test "parseBytes trims whitespace and accepts integers above u64::MAX" {
+test "parseBytes trims whitespace and accepts every u128 value" {
     try std.testing.expectEqual(@as(u128, 4096), try parseBytes(" \t4096\n"));
     try std.testing.expectEqual(@as(u128, 18446744073709551616), try parseBytes("18446744073709551616"));
+    try std.testing.expectEqual(std.math.maxInt(u128), try parseBytes("340282366920938463463374607431768211455"));
+    try std.testing.expectError(error.NotAnInteger, parseBytes("340282366920938463463374607431768211456"));
+    try std.testing.expectEqual(@as(u128, 0), try parseBytes("-0"));
+    try std.testing.expectError(error.BelowZero, parseBytes("-1"));
+    try std.testing.expectError(error.BelowZero, parseBytes("-340282366920938463463374607431768211456000"));
+    try std.testing.expectError(error.NotAnInteger, parseBytes("-"));
+    try std.testing.expectError(error.NotAnInteger, parseBytes("-1x"));
     try std.testing.expectError(error.BelowZero, parseBytes(" -1 "));
     try std.testing.expectError(error.NotAnInteger, parseBytes("   "));
 }
