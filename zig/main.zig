@@ -276,11 +276,26 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
     return false;
 }
 
-/// Python's str() of an OSError with a filename: "[Errno N] text: 'path'",
-/// the path as repr() gives it. An error that is not an OSError is named.
-pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
+/// Python's str() of an errno with a filename: "[Errno N] text: 'path'",
+/// the path as repr() gives it.
+pub fn errnoPath(a: Allocator, err: linux.E, path: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, if (common.sys.asError(err)) |e| common.sys.describe(e) else @errorName(err)) catch oom();
+    out.appendSlice(a, common.sys.describeErrno(err)) catch oom();
+    out.appendSlice(a, ": ") catch oom();
+    pyfmt.reprStr(&out, a, path) catch oom();
+    return out.items;
+}
+
+/// Python's str() of an OSError with a filename. Other errors are named.
+pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
+    if (common.sys.asError(err)) |e| {
+        const described = common.sys.describe(e);
+        const close = std.mem.indexOfScalar(u8, described, ']') orelse unreachable;
+        const number = std.fmt.parseInt(u16, described["[Errno ".len..close], 10) catch unreachable;
+        return errnoPath(a, @fromBackingInt(@intCast(number)), path);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    out.appendSlice(a, @errorName(err)) catch oom();
     out.appendSlice(a, ": ") catch oom();
     pyfmt.reprStr(&out, a, path) catch oom();
     return out.items;

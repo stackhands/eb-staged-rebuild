@@ -6,6 +6,7 @@ owner-writable. chmod replaces an NFSv4 ACL with a mode ACL, so the file
 itself must not be chmod'd. These tests exercise that publication.
 """
 
+import errno
 import os
 import stat
 import struct
@@ -194,6 +195,39 @@ class PrefixPublishTests(unittest.TestCase):
         rewrite_tree(self.root, OLD, NEW)
         self.assertEqual(Path(innocent).read_bytes(), b"untouched\n")
         self.assertEqual(os.readlink(planted), NEW.decode() + "/bin/tool")
+
+    def test_a_full_filesystem_names_the_temporary_file(self):
+        path = self._file("bin/tool", b"prefix " + OLD + b" suffix")
+        before = Path(path).read_bytes()
+
+        def refuse(_fd, _data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        with patch("eb_staged_rebuild.prefix.os.write", side_effect=refuse):
+            with self.assertRaises(OSError) as caught:
+                rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(caught.exception.errno, errno.ENOSPC)
+        self.assertTrue(str(caught.exception.filename).endswith(".ebsr-partial"))
+        self.assertIn(".ebsr-partial", str(caught.exception))
+        self.assertEqual(Path(path).read_bytes(), before)
+        self.assertFalse(any(name.endswith(".ebsr-partial") for name in os.listdir(os.path.dirname(path))))
+
+    def test_a_read_only_directory_names_the_directory(self):
+        path = self._file("bin/tool", b"prefix " + OLD + b" suffix")
+        before = Path(path).read_bytes()
+        parent = os.path.dirname(path)
+        os.chmod(parent, 0o555)
+
+        def refuse(_fd, _mode):
+            raise OSError(errno.EROFS, "Read-only file system")
+
+        with patch("eb_staged_rebuild.prefix.os.fchmod", side_effect=refuse):
+            with self.assertRaises(OSError) as caught:
+                rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(caught.exception.errno, errno.EROFS)
+        self.assertEqual(caught.exception.filename, parent)
+        self.assertIn(parent, str(caught.exception))
+        self.assertEqual(Path(path).read_bytes(), before)
 
 
 if __name__ == "__main__":

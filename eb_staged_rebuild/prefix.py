@@ -139,11 +139,17 @@ def _with_writable_dir(directory, write):
         if mode & stat.S_IWUSR:
             return write()
         acls = _directory_acls(fd)
-        os.fchmod(fd, mode | stat.S_IWUSR | stat.S_IXUSR)
+        try:
+            os.fchmod(fd, mode | stat.S_IWUSR | stat.S_IXUSR)
+        except OSError as error:
+            _raise_os(error, directory)
         try:
             return write()
         finally:
-            os.fchmod(fd, mode)
+            try:
+                os.fchmod(fd, mode)
+            except OSError as error:
+                _raise_os(error, directory)
             _restore_directory_acls(fd, acls)
     finally:
         os.close(fd)
@@ -296,6 +302,17 @@ def _discard(path):
         pass
 
 
+def _raise_os(error, path):
+    """Re-raise ``error`` with ``path`` when the call recorded no filename.
+
+    ``os.write``, ``os.fsync`` and ``os.fchmod`` leave ``filename`` empty, so
+    a full or read-only filesystem otherwise prints an errno and no path.
+    """
+    if error.filename is not None:
+        raise error
+    raise OSError(error.errno, error.strerror, path) from error
+
+
 def _commit(names, ready):
     """Point every name at ``ready``'s inode, then drop ``ready``'s directory entry."""
     if len(names) == 1:
@@ -358,6 +375,10 @@ def _publish(names, image, source):
             _set_user_xattrs(fd, attrs)
             _restore_metadata(fd, metadata, mode)
             os.fsync(fd)
+        except OSError as error:
+            os.close(fd)
+            _discard(partial)
+            _raise_os(error, partial)
         except BaseException:
             os.close(fd)
             _discard(partial)
