@@ -10,6 +10,8 @@ import tempfile
 import time
 import unittest
 
+from tests.support import run_cli, run_cli_optional_binary
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -214,6 +216,28 @@ class MetricsCliTests(unittest.TestCase):
                 )
                 self.assertEqual(dry.returncode, 2)
                 self.assertFalse(os.path.exists(dry_path))
+
+    def test_directory_and_fifo_destinations_are_refused(self):
+        for shape in ("directory", "fifo"):
+            with self.subTest(shape=shape), tempfile.TemporaryDirectory() as root:
+                state = _fixture(root)
+                metrics = os.path.join(root, "metrics.target")
+                if shape == "directory":
+                    os.makedirs(metrics)
+                else:
+                    os.mkfifo(metrics)
+
+                py = run_cli("gc", "--state-root", state, "--metrics-file", metrics)
+                self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
+                self.assertEqual(py.stdout, "")
+                self.assertIn("metadata source is not a regular file", py.stderr)
+                self.assertIn(metrics, py.stderr)
+
+                zig = run_cli_optional_binary("gc", "--state-root", state, "--metrics-file", metrics)
+                if zig is not None:
+                    self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                    self.assertEqual(zig.stdout, "")
+                    self.assertEqual(zig.stderr, py.stderr)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.paths import abspath
 
 LUA_ROOT = re.compile(r'(?m)^local root\s*=\s*"((?:\\.|[^"\\])*)"\s*$')
-TCL_ROOT = re.compile(r'(?m)^set root\s+(?:"([^"]*)"|(\S+))\s*$')
+TCL_ROOT = re.compile(r'(?m)^set root\s+(?:"([^"]*)"|\{([^}]*)\}|(\S+))\s*$')
 LOAD_STMT = re.compile(r'(?m)^\s*(?:load|depends_on)\("([^"]+)"\)')
 TCL_LOAD = re.compile(r'(?m)^\s*module\s+load\s+\{?([^\s}]+)\}?\s*$')
 
@@ -21,14 +21,24 @@ def parse_root(text):
     """Return ``("lua"|"tcl", path)`` or ``(None, None)``."""
     lua = LUA_ROOT.search(text)
     tcl = TCL_ROOT.search(text)
+
+    def _tcl_value(match):
+        if match is None:
+            return None
+        if match.group(1) is not None:
+            return match.group(1)
+        if match.group(2) is not None:
+            return match.group(2)
+        return match.group(3)
+
     if lua and tcl:
         if lua.start() < tcl.start():
             return "lua", lua.group(1)
-        return "tcl", tcl.group(1) or tcl.group(2)
+        return "tcl", _tcl_value(tcl)
     if lua:
         return "lua", lua.group(1)
     if tcl:
-        return "tcl", tcl.group(1) or tcl.group(2)
+        return "tcl", _tcl_value(tcl)
     return None, None
 
 

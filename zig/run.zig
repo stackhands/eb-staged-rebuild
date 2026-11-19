@@ -114,6 +114,18 @@ pub const R = struct {
     }
 };
 
+fn checkStageFilesystem(r: *R, rels: []const []const u8) E!void {
+    for (rels) |rel| {
+        const target = try std.fs.path.join(r.a, &.{ r.spec.software, rel });
+        const target_parent = std.fs.path.dirname(target) orelse "/";
+        if (!admin.sameFilesystem(r.ctx, r.spec.state_root, target_parent))
+            return r.refuse(
+                "the state root and live software tree are on different filesystems; place --state-root beside the software tree",
+                .{},
+            );
+    }
+}
+
 fn dictSet(a: Allocator, d: Py, key: []const u8, value: Py) Py {
     var out: std.ArrayList(Py.Entry) = .empty;
     var found = false;
@@ -657,13 +669,41 @@ fn build(r: *R) E!u8 {
 
 const selfExe = probe.selfExe;
 
+fn countKey(entries: []const Py.Entry, key: []const u8) usize {
+    var count: usize = 0;
+    for (entries) |entry| if (std.mem.eql(u8, entry.key, key)) {
+        count += 1;
+    };
+    return count;
+}
+
 fn enforceManifest(r: *R) E!void {
     if (r.spec.skip_live_check) return;
     const a = r.a;
     var changed: std.ArrayList([]const u8) = .empty;
-    const manifests = r.get("manifests") orelse return;
-    if (manifests != .dict) return;
+    const rels = r.get("module_rels") orelse
+        return r.intervene("journal manifests do not match its module relations", .{});
+    const manifests = r.get("manifests") orelse
+        return r.intervene("journal manifests do not match its module relations", .{});
+    if (rels != .list or manifests != .dict or rels.list.len != manifests.dict.len)
+        return r.intervene("journal manifests do not match its module relations", .{});
+    for (rels.list) |rel| {
+        if (rel != .str or countKey(manifests.dict, rel.str) != 1)
+            return r.intervene("journal manifests do not match its module relations", .{});
+        const path = try std.fs.path.join(a, &.{ r.spec.software, rel.str });
+        if (std.mem.eql(u8, admin.abspath(a, path), admin.abspath(a, r.spec.software)) or
+            !admin.isWithin(a, path, r.spec.software))
+            return r.intervene("journal module relation escapes the software root", .{});
+    }
     for (manifests.dict) |e| {
+        var rel_count: usize = 0;
+        for (rels.list) |rel| if (rel == .str and std.mem.eql(u8, rel.str, e.key)) {
+            rel_count += 1;
+        };
+        if (rel_count != 1)
+            return r.intervene("journal manifests do not match its module relations", .{});
+        if (!livecheck.validSnapshot(e.value))
+            return r.intervene("journal manifest for {s} is malformed", .{e.key});
         const path = try std.fs.path.join(a, &.{ r.spec.software, e.key });
         if (std.mem.eql(u8, r.spec.backend, "bwrap")) {
             const ex = pyfmt.get(e.value, "exists");
@@ -1118,14 +1158,26 @@ fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
     return out.items;
 }
 
-fn validatePublicationSet(r: *R) E!void {
+fn requirePublicationFields(r: *R) E!void {
     for (r.list("modules_plan")) |m| {
         const rel = s(pyfmt.get(m, "rel"));
         const prepared = s(pyfmt.get(m, "prepared"));
+        const new_hash = s(pyfmt.get(m, "new_hash"));
+        if (rel.len == 0 or prepared.len == 0 or new_hash.len == 0)
+            return r.intervene("journal module plan does not record rel, prepared and new_hash", .{});
+    }
+}
+
+fn validatePublicationSet(r: *R) E!void {
+    try requirePublicationFields(r);
+    for (r.list("modules_plan")) |m| {
+        const rel = s(pyfmt.get(m, "rel"));
+        const prepared = s(pyfmt.get(m, "prepared"));
+        const new_hash = s(pyfmt.get(m, "new_hash"));
         const f = fsx.openRegular(fsx.cwd, prepared, true) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
         defer sys.close(f.fd);
         const bytes = fsx.readAll(r.a, f.fd, 1 << 30) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
-        if (!std.mem.eql(u8, sha(r.a, bytes), s(pyfmt.get(m, "new_hash")))) return r.intervene("prepared module bytes for {s} changed", .{rel});
+        if (!std.mem.eql(u8, sha(r.a, bytes), new_hash)) return r.intervene("prepared module bytes for {s} changed", .{rel});
         var why: atomic.Why = .{};
         _ = atomic.readMetadata(r.a, prepared, &why) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, if (err == error.Refused) why.msg else main_mod.osError(r.a, err, prepared) });
     }
@@ -1139,14 +1191,14 @@ fn publish(r: *R) E!void {
         if (live.len > 0 and retired.len > 0) try recoverPair(r, live, retired);
     }
     try validatePublicationSet(r);
-    r.set("state", Py.s("publishing"));
-    try r.save("journal.publishing");
     const run_id = r.str("run_id");
     for (r.list("modules_plan")) |m| {
         try prepareBackup(r, m);
         try prepareSwapSource(r, m, run_id);
     }
     try r.save("journal.prepared");
+    r.set("state", Py.s("publishing"));
+    try r.save("journal.publishing");
     publishSteps(r) catch |err| {
         const first = r.why;
         const kind_err = err;
@@ -1318,6 +1370,7 @@ fn recordFinished(r: *R, config: ?Py, message: []const u8) E!Result {
 /// _publish_recorded: swap only after a required ledger acknowledged every
 /// started record.
 fn publishRecorded(r: *R) E!Result {
+    try requirePublicationFields(r);
     const rc = try preparePublication(r);
     if (rc != 0) return .{ .code = rc, .message = r.str("message") };
     const config = try publisher(r);
@@ -1394,25 +1447,34 @@ fn availableBytes(info: StatFs) u128 {
     return blocks * unit;
 }
 
-fn checkFreeSpace(r: *R) E!void {
-    const minimum = r.spec.min_free_bytes orelse return;
+/// The refusal `--min-free-bytes` would print, or null when `path` has room.
+/// `path` must already exist. The dry run passes the nearest existing
+/// ancestor so it can answer without creating the state root.
+pub fn freeSpaceRefusal(a: Allocator, path: []const u8, minimum: u128) ?[]const u8 {
     var path_buf: [sys.path_max:0]u8 = undefined;
-    const path = sys.z(&path_buf, r.spec.state_root) catch
-        return r.refuse("path is too long: {s}", .{r.spec.state_root});
+    const zpath = sys.z(&path_buf, path) catch
+        return a.print("path is too long: {s}", .{path}) catch "path is too long";
     var info: StatFs = undefined;
-    const result = linux.syscall2(.statfs, @intFromPtr(path.ptr), @intFromPtr(&info));
+    const result = linux.syscall2(.statfs, @intFromPtr(zpath.ptr), @intFromPtr(&info));
     if (linux.errno(result) != .SUCCESS)
-        return r.refuse("cannot inspect free space on {s}", .{r.spec.state_root});
+        return a.print("cannot inspect free space on {s}", .{path}) catch "cannot inspect free space";
     const available = availableBytes(info);
     if (available < minimum)
-        return r.refuse(
+        return a.print(
             "generation filesystem has {d} bytes available; --min-free-bytes requires {d}",
             .{ available, minimum },
-        );
+        ) catch "generation filesystem is short";
+    return null;
+}
+
+fn checkFreeSpace(r: *R) E!void {
+    const minimum = r.spec.min_free_bytes orelse return;
+    if (freeSpaceRefusal(r.a, r.spec.state_root, minimum)) |msg|
+        return r.refuse("{s}", .{msg});
 }
 
 /// run without --dry-run.
-pub fn run(r: *R, probes: Py) E!Result {
+pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     const a = r.a;
     if (std.mem.eql(u8, r.spec.backend, "bwrap") and !usable(probes, "bwrap")) {
         const b = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
@@ -1424,15 +1486,7 @@ pub fn run(r: *R, probes: Py) E!Result {
         const reason = if (pyfmt.truthy(pyfmt.get(u, "reason"))) s(pyfmt.get(u, "reason")) else "the user-namespace sandbox is not usable";
         return r.refuse("{s}; refusing to run the userns backend", .{reason});
     }
-    var policy: Py = .null;
-    if (r.spec.ledger_config) |lc| {
-        var why: []const u8 = "";
-        policy = publish_mod.loadConfig(a, lc, &why) catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => r.refuse("{s}", .{why}),
-        };
-        r.spec.ledger_config = s(pyfmt.get(policy, "path"));
-    }
+    const policy: Py = ledger_policy;
     const learned = try learnRels(r);
     const rels = learned.rels;
     for (rels) |rel| try checkInstallDir(r, rel);
@@ -1448,6 +1502,7 @@ pub fn run(r: *R, probes: Py) E!Result {
     }
     const l = try lockRoot(r);
     defer l.release();
+    try checkStageFilesystem(r, rels);
     try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
     if (fsx.statAt(fsx.cwd, r.path, true)) |_| return r.refuse("run {s} already exists; resume it or choose another --run-id", .{run_id}) else |_| {}
@@ -1539,12 +1594,15 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
 /// resume: finish or undo the run the journal names, as its state says,
 /// under the state root's lock.
 pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) E!Result {
+    if (!admin.plainRunId(run_id)) main_mod.refuse("run id is not a plain name: '{s}'", .{run_id});
     const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
     const st = fsx.statAt(fsx.cwd, path, false) catch {
         main_mod.refuse("no journal at {s}", .{path});
     };
     if (!st.isReg()) main_mod.refuse("no journal at {s}", .{path});
     var j = main_mod.loadJournal(a, path);
+    if (!admin.matchingRunId(j, run_id))
+        main_mod.refuse("journal run id does not match its directory", .{});
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
     var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, j, lock_timeout), .path = path };
     defer main_mod.last_why = r.why;
@@ -1552,6 +1610,8 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
     const l = try lockRoot(&r);
     defer l.release();
     j = main_mod.loadJournal(a, path);
+    if (!admin.matchingRunId(j, run_id))
+        return r.intervene("journal run id does not match its directory", .{});
     r.journal = j;
     const state_name = r.str("state");
     var published = false;
@@ -1559,6 +1619,11 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
         published = true;
     };
     if (std.mem.eql(u8, state_name, "complete")) {
+        for (r.list("modules_plan")) |m| {
+            if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "restoring")) {
+                return r.refuse("run {s} has an interrupted rollback; run rollback again", .{run_id});
+            }
+        }
         const m = try a.print("run {s} is already complete", .{run_id});
         return recordFinished(&r, try publisher(&r), m);
     }

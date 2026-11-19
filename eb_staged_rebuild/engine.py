@@ -43,10 +43,12 @@ from eb_staged_rebuild.journal import (
     generation_root as generation_root_for,
     journal_path,
     load_journal,
+    require_matching_run_id,
+    require_plain_run_id,
     run_dir as run_dir_for,
     save_journal,
 )
-from eb_staged_rebuild.livecheck import empty_real_dir, same_snapshot, snapshot
+from eb_staged_rebuild.livecheck import empty_real_dir, same_snapshot, snapshot, valid_snapshot
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.modulefile import install_complete, generation_complete, parse_root
 from eb_staged_rebuild.paths import (
@@ -57,6 +59,7 @@ from eb_staged_rebuild.paths import (
     lstat_kind,
 )
 from eb_staged_rebuild.probe import probe_all, stage_paths_from_bwrap_info
+from eb_staged_rebuild.retire import _check_same_filesystem
 from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
 
 import re
@@ -210,11 +213,40 @@ def _check_free_space(path, minimum):
     if minimum is None:
         return
     info = os.statvfs(path)
-    available = info.f_bavail * info.f_frsize
+    blocks = info.f_bavail if info.f_bavail > 0 else 0
+    unit = info.f_frsize if info.f_frsize > 0 else (info.f_bsize if info.f_bsize > 0 else 0)
+    available = blocks * unit
     if available < minimum:
         raise Refused(
             f"generation filesystem has {available} bytes available; "
             f"--min-free-bytes requires {minimum}"
+        )
+
+
+def _statvfs_target(path):
+    """The path ``statvfs`` can read for a state root that may not exist yet.
+
+    A dry run must not create the state root. The reserve is the free space
+    of the filesystem the directory would be created on, which is the nearest
+    existing ancestor.
+    """
+    current = abspath(path)
+    while not os.path.lexists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return current
+
+
+def _check_stage_filesystem(state_root, software, rels):
+    for rel in rels:
+        target_parent = os.path.dirname(os.path.join(software, rel))
+        _check_same_filesystem(
+            state_root,
+            target_parent,
+            "the state root and live software tree are on different filesystems; "
+            "place --state-root beside the software tree",
         )
 
 
@@ -434,8 +466,28 @@ def _snapshots(spec, rels):
 def _enforce_manifest(spec, journal):
     if spec.skip_live_check:
         return
+    rels = journal.get("module_rels")
+    manifests = journal.get("manifests")
+    if (
+        not isinstance(rels, list)
+        or any(not isinstance(rel, str) for rel in rels)
+        or len(rels) != len(set(rels))
+        or not isinstance(manifests, dict)
+        or set(manifests) != set(rels)
+    ):
+        raise NeedsIntervention("journal manifests do not match its module relations")
+    software = abspath(spec.software)
+    if any(
+        (path := abspath(os.path.join(software, rel))) == software
+        or not is_within(path, software)
+        for rel in rels
+    ):
+        raise NeedsIntervention("journal module relation escapes the software root")
+    for rel, before in manifests.items():
+        if not valid_snapshot(before):
+            raise NeedsIntervention(f"journal manifest for {rel} is malformed")
     changed = []
-    for rel, before in (journal.get("manifests") or {}).items():
+    for rel, before in manifests.items():
         path = os.path.join(spec.software, rel)
         if (
             spec.backend == "bwrap"
@@ -881,8 +933,20 @@ def _restore_publish_baseline(journal):
         ) from error
 
 
+def _require_publication_fields(journal):
+    for mod in journal["modules_plan"]:
+        if not all(
+            isinstance(mod.get(field), str) and mod[field]
+            for field in ("rel", "prepared", "new_hash")
+        ):
+            raise NeedsIntervention(
+                "journal module plan does not record rel, prepared and new_hash"
+            )
+
+
 def _validate_publication_set(journal):
     """Refuse before any live name moves when prepared access metadata cannot be read."""
+    _require_publication_fields(journal)
     for mod in journal["modules_plan"]:
         try:
             prepared = read_bytes(mod["prepared"])
@@ -908,8 +972,6 @@ def _recover_swap_names(journal):
 def _publish(spec, journal, faults):
     _recover_swap_names(journal)
     _validate_publication_set(journal)
-    journal["state"] = "publishing"
-    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     clock = _clock(spec)
     for mod in journal["modules_plan"]:
         _prepare_module_backup(mod, faults)
@@ -920,6 +982,8 @@ def _publish(spec, journal, faults):
         faults,
         "journal.prepared",
     )
+    journal["state"] = "publishing"
+    save_journal(journal_path(spec.state_root, journal["run_id"]), journal, faults, "journal.publishing")
     try:
         _normalize_publish_baseline(journal)
         for mod in journal["modules_plan"]:
@@ -1158,6 +1222,7 @@ def _record_finished(spec, journal, faults, publisher, message):
 
 def _publish_recorded(spec, journal, faults):
     """Swap only after a required ledger has acknowledged every started record."""
+    _require_publication_fields(journal)
     rc = _prepare_publication(spec, journal, faults)
     if rc != 0:
         return Result(rc, journal["run_id"], "failed", journal["message"], _command_text(journal))
@@ -1271,6 +1336,8 @@ def _required_exchange_problem(probes):
 
 def run(spec):
     """Build into a new generation, then swap it with the live directory."""
+    if spec.run_id is not None:
+        require_plain_run_id(spec.run_id)
     _check_roots(spec)
     spec.software = abspath(spec.software)
     spec.modules = abspath(spec.modules)
@@ -1309,6 +1376,7 @@ def run(spec):
     lock = FileLock(spec.state_root)
     lock.acquire(spec.lock_timeout)
     try:
+        _check_stage_filesystem(spec.state_root, spec.software, rels)
         _check_free_space(spec.state_root, spec.min_free_bytes)
         if os.path.exists(journal_path(spec.state_root, run_id)):
             raise Refused(f"run {run_id} already exists; resume it or choose another --run-id")
@@ -1348,8 +1416,10 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
 
 def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeout=None):
     """Continue a run. A finished run is a no-op. A rolled-back run is refused."""
+    require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     journal = load_journal(path)
+    require_matching_run_id(journal, run_id)
     if journal.get("kind") == "retire":
         raise Refused(f"run {run_id} is a retire record; rollback restores the module file")
     faults = faults or FaultInjector()
@@ -1359,9 +1429,17 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
     lock.acquire(lock_timeout)
     try:
         journal = load_journal(path)
+        require_matching_run_id(journal, run_id)
         state = journal["state"]
         published = [mod for mod in journal.get("modules_plan") or [] if mod.get("status") == "published"]
         if state == "complete":
+            if any(
+                mod.get("status") == "restoring"
+                for mod in journal.get("modules_plan") or []
+            ):
+                raise Refused(
+                    f"run {run_id} has an interrupted rollback; run rollback again"
+                )
             message = f"run {run_id} is already complete"
             return _record_finished(spec, journal, faults, _publisher(journal), message)
         if state == "rolled_back":
@@ -1454,6 +1532,7 @@ def _record_rollback(journal, faults, publisher, finished, started, now, message
 
 def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     """Exchange every retired tree back into place as one recoverable operation."""
+    require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     faults = faults or FaultInjector()
     now = time.time if clock is None else clock
@@ -1461,6 +1540,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     lock.acquire(lock_timeout)
     try:
         journal = load_journal(path)
+        require_matching_run_id(journal, run_id)
         if journal.get("kind") == "retire":
             from eb_staged_rebuild.retire import rollback_retire
 
@@ -1590,6 +1670,11 @@ def _dry_run(spec, probes, faults):
         path = os.path.join(spec.software, rel)
         if lstat_kind(path) == "symlink":
             problems.append(f"{path} is a symlink")
+    if spec.min_free_bytes is not None:
+        try:
+            _check_free_space(_statvfs_target(spec.state_root), spec.min_free_bytes)
+        except (Refused, OSError) as exc:
+            problems.append(str(exc))
     ctx = _Ctx(spec, os.path.join(spec.state_root, "generations", "<run-id>"), faults)
     if spec.backend == "bwrap":
         cmd, _env = bwrap_command(ctx)
@@ -1620,7 +1705,10 @@ def describe_module(path):
     kind = lstat_kind(path)
     if kind != "file":
         return {"path": os.fspath(path), "kind": kind, "complete": False, "root": None}
-    text = read_bytes(path).decode("utf-8")
+    try:
+        text = read_bytes(path).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused(f"{path} is not UTF-8 text") from exc
     syntax, root = parse_root(text)
     return {
         "path": os.fspath(path),

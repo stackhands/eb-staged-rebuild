@@ -41,6 +41,7 @@ def _run(cmd, timeout, env=None):
             cmd,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout,
             env=env,
             check=False,
@@ -186,7 +187,10 @@ def probe_rename_exchange(directory):
     os.makedirs(directory, exist_ok=True)
     info = filesystem(directory)
     info.update({"ok": False, "errno": None, "error": None, "flag": RENAME_EXCHANGE})
-    parent = tempfile.mkdtemp(prefix=".rename-exchange-", dir=directory)
+    try:
+        parent = tempfile.mkdtemp(prefix=".rename-exchange-", dir=directory)
+    except OSError as exc:
+        raise OSError(exc.errno, exc.strerror, directory) from exc
     left = os.path.join(parent, "left")
     right = os.path.join(parent, "right")
     try:
@@ -210,7 +214,7 @@ def probe_rename_exchange(directory):
             ctypes.c_uint,
         ]
         func.restype = ctypes.c_int
-        rc = func(AT_FDCWD, left.encode(), AT_FDCWD, right.encode(), RENAME_EXCHANGE)
+        rc = func(AT_FDCWD, os.fsencode(left), AT_FDCWD, os.fsencode(right), RENAME_EXCHANGE)
         if rc == 0:
             with open(os.path.join(left, "mark"), encoding="utf-8") as handle:
                 swapped = handle.read() == "R"

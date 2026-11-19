@@ -1,5 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+from eb_staged_rebuild.engine import describe_module
 from eb_staged_rebuild.modulefile import loads, parse_root, replace_path, rewrite_root
 from eb_staged_rebuild.errors import Refused
 
@@ -54,6 +57,13 @@ class ModuleFileTests(unittest.TestCase):
     def test_refuses_a_file_with_no_root(self):
         with self.assertRaises(Refused):
             rewrite_root("help([[no root]])\n", "/gens/demo/1")
+
+    def test_resolve_refuses_non_utf8_module_text(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "bad.lua"
+            path.write_bytes(b'local root = "/bad' + bytes.fromhex("c0aa") + b'"\n')
+            with self.assertRaisesRegex(Refused, "is not UTF-8 text"):
+                describe_module(path)
 
 
 if __name__ == "__main__":

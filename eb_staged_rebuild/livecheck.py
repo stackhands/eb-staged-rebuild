@@ -8,6 +8,42 @@ from eb_staged_rebuild.paths import lstat_kind
 HASH_BLOCK_BYTES = 1024 * 1024
 
 
+def valid_snapshot(value):
+    """Return whether ``value`` has the shape produced by :func:`snapshot`."""
+    if not isinstance(value, dict) or not isinstance(value.get("exists"), bool):
+        return False
+    if not value["exists"]:
+        return set(value) == {"exists"}
+    if not isinstance(value.get("symlink"), bool):
+        return False
+    if value["symlink"]:
+        return set(value) == {"exists", "symlink", "target"} and isinstance(
+            value.get("target"), str
+        )
+    kind = value.get("kind")
+    if not isinstance(kind, str):
+        return False
+    if kind != "dir":
+        return set(value) == {"exists", "symlink", "kind"}
+    if set(value) != {"exists", "symlink", "kind", "inode", "device", "entries"}:
+        return False
+    if type(value.get("inode")) is not int or type(value.get("device")) is not int:
+        return False
+    entries = value.get("entries")
+    if not isinstance(entries, list):
+        return False
+    return all(
+        isinstance(row, list)
+        and len(row) == 5
+        and isinstance(row[0], str)
+        and row[1] in ("file", "symlink")
+        and type(row[2]) is int
+        and type(row[3]) is int
+        and isinstance(row[4], str)
+        for row in entries
+    )
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -35,7 +71,11 @@ def snapshot(path):
         return {"exists": True, "symlink": False, "kind": kind}
     st = os.lstat(path)
     rows = []
-    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+
+    def _walk_error(exc):
+        raise OSError(exc.errno, exc.strerror, path) from exc
+
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=False, onerror=_walk_error):
         kept = []
         for name in dirnames:
             child = os.path.join(dirpath, name)

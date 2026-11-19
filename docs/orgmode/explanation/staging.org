@@ -27,6 +27,7 @@ The live tree is replaced only once the new one is complete:
 
 Before the run builds, it records the live installation: the inode, size and SHA-256 of every file, and the target of every symbolic link.
 After the build, the run goes on only if EasyBuild exited 0, if the new installation directory holds what a finished build leaves, the easyconfig that EasyBuild copies into =easybuild/= at the end, and if the live tree still matches the record.
+Before that comparison, the run requires one well-formed record for every module relation in its journal; a damaged record needs operator intervention and leaves the live tree in place.
 Otherwise the run is =failed=, and the live tree and its module file are as they were; [[file:../howto/recover.org][Finish a run that failed or stopped]] continues from there.
 =--skip-live-check= drops the record and its check.
 

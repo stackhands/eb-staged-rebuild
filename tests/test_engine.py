@@ -10,7 +10,7 @@ from unittest import mock
 
 from eb_staged_rebuild import cli
 from eb_staged_rebuild.engine import Result, Spec, resume, rollback, run
-from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.errors import NeedsIntervention, Refused
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.gc import collect
 from eb_staged_rebuild.journal import journal_path, load_journal
@@ -223,6 +223,19 @@ class FreeSpaceTests(unittest.TestCase):
             builder.assert_not_called()
             self.assertFalse(os.path.exists(os.path.join(state, "runs")))
 
+    def test_minimum_free_space_falls_back_to_f_bsize_when_f_frsize_is_zero(self):
+        from eb_staged_rebuild.engine import _check_free_space
+
+        space = mock.Mock(f_bavail=2, f_frsize=0, f_bsize=4096)
+        with mock.patch("eb_staged_rebuild.engine.os.statvfs", return_value=space):
+            _check_free_space(".", 8192)
+            with self.assertRaisesRegex(
+                Refused,
+                r"generation filesystem has 8192 bytes available; "
+                r"--min-free-bytes requires 8193",
+            ):
+                _check_free_space(".", 8193)
+
 
 class ExchangeRequirementTests(unittest.TestCase):
     def test_default_cli_output_and_status_are_exact_bytes(self):
@@ -266,6 +279,36 @@ class ExchangeRequirementTests(unittest.TestCase):
             journal = load_journal(journal_path(state, "run1"))
             self.assertIs(journal["require_exchange"], True)
             self.assertEqual(journal["modules_plan"][0]["swap_method"], "renameat2-exchange")
+
+
+class ManifestShapeTests(unittest.TestCase):
+    def test_resume_refuses_a_manifest_value_outside_the_recorded_shape(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+
+            def failed_build(context):
+                builder(context)
+                return 7
+
+            self.assertEqual(
+                run(_spec(software, modules, state, failed_build)).returncode,
+                7,
+            )
+            payload = os.path.join(installed["demo/1"]["install"], "PAYLOAD")
+            with open(payload, "w", encoding="utf-8") as handle:
+                handle.write("operator change\n")
+            path = journal_path(state, "run1")
+            journal = load_journal(path)
+            journal["manifests"] = []
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+
+            with self.assertRaisesRegex(
+                NeedsIntervention,
+                "journal manifests do not match its module relations",
+            ):
+                resume(state, "run1", builder=builder)
+            self.assertEqual(_payload(installed["demo/1"]["install"]), "operator change\n")
 
 
 class TransactionTests(unittest.TestCase):
@@ -380,6 +423,27 @@ class TransactionTests(unittest.TestCase):
                         )
                     self.assert_old_live(installed)
 
+    def test_prepare_failure_keeps_the_run_ready_to_resume(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            with self.assertRaises(InjectedCrash):
+                run(
+                    _spec(
+                        software,
+                        modules,
+                        state,
+                        builder,
+                        faults=FaultInjector("stage.move:all/demo/1.lua"),
+                    )
+                )
+            self.assertEqual(
+                load_journal(journal_path(state, "run1"))["state"],
+                "built",
+            )
+            self.assert_old_live(installed)
+            self.assertEqual(resume(state, "run1", builder=builder).returncode, 0)
+            self.assert_new_live(installed)
+
     def test_an_installed_tool_ignores_the_fail_hook(self):
         with tempfile.TemporaryDirectory() as root, mock.patch.dict(
             os.environ, {"EB_STAGED_REBUILD_FAIL_AT": "build.start"}
@@ -420,6 +484,24 @@ class TransactionTests(unittest.TestCase):
             self.assertFalse(os.path.isdir(os.path.join(state, "runs")))
             self.assert_old_live(installed)
             self.assertIn("installpath-software", result.command)
+
+    def test_dry_run_refuses_a_short_generation_filesystem(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            spec = _spec(software, modules, state, builder)
+            spec.dry_run = True
+            spec.min_free_bytes = 2**64 - 1
+            result = run(spec)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("dry-run would refuse:", result.message)
+            self.assertIn("--min-free-bytes requires", result.message)
+            self.assertIn(str(spec.min_free_bytes), result.message)
+            self.assertFalse(os.path.lexists(state))
+            self.assert_old_live(installed)
+            spec.min_free_bytes = 0
+            clear = run(spec)
+            self.assertEqual(clear.returncode, 0)
+            self.assertFalse(os.path.lexists(state))
 
     def test_missing_rebuild_target_is_refused_before_build(self):
         with tempfile.TemporaryDirectory() as root:
@@ -511,8 +593,10 @@ class RollbackTests(unittest.TestCase):
             self.assertEqual(run(_spec(software, modules, state, later, run_id="run2")).returncode, 0)
             with open(row["module"], encoding="utf-8") as handle:
                 module_text = handle.read()
+            inode = os.lstat(row["install"]).st_ino
             with self.assertRaisesRegex(Refused, "holds the tree of run run2; roll back run2 first"):
                 rollback(state, "run1")
+            self.assertEqual(os.lstat(row["install"]).st_ino, inode)
             self.assertEqual(_payload(row["install"]), "v2\n")
             with open(row["module"], encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), module_text)
@@ -774,6 +858,51 @@ class GarbageCollectionTests(unittest.TestCase):
                 (2, "", "eb-staged-rebuild: EB_STAGED_REBUILD_GRACE_HOURS is not a number: 'abc'\n"),
             )
             self.assertFalse(os.path.exists(state))
+
+
+class RunIdBoundaryTests(unittest.TestCase):
+    def test_run_id_cannot_escape_the_state_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+            builder = mock.Mock(return_value=0)
+            escaped = os.path.join(root, "escaped")
+            with self.assertRaisesRegex(
+                Refused,
+                r"run id is not a plain name: '\.\./\.\./escaped'",
+            ):
+                run(_spec(software, modules, state, builder, run_id="../../escaped"))
+            builder.assert_not_called()
+            self.assertFalse(os.path.lexists(escaped))
+
+    def test_resume_and_rollback_reject_path_components(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, "state")
+            for command in (resume, rollback):
+                with self.subTest(command=command.__name__):
+                    with self.assertRaisesRegex(
+                        Refused,
+                        r"run id is not a plain name: '\.\./escaped'",
+                    ):
+                        command(state, "../escaped")
+
+    def test_journal_run_id_must_match_its_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, _installed, _builder = _fixture(root)
+
+            def fail(_context):
+                return 7
+
+            self.assertEqual(run(_spec(software, modules, state, fail)).returncode, 7)
+            path = journal_path(state, "run1")
+            journal = load_journal(path)
+            journal["run_id"] = "../escaped"
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(journal, handle)
+            with self.assertRaisesRegex(
+                NeedsIntervention,
+                "journal run id does not match its directory",
+            ):
+                resume(state, "run1")
 
 
 class StateRootVariableTests(unittest.TestCase):

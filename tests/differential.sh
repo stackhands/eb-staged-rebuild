@@ -43,7 +43,8 @@ printf 'local root = "/tmp/\xc3\xa9t\xc3\xa9"\n' > "${m}/utf8.lua"
 ln -s "${m}/lua.lua" "${m}/link.lua"
 ln -s "${s}/done/1" "${s}/linkroot"
 printf 'local root = "%s/linkroot"\n' "${s}" > "${m}/linkroot.lua"
-for f in lua.lua tcl tclq empty.lua ebdir.lua missing.lua noroot.lua spread.lua escaped.lua utf8.lua link.lua linkroot.lua; do
+printf 'local root = "/bad\300\252"\n' > "${m}/non-utf8.lua"
+for f in lua.lua tcl tclq empty.lua ebdir.lua missing.lua noroot.lua spread.lua escaped.lua utf8.lua non-utf8.lua link.lua linkroot.lua; do
     compare "resolve ${f}" resolve "${m}/${f}"
 done
 compare "resolve a directory" resolve "${m}"
@@ -95,6 +96,12 @@ echo '{"schema": 2, "publication": "pointer"}' > "${st}/runs/r4/journal.json"
 compare "status, other publication" status --state-root "${st}"
 echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
 compare "status, plan without a swap" status --state-root "${st}"
+echo '[]' > "${st}/runs/r4/journal.json"
+compare "status, journal array" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": "entry"}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan string" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": [1]}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan number" status --state-root "${st}"
 rm -rf "${st}/runs/r4"
 
 # Probe.
@@ -119,6 +126,16 @@ compare "a negative number for a command" -5
 compare "a dash for a command" -
 compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
 compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
+compare "run, a run id with path components" run --software software --modules modules --state-root state --run-id ../escaped -- demo-1.eb
+compare "resume, a run id with path components" resume --state-root state ../escaped
+compare "rollback, a run id with path components" rollback --state-root state ../escaped
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
 # Commands that change a fixture: each implementation gets its own copy,
 # and run ids and timestamps are normalized before the comparison.
@@ -255,6 +272,61 @@ compare_admin() {
 }
 fixture "${work}/py"
 fixture "${work}/zig"
+
+compare_cross_filesystem() {
+    local label="run refuses a state root on another filesystem before the build"
+    if [ ! -d /dev/shm ] || [ "$(stat -c %d /dev/shm)" = "$(stat -c %d "${work}")" ]; then
+        echo "same ${label} (second filesystem not available)"
+        return
+    fi
+    local other impl root state out builds runs generations bad=0
+    other=$(mktemp -d /dev/shm/esr-diff.XXXXXX)
+    for impl in py zig; do
+        root="${work}/${impl}"
+        state="${other}/${impl}/state"
+        out="${work}/${impl}.cross-filesystem"
+        mkdir -p "${other}/${impl}"
+        if [ "${impl}" = py ]; then
+            env PYTHONPATH="${repo_root}" FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+                python3 -m eb_staged_rebuild run \
+                --software "${root}/software" --modules "${root}/modules" \
+                --state-root "${state}" --backend installpath --eb "${root}/eb" \
+                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+                > "${out}.out" 2> "${out}.err"
+        else
+            env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+                "${TOOL_BIN}" run \
+                --software "${root}/software" --modules "${root}/modules" \
+                --state-root "${state}" --backend installpath --eb "${root}/eb" \
+                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+                > "${out}.out" 2> "${out}.err"
+        fi
+        echo $? > "${out}.rc"
+        builds=$(awk '/--installpath-software/{n++} END{print n+0}' "${root}/cross-filesystem-argv")
+        runs=$([ -e "${state}/runs" ] && echo yes || echo no)
+        generations=$([ -e "${state}/generations" ] && echo yes || echo no)
+        printf 'builds=%s runs=%s generations=%s\n' "${builds}" "${runs}" "${generations}" > "${out}.state"
+        for f in out err; do norm < "${out}.${f}" > "${out}.${f}.n"; done
+    done
+    for f in rc out.n err.n state; do
+        if ! cmp -s "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}"; then
+            [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
+            bad=1
+            diff "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}" |
+                head -20 | sed "s/^/     ${f} /"
+        fi
+    done
+    if [ "$(cat "${work}/py.cross-filesystem.rc")" != 2 ] ||
+       [ "$(cat "${work}/py.cross-filesystem.state")" != "builds=0 runs=no generations=no" ]; then
+        [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
+        bad=1
+        sed 's/^/     state /' "${work}/py.cross-filesystem.state"
+    fi
+    rm -rf "${other}"
+    if [ "${bad}" -eq 0 ]; then echo "same ${label}"; else diffs=$((diffs + 1)); fi
+}
+
+compare_cross_filesystem
 compare_admin "retire --dry-run" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --dry-run
 compare_admin "retire, --usage-log in use" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "retire, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
@@ -346,6 +418,7 @@ compare_admin "rollback the exchange-required run" rollback --state-root @ROOT@/
 compare_admin "resume a rolled-back run" resume --state-root @ROOT@/state r2
 compare_admin "run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id r4 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r5 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback a run a later run replaced" rollback --state-root @ROOT@/state r4
 compare_admin "status, ledger run" status --state-root @ROOT@/state r5
 compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
 compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
@@ -437,6 +510,8 @@ compare_admin "run, an empty free-space reserve in the environment" env EB_STAGE
 compare_admin "run, an environment reserve above the supported range" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551616 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, --min-free-bytes instead of a bad environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --min-free-bytes 0 --dry-run -- demo-1.eb
 compare_admin "run, no easyconfig before a bad free-space environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run --dry-run, whitespace-padded free-space environment" env "EB_STAGED_REBUILD_MIN_FREE_BYTES=	4096 " @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run, whitespace-padded negative free-space environment" env "EB_STAGED_REBUILD_MIN_FREE_BYTES= -1 " @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
 compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
 compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
 compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb
@@ -573,6 +648,31 @@ compare_admin "run, symlinked state root" run --software @ROOT@/software --modul
 compare_admin "run, missing prepare" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r11 --skip-live-check --prepare @ROOT@/no-such-policy --module demo/1 -- demo-1.eb
 compare_admin "run, prepare fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r12 --skip-live-check --prepare @ROOT@/prepare-fails --module demo/1 -- demo-1.eb
 for impl in py zig; do cp "${work}/${impl}/prepare-ok" "${work}/${impl}/prepare-fails"; done
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["saved_prepared"] = journal["modules_plan"][0].pop("prepared")
+path.write_text(json.dumps(journal))
+PY
+done
+compare_admin "resume reports an incomplete publication plan" resume --state-root @ROOT@/state r12
+for impl in py zig; do
+    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["prepared"] = journal["modules_plan"][0].pop("saved_prepared")
+path.write_text(json.dumps(journal))
+PY
+done
 compare_admin "resume after the prepare is fixed" resume --state-root @ROOT@/state r12
 compare_admin "the prepare ran once" env cat @ROOT@/prepare-count
 compare_admin "rollback a prepared run" rollback --state-root @ROOT@/state r12

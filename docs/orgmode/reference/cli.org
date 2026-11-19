@@ -13,18 +13,18 @@ This page describes the static binary and the Python package, which behave the s
 #+begin_example
 eb-staged-rebuild [-h] [--version] COMMAND [OPTION...]
 
-eb-staged-rebuild probe [--path DIR] [--eb EB] [--json]
+eb-staged-rebuild probe [--path DIR] [--no-create] [--eb EB] [--require-eb] [--json]
 eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb EB]
                       [--backend {auto,bwrap,userns,installpath}] [--grace-hours HOURS]
                       [--dry-run] [--module NAME/VERSION]... [--run-id ID]
                       [--lock-timeout SECONDS] [--skip-live-check] [--prepare PROGRAM]
                       [--ledger-config FILE] [--build-dir DIR] [--min-free-bytes BYTES]
-                      -- EASYCONFIG [EB-ARGUMENT...]
+                      [--require-exchange] -- EASYCONFIG [EB-ARGUMENT...]
 eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] RUN_ID
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
                      [--usage-log FILE] [--eb-keep-logs EB_KEEP_LOGS]
-                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH]
+                     [--include-failed] [--lock-timeout SECONDS] [--metrics-file PATH] [--json]
 eb-staged-rebuild retire --state-root DIR --module-file FILE [--reason TEXT]
                          [--dry-run] [--usage-log FILE]
                          [--eb-keep-logs EB_KEEP_LOGS] [--lock-timeout SECONDS]
@@ -71,13 +71,13 @@ For =resume=, =rollback= and =status=, =RUN_ID= names a run, or a retire record,
 | Option         | Meaning                                                                                                                                                      |
 |----------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =-h=, =--help= | Print the usage on stdout and exit 0.                                                                                                                        |
-| =--version=    | Print the version on stdout and exit 0. The Python package prints =eb-staged-rebuild 1.0.0=; the binary adds its target, build mode, Zig version and commit. |
+| =--version=    | Print the version on stdout and exit 0. The Python package prints =eb-staged-rebuild X.Y.Z=; the binary adds its target, build mode, Zig version and commit. |
 
 The binary's commit is the one =zig build= was given with =-Dcommit=, or =unknown=.
-Built with =zig build -Drelease=true -Dcommit=c44b8ad=, it prints:
+Built with =zig build -Drelease=true -Dcommit=abc1234=, it prints:
 
 #+begin_example
-eb-staged-rebuild 1.0.0 (x86_64-linux-musl, safe, zig 0.17.1, c44b8ad)
+eb-staged-rebuild X.Y.Z (x86_64-linux-musl, safe, zig 0.17.1, abc1234)
 #+end_example
 
 Each command takes the options of its section below.
@@ -86,11 +86,13 @@ Each command takes the options of its section below.
 
 Report what this machine and filesystem support: bubblewrap (=bwrap=), user namespaces, =renameat2(RENAME_EXCHANGE)=, the EasyBuild version, the filesystem, and how the lock works.
 
-| Option   | Meaning                                                                                                   |
-|----------+-----------------------------------------------------------------------------------------------------------|
-| =--path= | A directory on the filesystem to probe, normally the software tree; the default is the current directory. |
-| =--eb=   | The EasyBuild command to ask for its version; the default is =EB_STAGED_REBUILD_EB=, or =eb=.             |
-| =--json= | Print the report as JSON, indented and with the keys sorted, instead of the lines below.                  |
+| Option         | Meaning                                                                                                   |
+|----------------+-----------------------------------------------------------------------------------------------------------|
+| =--path=       | A directory on the filesystem to probe, normally the software tree; the default is the current directory. |
+| =--no-create=  | Refuse with status 1 when =--path= does not exist, instead of creating that directory for the probe.      |
+| =--eb=         | The EasyBuild command to ask for its version; the default is =EB_STAGED_REBUILD_EB=, or =eb=.             |
+| =--require-eb= | Refuse with status 1 when the =--eb= command is not found; the probe report is still printed first.        |
+| =--json=       | Print the report as JSON, indented and with the keys sorted, instead of the lines below.                  |
 
 The lines, in this order:
 
@@ -120,7 +122,7 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--eb=              | The EasyBuild command; the default is =EB_STAGED_REBUILD_EB=, or =eb=.                                                                                                                                 |
 | =--backend=         | How the build is kept off the live tree: =bwrap=, =userns=, =installpath=, or =auto=, the default, which takes the first of those that works here. =bwrap= and =userns= refuse when their probe fails. |
 | =--grace-hours=     | Hours to keep the previous tree, a number 0 or more, written into the journal, where =gc= reads it; the default is =EB_STAGED_REBUILD_GRACE_HOURS=, or 144.                                            |
-| =--dry-run=         | Print the backend, the roots, the probes and the command EasyBuild would get, with =<run-id>= in the generation path, and stop: no journal, no lock, no build, no file.                                |
+| =--dry-run=         | Print the backend, the roots, the probes and the command EasyBuild would get, with =<run-id>= in the generation path, and stop: no journal, no lock, no build, no file. When =--min-free-bytes= is set, apply that reserve to the filesystem the state root would be created on and exit 2 when it is not available, still without creating the state root. |
 | =--module=          | A =NAME/VERSION= directory of the software tree to replace, besides those EasyBuild lists; may be given more than once.                                                                                |
 | =--run-id=          | The run's name; the default is the UTC time and the process id, =YYYYMMDD-HHMMSS-PID=. A name that has a journal is refused.                                                                           |
 | =--lock-timeout=    | Seconds to wait for the state root's lock; without it the wait has no limit.                                                                                                                           |
@@ -132,7 +134,11 @@ Build the easyconfig in a new generation under the state root, and publish it in
 | =--require-exchange= | Refuse before the journal and build unless the software filesystem supports =renameat2(RENAME_EXCHANGE)=. A run that records this policy never uses the ordinary-rename fallback, including during rollback.                |
 
 Once it has checked them, =run= makes a relative =--software=, =--modules=, =--state-root= or =--build-dir= absolute from the current directory, so EasyBuild, the sandbox, the journal and =prepare-context.json= get the same paths, and the run can be resumed or rolled back from any directory.
+After taking the state-root lock, =run= checks that the state root and live software tree have the same filesystem device before it creates the journal or starts the build command.
 When =--min-free-bytes= is set, =run= reads the filesystem's available blocks after taking the state-root lock and before creating the run journal or starting the build command.
+=run --dry-run= applies the same comparison before it prints the plan, without creating the state root.
+When that directory does not exist yet, the dry run reads the filesystem of the nearest existing parent.
+It exits 2 and prints =dry-run would refuse= when the reserve is not available.
 It compares the available block count times the fragment size with =BYTES=.
 This is a reserve threshold, not an estimate of the rebuilt installation's size.
 Before it takes the lock, =run= asks EasyBuild which modules the build replaces: =eb --dry-run= with the same arguments and =--rebuild=.
@@ -268,6 +274,7 @@ When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printe
 | Status | Meaning                                                                                                                          |
 |--------+----------------------------------------------------------------------------------------------------------------------------------|
 |      0 | Done, or nothing to do.                                                                                                          |
+|      1 | =probe=: =--no-create= refused a missing =--path=, or =--require-eb= did not find the =--eb= command.                            |
 |      1 | =resolve=: the module file is not a regular file, or names no complete installation.                                             |
 |      2 | Refused, or an operating-system error, with the reason on stderr after =eb-staged-rebuild:=; or a usage error.                   |
 |     75 | A ledger did not acknowledge a record; the message ends with the command that delivers it, =run resume= or =run rollback again=. |

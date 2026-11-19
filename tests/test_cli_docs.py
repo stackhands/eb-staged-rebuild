@@ -103,6 +103,12 @@ class CliDocTests(unittest.TestCase):
         self.assertIn("--build-dir", text)
         self.assertIn("--buildpath", text)
 
+    def test_first_tutorial_starts_on_clean_ubuntu(self):
+        path = os.path.join(ROOT, "docs", "orgmode", "tutorials", "first-staged-rebuild.org")
+        with open(path, encoding="utf-8") as handle:
+            tutorial = handle.read()
+        self.assertIn("python3-venv", tutorial)
+
     def test_transcripts_do_not_record_a_checkout_path(self):
         """Recorded output must not name the machine that recorded it.
 
@@ -133,6 +139,19 @@ class CliDocTests(unittest.TestCase):
             )
         self.assertIn("lock: local flock lock plus POSIX record lock", proc.stdout)
         self.assertIsNone(INTERNAL_ID.search(proc.stdout + proc.stderr))
+
+    def test_exit_status_docs_cover_probe_refusals(self):
+        with open(os.path.join(ROOT, "docs", "orgmode", "reference", "cli.org"), encoding="utf-8") as handle:
+            cli_org = handle.read()
+        with open(os.path.join(ROOT, "docs", "orgmode", "reference", "exit-status.org"), encoding="utf-8") as handle:
+            exit_org = handle.read()
+        cli_exit_section = cli_org.split("** Exit status", 1)[1].split("** Files", 1)[0]
+        self.assertIn("=probe=", cli_exit_section)
+        self.assertIn("--no-create", cli_exit_section)
+        self.assertIn("--require-eb", cli_exit_section)
+        self.assertIn("=probe=", exit_org)
+        self.assertIn("--no-create", exit_org)
+        self.assertIn("--require-eb", exit_org)
 
 
 if __name__ == "__main__":

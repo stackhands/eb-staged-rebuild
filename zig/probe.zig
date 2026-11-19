@@ -4,6 +4,7 @@ const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
 const common = @import("zig_common");
+const main_mod = @import("main.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -48,10 +49,55 @@ fn put(a: Allocator, d: *D, k: []const u8, v: Py) void {
     d.append(a, .{ .key = k, .value = v }) catch oom();
 }
 
-/// shutil.which: PATH, or os.defpath when PATH is unset.
-fn which(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
-    const path = env.get("PATH") orelse "/bin:/usr/bin";
-    return proc.which(a, name, path) catch null;
+fn pathEnv(env: Env) []const u8 {
+    return env.get("PATH") orelse "/bin:/usr/bin";
+}
+
+/// execvp-style lookup of a bare name. A name that already contains '/' is
+/// a path, not a PATH search, and is returned unchanged.
+fn whichExec(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    if (std.mem.findScalar(u8, name, '/') != null) return name;
+    return proc.which(a, name, pathEnv(env)) catch null;
+}
+
+fn executableRegular(path: []const u8) bool {
+    var zb: [sys.path_max:0]u8 = undefined;
+    const z = sys.z(&zb, path) catch return false;
+    if (linux.errno(linux.faccessat(linux.AT.FDCWD, z.ptr, linux.X_OK, 0)) != .SUCCESS) return false;
+    const st = fsx.statAt(fsx.cwd, path, true) catch return false;
+    return st.isReg();
+}
+
+/// The path `shutil.which` reports. `proc.which` in zig-common 0.10.0 finds
+/// the same file and then makes the path absolute, so a relative directory
+/// or an empty entry (the current directory) would not match. An unset PATH
+/// uses `/bin:/usr/bin`. An empty PATH returns null.
+fn whichProbe(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    if (name.len == 0 or std.mem.findScalar(u8, name, '/') != null) return null;
+    const path = env.get("PATH") orelse return proc.which(a, name, "/bin:/usr/bin") catch null;
+    if (path.len == 0) return null;
+    var it = std.mem.splitScalar(u8, path, ':');
+    while (it.next()) |dir_raw| {
+        const cand = std.fs.path.join(a, &.{ if (dir_raw.len == 0) "" else dir_raw, name }) catch return null;
+        if (!executableRegular(cand)) {
+            a.free(cand);
+            continue;
+        }
+        return cand;
+    }
+    return null;
+}
+
+/// proc.run requires an absolute executable. A relative path is joined to
+/// the current directory; a bare name is looked up on PATH.
+fn runExe(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    if (name.len > 0 and name[0] == '/') return name;
+    if (std.mem.findScalar(u8, name, '/') != null) {
+        var rb: [sys.path_max]u8 = undefined;
+        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch return null;
+        return std.fs.path.join(a, &.{ cwd, name }) catch null;
+    }
+    return whichExec(a, env, name);
 }
 
 const Ran = union(enum) {
@@ -61,8 +107,8 @@ const Ran = union(enum) {
 
 /// subprocess.run(text=True, timeout=...): the result, or the exception text.
 fn run(a: Allocator, env: Env, argv: []const []const u8, timeout_ms: u32) Ran {
-    const exe = if (argv[0].len > 0 and argv[0][0] == '/') argv[0] else (which(a, env, argv[0]) orelse
-        return .{ .failed = a.print("[Errno 2] No such file or directory: '{s}'", .{argv[0]}) catch "not found" });
+    const exe = runExe(a, env, argv[0]) orelse
+        return .{ .failed = a.print("[Errno 2] No such file or directory: '{s}'", .{argv[0]}) catch "not found" };
     const r = proc.run(a, exe, argv, env.envp, .{
         .stdout_limit = 16 << 20,
         .stderr_limit = 1 << 20,
@@ -103,7 +149,7 @@ fn orNone(s: []const u8) Py {
 
 fn probeBwrap(a: Allocator, env: Env) Py {
     var d: D = .empty;
-    const path = which(a, env, "bwrap") orelse {
+    const path = whichProbe(a, env, "bwrap") orelse {
         put(a, &d, "installed", .{ .bool = false });
         put(a, &d, "usable", .{ .bool = false });
         put(a, &d, "path", .null);
@@ -151,13 +197,10 @@ fn readInt(a: Allocator, path: []const u8) union(enum) { ok: i64, err: []const u
     return .{ .ok = n };
 }
 
+/// Python's str() of an OSError that carries a filename. `main.osError`
+/// already formats that text, including an error that is not an OSError.
 fn osText(a: Allocator, err: anyerror, path: []const u8) []const u8 {
-    const t: struct { n: u32, s: []const u8 } = switch (err) {
-        error.NotFound => .{ .n = 2, .s = "No such file or directory" },
-        error.AccessDenied => .{ .n = 13, .s = "Permission denied" },
-        else => return a.print("{t}: '{s}'", .{ err, path }) catch path,
-    };
-    return a.print("[Errno {d}] {s}: '{s}'", .{ t.n, t.s, path }) catch path;
+    return main_mod.osError(a, err, path);
 }
 
 fn probeUserNamespaces(a: Allocator) Py {
@@ -189,7 +232,7 @@ pub fn selfExe(a: Allocator) []const u8 {
 
 fn probeUsernsSandbox(a: Allocator, env: Env) Py {
     var d: D = .empty;
-    const path = which(a, env, "unshare");
+    const path = whichProbe(a, env, "unshare");
     put(a, &d, "installed", .{ .bool = path != null });
     put(a, &d, "usable", .{ .bool = false });
     put(a, &d, "path", if (path) |p| Py.s(p) else .null);
@@ -265,27 +308,6 @@ fn strerror(e: linux.E) []const u8 {
     return common.sys.errnoText(e) orelse @tagName(e);
 }
 
-fn mkdtemp(a: Allocator, dir: []const u8, prefix: []const u8) ![]const u8 {
-    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789_";
-    var tries: usize = 0;
-    while (tries < 100) : (tries += 1) {
-        var rnd: [8]u8 = undefined;
-        // A name from bytes getrandom did not fill would not be random.
-        _ = try sys.call(linux.getrandom, .{ &rnd, rnd.len, 0 });
-        for (&rnd) |*b| b.* = alphabet[b.* % alphabet.len];
-        const p = try a.print("{s}/{s}{s}", .{ dir, prefix, rnd });
-        var zb: [sys.path_max:0]u8 = undefined;
-        switch (linux.errno(linux.mkdirat(linux.AT.FDCWD, (try sys.z(&zb, p)).ptr, 0o700))) {
-            .SUCCESS => return p,
-            .EXIST => continue,
-            .ACCES, .PERM => return error.AccessDenied,
-            .NOENT => return error.NotFound,
-            else => return error.Unexpected,
-        }
-    }
-    return error.Exists;
-}
-
 fn mkdir(a: Allocator, p: []const u8) !void {
     _ = a;
     var zb: [sys.path_max:0]u8 = undefined;
@@ -317,7 +339,7 @@ fn probeRenameExchange(a: Allocator, directory: []const u8) !Py {
     put(a, &d, "errno", .null);
     put(a, &d, "error", .null);
     put(a, &d, "flag", .{ .int = rename_exchange });
-    const parent = try mkdtemp(a, directory, ".rename-exchange-");
+    const parent = try fsx.mkdtemp(a, directory, ".rename-exchange-");
     defer fsx.deleteTree(a, fsx.cwd, parent) catch {};
     const left = try std.fs.path.join(a, &.{ parent, "left" });
     const right = try std.fs.path.join(a, &.{ parent, "right" });
@@ -445,7 +467,7 @@ fn isFileFollow(p: []const u8) bool {
 
 fn probeEasybuild(a: Allocator, env: Env, eb: []const u8) Py {
     var d: D = .empty;
-    const path: ?[]const u8 = if (std.mem.findScalar(u8, eb, '/') == null) which(a, env, eb) else (if (isFileFollow(eb)) eb else null);
+    const path: ?[]const u8 = if (std.mem.findScalar(u8, eb, '/') == null) whichProbe(a, env, eb) else (if (isFileFollow(eb)) eb else null);
     put(a, &d, "eb", Py.s(eb));
     put(a, &d, "path", if (path) |p| Py.s(p) else .null);
     put(a, &d, "found", .{ .bool = path != null });
@@ -638,7 +660,7 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
             for ([_][]const u8{ "TMPDIR", "TEMP", "TMP" }) |k| if (env.get(k)) |v| if (v.len > 0 and isDir(v)) break :blk v;
             break :blk "/tmp";
         };
-        const root = mkdtemp(a, tmp, "tmp") catch |err| {
+        const root = fsx.mkdtemp(a, tmp, "tmp") catch |err| {
             cli.err(prefix ++ "{t}\n", .{err});
             return sandbox_setup_exit;
         };
@@ -677,7 +699,7 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         return sandbox_setup_exit;
     }
     // os.execvpe(command[0], command, os.environ): a PATH search for a name.
-    const exe = if (std.mem.findScalar(u8, command[0], '/') != null) command[0] else (which(a, env, command[0]) orelse {
+    const exe = if (std.mem.findScalar(u8, command[0], '/') != null) command[0] else (whichExec(a, env, command[0]) orelse {
         cli.err(prefix ++ "[Errno 2] No such file or directory\n", .{});
         return sandbox_setup_exit;
     });
@@ -750,6 +772,14 @@ fn writeProc(a: Allocator, path: []const u8, text: []const u8) ?[]const u8 {
     return null;
 }
 
+test "osText matches Python's OSError text" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try std.testing.expectEqualStrings("[Errno 17] File exists: '/tmp/left'", osText(a, error.Exists, "/tmp/left"));
+    try std.testing.expectEqualStrings("[Errno 2] No such file or directory: \"/tmp/a'b\"", osText(a, error.NotFound, "/tmp/a'b"));
+}
+
 test "parentId reads a uid_map" {
     try std.testing.expectEqual(@as(?u32, 1001), parentId("         0       1001          1\n", 0));
     try std.testing.expectEqual(@as(?u32, 100007), parentId("0 1001 1\n1 100000 65536\n", 8));
@@ -761,4 +791,27 @@ test "parseFrameworkVersion" {
     try std.testing.expectEqual([3]i64{ 5, 4, 1 }, parseFrameworkVersion("This is EasyBuild 5.4.1 (framework: 5.4.1, easyblocks: 5.4.1)").?);
     try std.testing.expectEqual([3]i64{ 5, 3, 0 }, parseFrameworkVersion("This is EasyBuild 5.3.0").?);
     try std.testing.expect(parseFrameworkVersion("eb 5") == null);
+}
+
+test "probeRenameExchange cleans up its fsx.mkdtemp scratch directory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var cwd_buf: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &cwd_buf);
+    const base = try std.fmt.allocPrint(a, "{s}/.zig-cache/esr-probe-mkdtemp-{d}", .{ here, linux.getpid() });
+    try makedirs(a, base);
+    defer fsx.deleteTree(a, fsx.cwd, base) catch {};
+
+    const res = try probeRenameExchange(a, base);
+    var saw_ok = false;
+    for (res.dict) |e| if (std.mem.eql(u8, e.key, "ok")) {
+        saw_ok = (e.value == .bool);
+    };
+    try std.testing.expect(saw_ok);
+    const dir = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(dir);
+    var it = try fsx.DirIter.init(a, dir);
+    defer it.deinit(a);
+    try std.testing.expectEqual(@as(?fsx.Entry, null), try it.next());
 }

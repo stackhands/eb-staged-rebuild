@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 from pathlib import Path
 import signal
 import sys
@@ -10,7 +11,7 @@ from unittest.mock import patch
 from eb_staged_rebuild import cli
 from eb_staged_rebuild.builders import run_command
 from eb_staged_rebuild.engine import resume, run
-from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.errors import NeedsIntervention, Refused
 from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.journal import journal_path, load_journal
 from tests import test_prepare_publication as preparation
@@ -60,6 +61,23 @@ class PrepareRecoveryTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.message)
             self.assertEqual(len(calls), 1)
             self.assertEqual((Path(spec.software) / 'demo/1/PAYLOAD').read_text(), 'new\n')
+
+    def test_resume_reports_an_incomplete_publication_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            spec, module, text, _ = self.fixture(directory, returncode=42)
+            self.assertEqual(run(spec).returncode, 42)
+            policy = Path(spec.prepare_executable)
+            policy.write_text(policy.read_text().replace('sys.exit(42)', 'sys.exit(0)'))
+            path = Path(journal_path(spec.state_root, 'prepare'))
+            journal = load_journal(path)
+            journal['modules_plan'][0].pop('prepared')
+            path.write_text(json.dumps(journal))
+            with self.assertRaisesRegex(
+                NeedsIntervention,
+                'does not record rel, prepared and new_hash',
+            ):
+                resume(spec.state_root, 'prepare', builder=spec.builder)
+            self.assertEqual(module.read_text(), text)
 
     def test_child_signal_has_a_shell_exit_status(self):
         command = [sys.executable, '-c', 'import os, signal; os.kill(os.getpid(), signal.SIGTERM)']

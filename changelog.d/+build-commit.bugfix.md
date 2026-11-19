@@ -1,1 +1,0 @@
-The binary's build takes `-Dcommit`, as eb-local's and eb-keep-logs' do, and its `--version` prints `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`; the first two words are the Python tool's line. The version comes from `build.zig.zon` alone, and release binaries name the tag's commit.

@@ -1,1 +1,0 @@
-Every `pub` declaration of the Zig build has a doc comment. The module comments of `zig/main.zig`, `zig/engine.zig` and `zig/run.zig` said that run, resume and rollback of a run were not in the binary yet, or that a run had no ledger; they say what the files do now.

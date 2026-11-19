@@ -137,6 +137,18 @@ Five test programs run the Python tool and the binary on separate copies of one 
 Python-only internals are covered by the Zig unit test of the same function, named as
 `zig/FILE.zig` test "NAME".
 
+### tests/test_ship.py
+
+The ship module is a separate Python transfer tool and does not change the staged
+rebuild command implemented by the Zig binary.
+
+| test | replacement |
+|---|---|
+| ShipTests.test_a_copy_matches_until_a_byte_or_a_link_changes | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_paths_do_not_escape_the_tree | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_the_command_is_quiet_when_the_tree_matches | `python3 -m eb_staged_rebuild.ship` exercises the Python transfer tool |
+| ShipTests.test_the_how_to_names_the_command | the documentation build checks the Org guide |
+
 ### tests/test_engine.py
 
 | test | replacement |
@@ -147,24 +159,28 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | FreeSpaceTests.test_option_takes_precedence_over_the_environment | differential "run, --min-free-bytes instead of a bad environment reserve" |
 | FreeSpaceTests.test_environment_reserve_is_a_nonnegative_64_bit_integer | differential "run, a free-space reserve below 0 in the environment", "run, a free-space reserve in the environment that is not an integer", "run, an empty free-space reserve in the environment", "run, an environment reserve above the supported range" |
 | FreeSpaceTests.test_minimum_free_space_refuses_before_the_journal_and_build | differential "run refuses below --min-free-bytes" |
+| FreeSpaceTests.test_minimum_free_space_falls_back_to_f_bsize_when_f_frsize_is_zero | `zig/run.zig` test "availableBytes falls back to block_size and multiplies in u128 without overflow" |
 | ExchangeRequirementTests.test_default_cli_output_and_status_are_exact_bytes | differential "run, installpath" omits the option |
 | ExchangeRequirementTests.test_requirement_refuses_before_the_journal_and_build | `zig/engine.zig` test "required exchange reports the failed filesystem probe" |
 | ExchangeRequirementTests.test_supported_requirement_is_recorded_and_uses_exchange | differential "run, installpath, exchange required", "rollback the exchange-required run" |
+| ManifestShapeTests.test_resume_refuses_a_manifest_value_outside_the_recorded_shape | `zig/livecheck.zig` test "validSnapshot accepts records from snapshot and rejects other JSON shapes" |
 | TransactionTests.test_success_uses_fallback_and_keeps_old_tree_for_rollback | crash_matrix "fallback: run published" (journal `swap_method` `rename-fallback`, old tree kept as the hidden sibling) and "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 | TransactionTests.test_success_uses_rename_exchange_when_probe_succeeds | differential "run, installpath" (journal `swap_method` `renameat2-exchange`) |
 | TransactionTests.test_every_recorded_failure_restores_old_tree_then_resumes | fail_matrix "one module: run fails at STEP", every step |
 | TransactionTests.test_failure_on_second_module_restores_both_modules | fail_matrix "two modules: run fails at STEP", every step of `lib/1` and `app/1` |
+| TransactionTests.test_prepare_failure_keeps_the_run_ready_to_resume | fail_matrix "one module: run fails at stage.move:all/demo/1.lua" |
 | TransactionTests.test_an_installed_tool_ignores_the_fail_hook | differential "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" |
 | TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
 | TransactionTests.test_dry_run_creates_no_state_and_changes_nothing | differential "run --dry-run, installpath", "run --dry-run, auto", "run --dry-run, userns" |
+| TransactionTests.test_dry_run_refuses_a_short_generation_filesystem | `zig/engine.zig` test "a dry run refuses a short generation filesystem" |
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
 | TransactionTests.test_symlink_rebuild_target_is_refused_before_build | differential "run, symlinked target" |
 | TransactionTests.test_module_path_cannot_escape_software_root | differential "run, module escapes" |
 | TransactionTests.test_a_module_that_is_no_directory_is_refused_for_what_it_is | differential "run, no installed target", "run, --module names a file"; `zig/run.zig` test "notADirectory says what the path is instead" |
 | TransactionTests.test_symlinked_state_root_is_refused | differential "run, symlinked state root" |
 | RollbackTests.test_rollback_restores_exact_old_directory | differential "rollback the run", "rollback the run again" |
-| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback the earlier run after the later one" |
+| RollbackTests.test_a_run_a_later_run_replaced_is_refused | differential "rollback the earlier run while the later one is live", "rollback a run a later run replaced", "rollback the earlier run after the later one" |
 | RollbackTests.test_a_live_tree_the_run_did_not_publish_is_refused | differential "rollback, the live tree has no marker of the run" |
 | RollbackTests.test_every_rollback_failure_restores_published_tree | fail_matrix "one module: rollback fails at STEP", every step |
 | GarbageCollectionTests.test_gc_removes_only_the_hidden_retired_tree_after_grace | differential "gc keeps within grace", "gc removes past grace", "gc again" |
@@ -184,6 +200,9 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
 | StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
 | StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
+| RunIdBoundaryTests.test_run_id_cannot_escape_the_state_root | differential "run, a run id with path components" |
+| RunIdBoundaryTests.test_resume_and_rollback_reject_path_components | differential "resume, a run id with path components", "rollback, a run id with path components" |
+| RunIdBoundaryTests.test_journal_run_id_must_match_its_directory | `zig/run.zig` enforces the same check before resume and `zig/admin.zig` before rollback |
 
 ### tests/test_retire.py
 
@@ -205,6 +224,7 @@ Python-only internals are covered by the Zig unit test of the same function, nam
 | RetireTests.test_refuses_already_retired | differential "retire again" |
 | RetireTests.test_refuses_non_regular_files | differential "retire, a directory", "retire, a symlinked module file", "retire, no module file" |
 | RetireTests.test_refuses_module_without_root | differential "retire, no root assignment" |
+| RetireCliParityTests.test_retire_refuses_non_utf8_module_path | CLI reproducer: `eb-staged-rebuild retire --state-root <state> --module-file <non-UTF-8 path>` returns exit 2 with `module path is not UTF-8 text` in both implementations |
 | RetireTests.test_refuses_when_lock_is_held | signal_harness "retire while the state lock is held: refused, module kept" |
 | RetireTests.test_refuses_different_filesystem | differential "retire, state root on another filesystem" (where `/dev/shm` is writable) |
 | RetireTests.test_crash_before_rename_leaves_module_and_rolls_back | crash_matrix "retire killed at retire.fsync", "retire killed at retire.rename" (a second retire is refused, the rollback restores the module file) |
@@ -224,6 +244,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | SwapTests.test_exchange_swaps_the_complete_directories | `zig/swap.zig` test "swap exchanges two sibling directories and back" |
 | SwapTests.test_exchange_failure_after_success_restores_live | `zig/swap.zig` test "an exchange whose sync fails is exchanged back"; fail_matrix "one module: run fails at swap:all/demo/1.lua.exchange.after" |
 | SwapTests.test_non_fallback_exchange_error_leaves_live_unchanged | `zig/swap.zig` test "an exchange error other than unsupported leaves live unchanged" |
+| SwapTests.test_a_full_or_read_only_exchange_names_the_live_directory | `zig/swap.zig` test "a full or read-only exchange names the live directory" |
 | SwapTests.test_unsupported_exchange_uses_fallback | `zig/swap.zig` test "an unsupported exchange uses the fallback" |
 | SwapTests.test_unsupported_exchange_is_refused_when_fallback_is_disabled | `zig/swap.zig` test "an unsupported exchange is refused when fallback is disabled" |
 | SwapTests.test_every_injected_fallback_failure_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" (the injected step precedes the rename that fails) |
@@ -240,6 +261,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | ModuleFileTests.test_rewrite_does_not_eat_a_longer_prefix | `zig/modulefile.zig` test "loads, identity and rewriting" |
 | ModuleFileTests.test_new_path_that_contains_the_old_path_is_not_doubled | `zig/modulefile.zig` test "a new path that contains the old path is not doubled" |
 | ModuleFileTests.test_refuses_a_file_with_no_root | `zig/modulefile.zig` test "loads, identity and rewriting" |
+| ModuleFileTests.test_resolve_refuses_non_utf8_module_text | differential "resolve non-utf8.lua" |
 
 ### tests/test_gc_references.py
 
@@ -280,6 +302,9 @@ tests cover the same bytes, mode, hard links and symbolic links.
 | PrefixPublishTests.test_a_binary_without_room_to_shorten_is_refused | `zig/prefix.zig` test "a generation prefix becomes the stable prefix, and a tight binary is refused" |
 | PrefixPublishTests.test_the_completion_stamp_is_not_rewritten | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
 | PrefixPublishTests.test_a_symlink_is_not_followed_into_another_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_full_filesystem_names_the_temporary_file | `zig/main.zig` `errnoPath` on the temporary file; `os.write` already reports that path |
+| PrefixPublishTests.test_a_read_only_directory_names_the_directory | `zig/prefix.zig` test "a read-only directory names that directory" |
+| PrefixPublishTests.test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite | `zig/prefix.zig` test "an interrupted hard-link publish is finished on the next rewrite" |
 
 ### tests/test_backends.py
 
@@ -348,6 +373,7 @@ makes a live mount point for each module the dry run lists, as EasyBuild's `prep
 | PrepareRecoveryTests.test_empty_program_is_refused_by_the_api | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_empty_program_is_refused_before_cli_dispatch | differential "run, empty prepare" |
 | PrepareRecoveryTests.test_failed_policy_retry_preserves_the_built_generation | differential "run, prepare fails", "resume after the prepare is fixed" (resumed from built, no build), "the prepare ran once" |
+| PrepareRecoveryTests.test_resume_reports_an_incomplete_publication_plan | differential "resume reports an incomplete publication plan" |
 | PrepareRecoveryTests.test_child_signal_has_a_shell_exit_status | `zig/builders.zig` test "a command killed by a signal has a shell exit status" |
 | PrepareRecoveryTests.test_policy_journal_requires_schema_two | differential "run, prepare fails" (journal `schema` compared) |
 
@@ -462,11 +488,15 @@ site variables through CLI/docs tests and integration coverage.
 | CliDocTests.test_build_dir_how_to_documents_the_flag | `docs/examples/site.sh` case `build-dir` runs `--build-dir` with the binary and `docs/orgmode/howto/set-a-build-directory.org` records it |
 | CliDocTests.test_transcripts_do_not_record_a_checkout_path | the output recorded in the Org pages; no binary behaviour |
 | CliDocTests.test_no_design_note_ids_in_docs_or_output | the scan covers `zig/` and the unreleased fragments in `changelog.d/`; differential "probe text" and "probe --json" print the binary's lock line beside the Python tool's |
+| CliDocTests.test_first_tutorial_starts_on_clean_ubuntu | `docs/orgmode/tutorials/first-staged-rebuild.org` step check; no binary behaviour |
+| CliDocTests.test_exit_status_docs_cover_probe_refusals | `docs/orgmode/reference/cli.org` and `docs/orgmode/reference/exit-status.org` exit-status check; no binary behaviour |
 
 ### tests/test_probe_cli.py
 
 | test | replacement |
 |---|---|
+| ProbeTests.test_probe_no_create_refuses_a_missing_path | runs against `TOOL_BIN` |
+| ProbeTests.test_probe_require_eb_fails_when_eb_is_missing | runs against `TOOL_BIN` |
 | ProbeTests.test_unreadable_resolve_exits_2_without_a_traceback | differential "resolve an unreadable file" (not as root) |
 | ProbeTests.test_rename_exchange_reports_a_result_for_this_directory | differential "probe --json", "probe text" |
 | ProbeTests.test_probe_all_has_the_open_questions | differential "probe --json" |
@@ -475,6 +505,19 @@ site variables through CLI/docs tests and integration coverage.
 | StatusJsonTests.test_status_json_of_an_empty_root_is_an_empty_document | differential "status --json, no runs dir" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_writes_the_stage_path_keys | differential "probe, EasyBuild 5.4.1 stage keys" |
 | BwrapKeyTableTests.test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed | differential "run, bwrap, 5.4.1 without stage keys" |
+
+### tests/test_journal_shape.py
+
+| test | replacement |
+|---|---|
+| JournalShapeTests.test_invalid_record_shapes_need_intervention | differential "status, journal array", "status, journal plan string", "status, journal plan number" |
+
+### tests/test_stage_filesystem.py
+
+| test | replacement |
+|---|---|
+| StageFilesystemTests.test_default_run_keeps_exact_status_and_stream_bytes | differential "run, installpath" checks the default command's status and streams |
+| StageFilesystemTests.test_different_filesystem_refuses_before_the_journal_and_build | differential "run refuses a state root on another filesystem before the build" |
 
 ### tests/test_json_schemas.py
 
@@ -532,3 +575,4 @@ it writes, with ids, times and the state root's scope normalized.
 | test | replacement |
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
+| LedgerConfigValidationTests.test_load_config_rejects_non_finite_timeout | `zig/publish.zig` test "isPositiveTimeout rejects non-finite and non-positive values" |
