@@ -1447,21 +1447,30 @@ fn availableBytes(info: StatFs) u128 {
     return blocks * unit;
 }
 
-fn checkFreeSpace(r: *R) E!void {
-    const minimum = r.spec.min_free_bytes orelse return;
+/// The refusal `--min-free-bytes` would print, or null when `path` has room.
+/// `path` must already exist. The dry run passes the nearest existing
+/// ancestor so it can answer without creating the state root.
+pub fn freeSpaceRefusal(a: Allocator, path: []const u8, minimum: u128) ?[]const u8 {
     var path_buf: [sys.path_max:0]u8 = undefined;
-    const path = sys.z(&path_buf, r.spec.state_root) catch
-        return r.refuse("path is too long: {s}", .{r.spec.state_root});
+    const zpath = sys.z(&path_buf, path) catch
+        return a.print("path is too long: {s}", .{path}) catch "path is too long";
     var info: StatFs = undefined;
-    const result = linux.syscall2(.statfs, @intFromPtr(path.ptr), @intFromPtr(&info));
+    const result = linux.syscall2(.statfs, @intFromPtr(zpath.ptr), @intFromPtr(&info));
     if (linux.errno(result) != .SUCCESS)
-        return r.refuse("cannot inspect free space on {s}", .{r.spec.state_root});
+        return a.print("cannot inspect free space on {s}", .{path}) catch "cannot inspect free space";
     const available = availableBytes(info);
     if (available < minimum)
-        return r.refuse(
+        return a.print(
             "generation filesystem has {d} bytes available; --min-free-bytes requires {d}",
             .{ available, minimum },
-        );
+        ) catch "generation filesystem is short";
+    return null;
+}
+
+fn checkFreeSpace(r: *R) E!void {
+    const minimum = r.spec.min_free_bytes orelse return;
+    if (freeSpaceRefusal(r.a, r.spec.state_root, minimum)) |msg|
+        return r.refuse("{s}", .{msg});
 }
 
 /// run without --dry-run.

@@ -341,6 +341,16 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
     return res.code;
 }
 
+fn statfsTarget(a: Allocator, path_in: []const u8) []const u8 {
+    var current = admin.abspath(a, path_in);
+    while (std.mem.eql(u8, main_mod.lstatKind(current), "missing")) {
+        const parent = std.fs.path.dirname(current) orelse break;
+        if (parent.len == 0 or std.mem.eql(u8, parent, current)) break;
+        current = parent;
+    }
+    return current;
+}
+
 fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
     const bwrap = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
     const easybuild = pyfmt.get(probes, "easybuild") orelse Py{ .dict = &.{} };
@@ -384,6 +394,10 @@ fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
     for (spec.module_rels) |rel| {
         const path = std.fs.path.join(a, &.{ spec.software, rel }) catch continue;
         if (std.mem.eql(u8, main_mod.lstatKind(path), "symlink")) problems.append(a, fmt(a, "{s} is a symlink", .{path})) catch oom();
+    }
+    if (spec.min_free_bytes) |minimum| {
+        if (run_mod.freeSpaceRefusal(a, statfsTarget(a, spec.state_root), minimum)) |msg|
+            problems.append(a, msg) catch oom();
     }
     const gen = std.fs.path.join(a, &.{ spec.state_root, "generations", "<run-id>" }) catch "";
     lines.append(a, fmt(a, "command: {s}", .{buildCommand(a, env, spec, probes, gen)})) catch oom();
@@ -435,4 +449,47 @@ test "buildCommand includes --buildpath only when build_dir is set" {
     const with_bw = buildCommand(a, env, .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{"x.eb"}, .backend = "bwrap", .build_dir = "/tmp/bd" }, probes, "/st/generations/g1");
     try std.testing.expect(std.mem.indexOf(u8, with_bw, "--bwrap") != null);
     try std.testing.expect(std.mem.indexOf(u8, with_bw, "--buildpath=/tmp/bd") != null);
+}
+
+test "a dry run refuses a short generation filesystem" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [80]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/dry-free-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o755);
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const software = try std.fmt.allocPrint(a, "{s}/software", .{root});
+    const modules = try std.fmt.allocPrint(a, "{s}/modules", .{root});
+    const state = try std.fmt.allocPrint(a, "{s}/state/missing", .{root});
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, software)).ptr, 0o755);
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, modules)).ptr, 0o755);
+    const env: probe.Env = .{ .envp = &[_:null]?[*:0]const u8{"PATH=/bin"} };
+    const probes: Py = .{ .dict = &.{} };
+    // dryRun writes the plan to stdout, which is the test runner's channel.
+    const sink = try sys.openat(fsx.cwd, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    const saved = linux.dup(1);
+    try std.testing.expect(linux.errno(saved) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(sink), 1)) == .SUCCESS);
+    defer {
+        _ = linux.dup2(@intCast(saved), 1);
+        _ = linux.close(@intCast(saved));
+        sys.close(sink);
+    }
+    const huge = Spec{
+        .software = software,
+        .modules = modules,
+        .state_root = state,
+        .eb_args = &.{"demo.eb"},
+        .backend = "installpath",
+        .dry_run = true,
+        .min_free_bytes = 18446744073709551615,
+    };
+    try std.testing.expectEqual(@as(u8, 2), dryRun(a, env, huge, probes));
+    try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(state), "missing"));
+    var clear = huge;
+    clear.min_free_bytes = 0;
+    try std.testing.expectEqual(@as(u8, 0), dryRun(a, env, clear, probes));
+    try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(try std.fmt.allocPrint(a, "{s}/state", .{root})), "missing"));
 }
