@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
-import pathlib
 import subprocess
 import sys
 import tempfile
 import unittest
+
+from tests.support import run_cli_optional_binary
 
 
 def _python_snapshot(path: str) -> subprocess.CompletedProcess[str]:
@@ -32,19 +33,6 @@ def _python_snapshot(path: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _zig_snapshot(path: str) -> subprocess.CompletedProcess[str]:
-    repo = pathlib.Path(__file__).resolve().parents[1]
-    zig_bin = repo / "zig-out" / "bin" / "eb-staged-rebuild"
-    if not zig_bin.exists():
-        raise unittest.SkipTest(f"zig binary not found at {zig_bin}")
-    return subprocess.run(
-        [str(zig_bin), "__snapshot", path],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
 class SnapshotParityUnreadableTests(unittest.TestCase):
     def test_snapshot_refuses_unreadable_subdirectories(self) -> None:
         if os.geteuid() == 0:
@@ -61,15 +49,16 @@ class SnapshotParityUnreadableTests(unittest.TestCase):
             os.chmod(unreadable, 0)
             try:
                 py = _python_snapshot(tmp)
-                zig = _zig_snapshot(tmp)
+                zig = run_cli_optional_binary("__snapshot", tmp)
             finally:
                 os.chmod(unreadable, 0o700)
 
             self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
-            self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
             self.assertEqual(py.stdout, "")
-            self.assertEqual(zig.stdout, "")
-            self.assertEqual(py.stderr, zig.stderr)
+            if zig is not None:
+                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                self.assertEqual(zig.stdout, "")
+                self.assertEqual(py.stderr, zig.stderr)
 
 
 if __name__ == "__main__":

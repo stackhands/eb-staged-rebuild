@@ -179,6 +179,7 @@ def _lock_and_sleep(state_root: str) -> None:
 def start_lock_holder_process(state_root: str):
     import multiprocessing as mp
     import time
+
     from eb_staged_rebuild.errors import Refused
     from eb_staged_rebuild.lockfile import FileLock
 
@@ -233,3 +234,13 @@ def run_cli_optional_binary(
     if not tool:
         return None
     return _run([tool, *args], env, cwd)
+
+
+def run_cli_or_binary(
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the program named by TOOL_BIN with ARGS when set, otherwise the Python CLI."""
+    binary = run_cli_optional_binary(*args, env=env, cwd=cwd)
+    if binary is not None:
+        return binary
+    return run_cli(*args, env=env, cwd=cwd)

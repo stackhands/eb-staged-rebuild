@@ -5,12 +5,11 @@ Run as a script: missing names are printed, and a clean tree prints nothing.
 
 import os
 import re
-import subprocess
-import sys
 import tempfile
 import unittest
 
 from eb_staged_rebuild.cli import _parser
+from tests.support import run_cli
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INTERNAL_ID = re.compile(r"\b(?:open|ns)-\d{3}\b")
@@ -130,13 +129,7 @@ class CliDocTests(unittest.TestCase):
         """
         self.assertEqual(internal_ids(), [])
         with tempfile.TemporaryDirectory() as directory:
-            proc = subprocess.run(
-                [sys.executable, "-m", "eb_staged_rebuild", "probe", "--path", directory, "--eb", "missing-eb"],
-                capture_output=True,
-                text=True,
-                cwd=ROOT,
-                check=False,
-            )
+            proc = run_cli("probe", "--path", directory, "--eb", "missing-eb", cwd=ROOT)
         self.assertIn("lock: local flock lock plus POSIX record lock", proc.stdout)
         self.assertIsNone(INTERNAL_ID.search(proc.stdout + proc.stderr))
 

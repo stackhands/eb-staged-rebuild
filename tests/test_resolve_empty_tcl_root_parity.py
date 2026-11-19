@@ -4,36 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
-import subprocess
-import sys
 import tempfile
 import unittest
 
-
-def _python_resolve(path: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return subprocess.run(
-        [sys.executable, "-m", "eb_staged_rebuild", "resolve", path],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _zig_resolve(path: str) -> subprocess.CompletedProcess[str]:
-    repo = pathlib.Path(__file__).resolve().parents[1]
-    zig_bin = repo / "zig-out" / "bin" / "eb-staged-rebuild"
-    if not zig_bin.exists():
-        raise unittest.SkipTest(f"zig binary not found at {zig_bin}")
-    return subprocess.run(
-        [str(zig_bin), "resolve", path],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from tests.support import run_cli, run_cli_optional_binary
 
 
 class ResolveEmptyTclRootParityTests(unittest.TestCase):
@@ -43,20 +17,22 @@ class ResolveEmptyTclRootParityTests(unittest.TestCase):
             with open(module, "w", encoding="utf-8") as handle:
                 handle.write('set root ""\n')
 
-            py = _python_resolve(module)
-            zig = _zig_resolve(module)
-
+            py = run_cli("resolve", module)
             self.assertEqual(py.returncode, 1, py.stdout + py.stderr)
-            self.assertEqual(zig.returncode, 1, zig.stdout + zig.stderr)
             self.assertEqual(py.stderr, "")
-            self.assertEqual(zig.stderr, "")
             py_doc = json.loads(py.stdout)
-            zig_doc = json.loads(zig.stdout)
             py_doc.pop("path", None)
-            zig_doc.pop("path", None)
-            self.assertEqual(py_doc, zig_doc)
             self.assertEqual(py_doc["syntax"], "tcl")
             self.assertEqual(py_doc["root"], "")
+
+            zig = run_cli_optional_binary("resolve", module)
+            if zig is None:
+                return
+            self.assertEqual(zig.returncode, 1, zig.stdout + zig.stderr)
+            self.assertEqual(zig.stderr, "")
+            zig_doc = json.loads(zig.stdout)
+            zig_doc.pop("path", None)
+            self.assertEqual(py_doc, zig_doc)
 
 
 if __name__ == "__main__":

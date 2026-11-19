@@ -34,14 +34,11 @@ class CliRetireAlreadyRetiredParityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as root:
             state_root, module_file = self._setup_module(root)
-            def run_binary(*args: str):
-                return run_cli_optional_binary(*args)
-
-            probe = run_binary("--help")
+            probe = run_cli_optional_binary("--help")
             if probe is None:
                 return
 
-            first, second = self._run_twice(run_binary, state_root, module_file)
+            first, second = self._run_twice(run_cli_optional_binary, state_root, module_file)
             self.assertIsNotNone(first)
             self.assertIsNotNone(second)
             self.assertEqual(first.returncode, 0)
