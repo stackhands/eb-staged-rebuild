@@ -27,6 +27,42 @@ class CliRunEnvMinFreeBytesParityTests(unittest.TestCase):
                     binary.stderr,
                 )
 
+    def test_dry_run_refuses_when_the_reserve_exceeds_free_space(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            software = os.path.join(root, "software")
+            modules = os.path.join(root, "modules")
+            state = os.path.join(root, "state", "missing")
+            os.makedirs(software)
+            os.makedirs(modules)
+            args = (
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--state-root",
+                state,
+                "--backend",
+                "installpath",
+                "--dry-run",
+                "--min-free-bytes",
+                "18446744073709551615",
+                "--",
+                "demo.eb",
+            )
+            proc = run_cli(*args)
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("dry-run would refuse:", proc.stdout)
+            self.assertIn("--min-free-bytes requires 18446744073709551615", proc.stdout)
+            self.assertIn("backend:", proc.stdout)
+            self.assertFalse(os.path.lexists(state))
+            binary = run_cli_optional_binary(*args)
+            if binary is not None:
+                self.assertEqual(binary.returncode, 2)
+                self.assertIn("dry-run would refuse:", binary.stdout)
+                self.assertIn("--min-free-bytes requires 18446744073709551615", binary.stdout)
+                self.assertFalse(os.path.lexists(os.path.join(root, "state")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -223,6 +223,22 @@ def _check_free_space(path, minimum):
         )
 
 
+def _statvfs_target(path):
+    """The path ``statvfs`` can read for a state root that may not exist yet.
+
+    A dry run must not create the state root. The reserve is the free space
+    of the filesystem the directory would be created on, which is the nearest
+    existing ancestor.
+    """
+    current = abspath(path)
+    while not os.path.lexists(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return current
+
+
 def _check_stage_filesystem(state_root, software, rels):
     for rel in rels:
         target_parent = os.path.dirname(os.path.join(software, rel))
@@ -1654,6 +1670,11 @@ def _dry_run(spec, probes, faults):
         path = os.path.join(spec.software, rel)
         if lstat_kind(path) == "symlink":
             problems.append(f"{path} is a symlink")
+    if spec.min_free_bytes is not None:
+        try:
+            _check_free_space(_statvfs_target(spec.state_root), spec.min_free_bytes)
+        except (Refused, OSError) as exc:
+            problems.append(str(exc))
     ctx = _Ctx(spec, os.path.join(spec.state_root, "generations", "<run-id>"), faults)
     if spec.backend == "bwrap":
         cmd, _env = bwrap_command(ctx)

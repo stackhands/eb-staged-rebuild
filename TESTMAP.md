@@ -173,6 +173,7 @@ rebuild command implemented by the Zig binary.
 | TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
 | TransactionTests.test_dry_run_creates_no_state_and_changes_nothing | differential "run --dry-run, installpath", "run --dry-run, auto", "run --dry-run, userns" |
+| TransactionTests.test_dry_run_refuses_a_short_generation_filesystem | `zig/engine.zig` test "a dry run refuses a short generation filesystem" |
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
 | TransactionTests.test_symlink_rebuild_target_is_refused_before_build | differential "run, symlinked target" |
 | TransactionTests.test_module_path_cannot_escape_software_root | differential "run, module escapes" |
