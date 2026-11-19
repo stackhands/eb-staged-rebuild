@@ -230,11 +230,11 @@ case_list() {
 case_rollback-to() {
     run_example example-7
     step 0 eb-staged-rebuild list --state-root "$STATE"
-    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-6
     step 0 eb-staged-rebuild list --state-root "$STATE"
-    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-5
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-6
     step 0 eb-staged-rebuild rollback --state-root "$STATE" --latest
-    step 0 eb-staged-rebuild status --state-root "$STATE" example-5
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
     step 2 eb-staged-rebuild rollback --state-root "$STATE" --to example-7
 }
 
