@@ -71,13 +71,13 @@ For =resume=, =rollback= and =status=, =RUN_ID= names a run, or a retire record,
 | Option         | Meaning                                                                                                                                                      |
 |----------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =-h=, =--help= | Print the usage on stdout and exit 0.                                                                                                                        |
-| =--version=    | Print the version on stdout and exit 0. The Python package prints =eb-staged-rebuild 1.0.0=; the binary adds its target, build mode, Zig version and commit. |
+| =--version=    | Print the version on stdout and exit 0. The Python package prints =eb-staged-rebuild X.Y.Z=; the binary adds its target, build mode, Zig version and commit. |
 
 The binary's commit is the one =zig build= was given with =-Dcommit=, or =unknown=.
-Built with =zig build -Drelease=true -Dcommit=c44b8ad=, it prints:
+Built with =zig build -Drelease=true -Dcommit=abc1234=, it prints:
 
 #+begin_example
-eb-staged-rebuild 1.0.0 (x86_64-linux-musl, safe, zig 0.17.1, c44b8ad)
+eb-staged-rebuild X.Y.Z (x86_64-linux-musl, safe, zig 0.17.1, abc1234)
 #+end_example
 
 Each command takes the options of its section below.

@@ -1,1 +1,0 @@
-A how-to guide for the ledger: record each rebuild in a signed ledger. It runs on the example site of the other guides, with eb-stack 0.7.0 and keys made with openssl, and shows the records the run and its rollback wrote.

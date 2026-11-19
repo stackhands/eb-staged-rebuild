@@ -1,1 +1,0 @@
-The guides to removing old trees and to retiring a module file show what `gc` and `retire` print now that they remove a run's generation and move the module file's links: a `remove:` line for each generation, and the `would retire the link`, `retired the link` and `restored the link` lines.
