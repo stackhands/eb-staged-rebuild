@@ -139,10 +139,14 @@ fn openWritable(a: Allocator, directory: []const u8, why: *[]const u8) Error!Win
     };
     const mode = info.perm();
     const sealed = mode & 0o200 == 0;
-    if (sealed and linux.errno(atomic.ops.fchmod(fd, mode | 0o300)) != .SUCCESS) {
-        sys.close(fd);
-        why.* = try a.print("{s} is not writable and its mode could not be opened", .{directory});
-        return error.Refused;
+    if (sealed) {
+        const rc = atomic.ops.fchmod(fd, mode | 0o300);
+        const failed = linux.errno(rc);
+        if (failed != .SUCCESS) {
+            sys.close(fd);
+            why.* = main_mod.errnoPath(a, failed, directory);
+            return error.Refused;
+        }
     }
     return .{ .fd = fd, .mode = mode, .sealed = sealed };
 }
@@ -477,6 +481,47 @@ test "a generation prefix becomes the stable prefix, and a tight binary is refus
     // Same length, different bytes: the C string is replaced, the NUL stays.
     const same = try rewriteBinary(a, "/aaa/lib\x00next\x00", "/aaa", "/bbb", "libdemo.so", &why);
     try std.testing.expectEqualStrings("/bbb/lib\x00next\x00", same);
+}
+
+fn readOnlyChmod(_: sys.fd_t, _: u32) usize {
+    return @as(usize, @bitCast(@as(isize, -@as(isize, @backingInt(linux.E.ROFS)))));
+}
+
+test "a read-only directory names that directory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-ro-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o755);
+    defer {
+        var restore: [sys.path_max:0]u8 = undefined;
+        if (sys.z(&restore, root)) |z| {
+            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755, 0);
+        } else |_| {}
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const old = "/state/generations/run1";
+    const file = try std.fmt.allocPrint(a, "{s}/tool", .{root});
+    const body = try std.fmt.allocPrint(a, "prefix {s} suffix", .{old});
+    {
+        const fd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644);
+        try sys.writeAll(fd, body);
+        sys.close(fd);
+    }
+    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555, 0)) == .SUCCESS);
+    defer atomic.ops.* = .{};
+    atomic.ops.fchmod = readOnlyChmod;
+    var why: []const u8 = "";
+    try std.testing.expectError(error.Refused, rewriteTree(a, root, old, "/stable", &why));
+    try std.testing.expect(std.mem.indexOf(u8, why, "[Errno 30] Read-only file system: '") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, root) != null);
+    atomic.ops.* = .{};
+    const fd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    defer sys.close(fd);
+    const text = try fsx.readAll(a, fd, 256);
+    try std.testing.expectEqualStrings(body, text);
 }
 
 test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" {

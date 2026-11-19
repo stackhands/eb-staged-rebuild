@@ -121,6 +121,19 @@ fn strerror(e: linux.E) []const u8 {
     return common.sys.errnoText(e) orelse @tagName(e);
 }
 
+/// The exchange error an operator sees. A full, read-only or over-quota
+/// filesystem names the live directory; other errnos stay as they were.
+fn exchangeFailure(a: Allocator, e: linux.E, live: []const u8) []const u8 {
+    const base = a.print("[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) }) catch "swap failed";
+    if (e != .NOSPC and e != .ROFS and e != .DQUOT) return base;
+    const described = main_mod.errnoPath(a, e, live);
+    const close = std.mem.indexOf(u8, described, "] ") orelse return base;
+    return a.print(
+        "{s}] renameat2(RENAME_EXCHANGE): {s}",
+        .{ described[0..close], described[close + 2 ..] },
+    ) catch base;
+}
+
 /// swap_directories: exchange `live` and `staged` (siblings, both real
 /// directories). Afterwards `staged` holds the retired live tree.
 pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8, allow_exchange: bool, allow_fallback: bool, faults: atomic.Faults, step_prefix: []const u8, why: *Why) Error!Method {
@@ -149,9 +162,9 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
             return .@"renameat2-exchange";
         }
         if (e != .INVAL and e != .NOSYS and e != .OPNOTSUPP)
-            return fail(a, why, error.Failed, "[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) });
+            return fail(a, why, error.Failed, "{s}", .{exchangeFailure(a, e, live)});
         if (!allow_fallback)
-            return fail(a, why, error.Failed, "[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) });
+            return fail(a, why, error.Failed, "{s}", .{exchangeFailure(a, e, live)});
     }
     if (!allow_fallback)
         return fail(a, why, error.Failed, "RENAME_EXCHANGE is required", .{});
@@ -258,6 +271,12 @@ fn deniedExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
     return .PERM;
 }
 
+var exchange_errno: linux.E = .NOSPC;
+
+fn configuredExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
+    return exchange_errno;
+}
+
 fn unsupportedExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
     return .OPNOTSUPP;
 }
@@ -291,6 +310,28 @@ test "an exchange error other than unsupported leaves live unchanged" {
     try testing.expectEqualStrings("[Errno 1] renameat2(RENAME_EXCHANGE): Operation not permitted", why.msg);
     ops.* = .{};
     try expectOriginal(a, p);
+}
+
+test "a full or read-only exchange names the live directory" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    defer ops.* = .{};
+    const cases = [_]linux.E{ .NOSPC, .ROFS, .DQUOT };
+    for (cases) |errno_value| {
+        const p = try testPair(a, "full");
+        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+        exchange_errno = errno_value;
+        ops.exchange = configuredExchange;
+        var why: Why = .{};
+        try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+        try testing.expect(std.mem.indexOf(u8, why.msg, "[Errno ") != null);
+        try testing.expect(std.mem.indexOf(u8, why.msg, "renameat2(RENAME_EXCHANGE): ") != null);
+        try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
+        try testing.expect(std.mem.endsWith(u8, why.msg, "'"));
+        ops.* = .{};
+        try expectOriginal(a, p);
+    }
 }
 
 test "an unsupported exchange uses the fallback" {
