@@ -4,36 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
-import subprocess
-import sys
 import tempfile
 import unittest
 
-
-def _python_probe(path: str, eb: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return subprocess.run(
-        [sys.executable, "-m", "eb_staged_rebuild", "probe", "--json", "--path", path, "--eb", eb],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _zig_probe(path: str, eb: str) -> subprocess.CompletedProcess[str]:
-    repo = pathlib.Path(__file__).resolve().parents[1]
-    zig_bin = repo / "zig-out" / "bin" / "eb-staged-rebuild"
-    if not zig_bin.exists():
-        raise unittest.SkipTest(f"zig binary not found at {zig_bin}")
-    return subprocess.run(
-        [str(zig_bin), "probe", "--json", "--path", path, "--eb", eb],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from tests.support import run_cli, run_cli_optional_binary
 
 
 class ProbeNonUtf8VersionOutputTests(unittest.TestCase):
@@ -48,13 +22,15 @@ class ProbeNonUtf8VersionOutputTests(unittest.TestCase):
                 )
             os.chmod(eb, 0o755)
 
-            py = _python_probe(root, eb)
-            zig = _zig_probe(root, eb)
-
+            py = run_cli("probe", "--json", "--path", root, "--eb", eb)
             self.assertEqual(py.returncode, 0, py.stdout + py.stderr)
-            self.assertEqual(zig.returncode, 0, zig.stdout + zig.stderr)
             self.assertNotIn("Traceback", py.stderr)
             py_easybuild = json.loads(py.stdout)["easybuild"]
+
+            zig = run_cli_optional_binary("probe", "--json", "--path", root, "--eb", eb)
+            if zig is None:
+                return
+            self.assertEqual(zig.returncode, 0, zig.stdout + zig.stderr)
             zig_easybuild = json.loads(zig.stdout)["easybuild"]
             self.assertEqual(py_easybuild["framework_version"], zig_easybuild["framework_version"])
             self.assertEqual(py_easybuild["stage_path_keys"], zig_easybuild["stage_path_keys"])

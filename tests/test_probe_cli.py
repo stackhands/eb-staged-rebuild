@@ -2,26 +2,19 @@ import contextlib
 import io
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
 from eb_staged_rebuild.cli import main
-
-from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.probe import (
     BWRAP_STAGE_KEYS_READ_FROM_SOURCE,
     probe_all,
     probe_rename_exchange,
     stage_paths_from_bwrap_info,
 )
-
-
-# TOOL_BIN runs the command-line tests against another build of the tool;
-# unset, they run this package with this interpreter.
-CLI = [os.environ["TOOL_BIN"]] if os.environ.get("TOOL_BIN") else [sys.executable, "-m", "eb_staged_rebuild"]
+from tests.support import run_cli_or_binary
 
 
 def _write(path, text):
@@ -38,13 +31,8 @@ class ProbeTests(unittest.TestCase):
     def test_probe_no_create_refuses_a_missing_path(self):
         with tempfile.TemporaryDirectory() as root:
             missing = os.path.join(root, "missing")
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            probe = subprocess.run(
-                [*CLI, "probe", "--path", missing, "--no-create", "--eb", "missing-eb"],
-                env=env,
-                capture_output=True,
-                text=True,
+            probe = run_cli_or_binary(
+                "probe", "--path", missing, "--no-create", "--eb", "missing-eb"
             )
             self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
             self.assertIn(f"probe path does not exist: {missing}", probe.stderr)
@@ -86,13 +74,8 @@ class ProbeTests(unittest.TestCase):
 
     def test_probe_require_eb_fails_when_eb_is_missing(self):
         with tempfile.TemporaryDirectory() as root:
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            probe = subprocess.run(
-                [*CLI, "probe", "--path", root, "--require-eb", "--eb", "missing-eb"],
-                env=env,
-                capture_output=True,
-                text=True,
+            probe = run_cli_or_binary(
+                "probe", "--path", root, "--require-eb", "--eb", "missing-eb"
             )
             self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
             self.assertIn("EasyBuild:", probe.stdout)
@@ -131,9 +114,7 @@ class CliTests(unittest.TestCase):
                 module_file,
                 f'local root = "{install}"\nsetenv("EBROOTDEMO", root)\n',
             )
-            env = dict(os.environ)
-            cmd = [
-                *CLI,
+            completed = run_cli_or_binary(
                 "run",
                 "--software",
                 software,
@@ -146,34 +127,19 @@ class CliTests(unittest.TestCase):
                 "demo/1",
                 "--",
                 "demo-1.eb",
-            ]
-            completed = subprocess.run(cmd, cwd=os.path.dirname(os.path.dirname(__file__)) or ".", env=env, capture_output=True, text=True)
-            # The package lives at the repo root. unittest's cwd is the repo when
-            # launched from there; set PYTHONPATH explicitly.
-            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            completed = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            )
             self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
             self.assertIn("dry-run", completed.stdout)
             self.assertFalse(os.path.isdir(os.path.join(root, "state", "runs")))
             self.assertIn("v0\n", _read(os.path.join(install, "PAYLOAD")))
 
-            probe = subprocess.run(
-                [*CLI, "probe", "--path", root, "--json", "--eb", "missing-eb"],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            probe = run_cli_or_binary("probe", "--path", root, "--json", "--eb", "missing-eb")
             self.assertEqual(probe.returncode, 0, probe.stderr)
             report = json.loads(probe.stdout)
             self.assertIn("rename_exchange", report)
             self.assertEqual(report["flock"]["cross_node"], "unmeasured")
 
-            resolved = subprocess.run(
-                [*CLI, "resolve", module_file],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            resolved = run_cli_or_binary("resolve", module_file)
             self.assertEqual(resolved.returncode, 0, resolved.stderr)
             body = json.loads(resolved.stdout)
             self.assertEqual(body["root"], install)
@@ -220,14 +186,7 @@ class StatusJsonTests(unittest.TestCase):
                     }
                 ),
             )
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            completed = subprocess.run(
-                [*CLI, "status", "--state-root", state, "--json"],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            completed = run_cli_or_binary("status", "--state-root", state, "--json")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         document = json.loads(completed.stdout)
         self.assertEqual(
@@ -265,14 +224,7 @@ class StatusJsonTests(unittest.TestCase):
 
     def test_status_json_of_an_empty_root_is_an_empty_document(self):
         with tempfile.TemporaryDirectory() as root:
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            completed = subprocess.run(
-                [*CLI, "status", "--state-root", root, "--json"],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
+            completed = run_cli_or_binary("status", "--state-root", root, "--json")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {"runs": []})
 

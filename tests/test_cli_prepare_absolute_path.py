@@ -3,33 +3,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ZIG_BIN = os.path.join(REPO, "zig-out", "bin", "eb-staged-rebuild")
-
-
-def _run_python(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "eb_staged_rebuild.cli", *args],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _run_binary(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [ZIG_BIN, *args],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from tests.support import run_cli, run_cli_optional_binary
 
 
 class PrepareAbsolutePathCliTests(unittest.TestCase):
@@ -54,14 +31,14 @@ class PrepareAbsolutePathCliTests(unittest.TestCase):
                 "--",
                 "demo.eb",
             )
-            py_done = _run_python(*args)
+            py_done = run_cli(*args)
             self.assertEqual(py_done.returncode, 2, py_done.stdout + py_done.stderr)
             self.assertIn(
                 "publication preparation executable must be an absolute path",
                 py_done.stderr,
             )
-            if os.path.exists(ZIG_BIN):
-                zig_done = _run_binary(*args)
+            zig_done = run_cli_optional_binary(*args)
+            if zig_done is not None:
                 self.assertEqual(zig_done.returncode, 2, zig_done.stdout + zig_done.stderr)
                 self.assertEqual(py_done.stdout, zig_done.stdout)
                 self.assertEqual(py_done.stderr, zig_done.stderr)
