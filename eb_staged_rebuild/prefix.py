@@ -139,11 +139,17 @@ def _with_writable_dir(directory, write):
         if mode & stat.S_IWUSR:
             return write()
         acls = _directory_acls(fd)
-        os.fchmod(fd, mode | stat.S_IWUSR | stat.S_IXUSR)
+        try:
+            os.fchmod(fd, mode | stat.S_IWUSR | stat.S_IXUSR)
+        except OSError as error:
+            _raise_os(error, directory)
         try:
             return write()
         finally:
-            os.fchmod(fd, mode)
+            try:
+                os.fchmod(fd, mode)
+            except OSError as error:
+                _raise_os(error, directory)
             _restore_directory_acls(fd, acls)
     finally:
         os.close(fd)
@@ -296,6 +302,17 @@ def _discard(path):
         pass
 
 
+def _raise_os(error, path):
+    """Re-raise ``error`` with ``path`` when the call recorded no filename.
+
+    ``os.write``, ``os.fsync`` and ``os.fchmod`` leave ``filename`` empty, so
+    a full or read-only filesystem otherwise prints an errno and no path.
+    """
+    if error.filename is not None:
+        raise error
+    raise OSError(error.errno, error.strerror, path) from error
+
+
 def _commit(names, ready):
     """Point every name at ``ready``'s inode, then drop ``ready``'s directory entry."""
     if len(names) == 1:
@@ -313,8 +330,12 @@ def _commit(names, ready):
                     raise Refused(f"temporary link is not a private file: {temporary}")
                 os.unlink(temporary)
             os.link(ready, temporary)
-            os.replace(temporary, name)
-            fsync_dir(parent)
+            try:
+                os.replace(temporary, name)
+                fsync_dir(parent)
+            except BaseException:
+                _discard(temporary)
+                raise
 
         _with_writable_dir(parent, publish_one)
     os.unlink(ready)
@@ -358,6 +379,10 @@ def _publish(names, image, source):
             _set_user_xattrs(fd, attrs)
             _restore_metadata(fd, metadata, mode)
             os.fsync(fd)
+        except OSError as error:
+            os.close(fd)
+            _discard(partial)
+            _raise_os(error, partial)
         except BaseException:
             os.close(fd)
             _discard(partial)
@@ -456,7 +481,7 @@ def _recover(root):
             path = os.path.join(dirpath, name)
             if name.startswith(".") and name.endswith(".ebsr-ready"):
                 found.append(path)
-            elif name.endswith(".ebsr-partial"):
+            elif name.endswith((".ebsr-partial", ".ebsr-link", ".ebsr-symlink")):
                 _discard(path)
     for ready in found:
         stem = os.path.basename(ready)[1:].split(".", 1)[0]
@@ -489,6 +514,9 @@ def rewrite_tree(root, old, new):
     Each regular file is published by renaming a completed temporary file
     over it, or, when several names share the inode, by linking that file
     onto every name. The previous inode stays until the new one is durable.
+    A later call finishes a replacement left in ``.<inode>.ebsr-ready`` and
+    drops ``.ebsr-link`` and ``.ebsr-symlink`` temporaries, so a killed
+    hard-link publish can be repeated.
     """
     if old == new:
         return

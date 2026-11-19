@@ -181,6 +181,8 @@ def swap_directories(
                         f"{recovery_error}"
                     ) from recovery_error
             if error.errno not in UNSUPPORTED_EXCHANGE_ERRNOS:
+                if error.errno in (errno.ENOSPC, errno.EROFS, errno.EDQUOT) and error.filename is None:
+                    raise OSError(error.errno, error.strerror, live) from error
                 raise
             if not allow_fallback:
                 raise

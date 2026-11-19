@@ -1,1 +1,0 @@
-`run` accepts an opt-in `--build-dir DIR` option that passes `--buildpath=DIR` to EasyBuild and removes `EASYBUILD_BUILDPATH` from its environment, while refusing directories inside the generation root or the live `--software` or `--modules` trees.

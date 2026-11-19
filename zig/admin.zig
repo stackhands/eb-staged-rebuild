@@ -267,6 +267,7 @@ fn lexists(p: []const u8) bool {
 const Plan = struct { module: []const u8, data: []const u8, software_dir: []const u8 };
 
 fn plan(c: *Ctx, state_root: []const u8, module_in: []const u8) Plan {
+    if (!std.unicode.utf8ValidateSlice(module_in)) refuse("module path is not UTF-8 text", .{});
     const module = abspath(c.a, module_in);
     if (isWithin(c.a, module, state_root)) refuse("{s} is inside the state root", .{module});
     for (main_mod.listJournals(c.a, state_root)) |j| {

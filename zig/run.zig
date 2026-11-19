@@ -1447,25 +1447,34 @@ fn availableBytes(info: StatFs) u128 {
     return blocks * unit;
 }
 
-fn checkFreeSpace(r: *R) E!void {
-    const minimum = r.spec.min_free_bytes orelse return;
+/// The refusal `--min-free-bytes` would print, or null when `path` has room.
+/// `path` must already exist. The dry run passes the nearest existing
+/// ancestor so it can answer without creating the state root.
+pub fn freeSpaceRefusal(a: Allocator, path: []const u8, minimum: u128) ?[]const u8 {
     var path_buf: [sys.path_max:0]u8 = undefined;
-    const path = sys.z(&path_buf, r.spec.state_root) catch
-        return r.refuse("path is too long: {s}", .{r.spec.state_root});
+    const zpath = sys.z(&path_buf, path) catch
+        return a.print("path is too long: {s}", .{path}) catch "path is too long";
     var info: StatFs = undefined;
-    const result = linux.syscall2(.statfs, @intFromPtr(path.ptr), @intFromPtr(&info));
+    const result = linux.syscall2(.statfs, @intFromPtr(zpath.ptr), @intFromPtr(&info));
     if (linux.errno(result) != .SUCCESS)
-        return r.refuse("cannot inspect free space on {s}", .{r.spec.state_root});
+        return a.print("cannot inspect free space on {s}", .{path}) catch "cannot inspect free space";
     const available = availableBytes(info);
     if (available < minimum)
-        return r.refuse(
+        return a.print(
             "generation filesystem has {d} bytes available; --min-free-bytes requires {d}",
             .{ available, minimum },
-        );
+        ) catch "generation filesystem is short";
+    return null;
+}
+
+fn checkFreeSpace(r: *R) E!void {
+    const minimum = r.spec.min_free_bytes orelse return;
+    if (freeSpaceRefusal(r.a, r.spec.state_root, minimum)) |msg|
+        return r.refuse("{s}", .{msg});
 }
 
 /// run without --dry-run.
-pub fn run(r: *R, probes: Py) E!Result {
+pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     const a = r.a;
     if (std.mem.eql(u8, r.spec.backend, "bwrap") and !usable(probes, "bwrap")) {
         const b = pyfmt.get(probes, "bwrap") orelse Py{ .dict = &.{} };
@@ -1477,15 +1486,7 @@ pub fn run(r: *R, probes: Py) E!Result {
         const reason = if (pyfmt.truthy(pyfmt.get(u, "reason"))) s(pyfmt.get(u, "reason")) else "the user-namespace sandbox is not usable";
         return r.refuse("{s}; refusing to run the userns backend", .{reason});
     }
-    var policy: Py = .null;
-    if (r.spec.ledger_config) |lc| {
-        var why: []const u8 = "";
-        policy = publish_mod.loadConfig(a, lc, &why) catch |err| return switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            else => r.refuse("{s}", .{why}),
-        };
-        r.spec.ledger_config = s(pyfmt.get(policy, "path"));
-    }
+    const policy: Py = ledger_policy;
     const learned = try learnRels(r);
     const rels = learned.rels;
     for (rels) |rel| try checkInstallDir(r, rel);

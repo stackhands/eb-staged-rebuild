@@ -1,7 +1,7 @@
 //! The install-directory assignment in an EasyBuild module file, matched as
 //! the Python tool's regular expressions match it:
 //!   Lua  (?m)^local root\s*=\s*"((?:\\.|[^"\\])*)"\s*$
-//!   Tcl  (?m)^set root\s+(?:"([^"]*)"|(\S+))\s*$
+//!   Tcl  (?m)^set root\s+(?:"([^"]*)"|\{([^}]*)\}|(\S+))\s*$
 //! \s is Python's Unicode whitespace and includes newlines, so an assignment
 //! may span lines; $ is the end of the text or the position before a newline.
 const std = @import("std");
@@ -74,6 +74,11 @@ fn tclAt(s: []const u8, start: usize) ?[]const u8 {
             if (tailOk(s, close + 1)) return s[i + 1 .. close];
         }
     }
+    if (s[i] == '{') {
+        if (std.mem.findScalarPos(u8, s, i + 1, '}')) |close| {
+            if (tailOk(s, close + 1)) return s[i + 1 .. close];
+        }
+    }
     // (\S+): the whole run of non-whitespace, then \s*$.
     var j = i;
     while (j < s.len and wsAt(s, j) == null) j += pytext.nextChar(s[j..]).len;
@@ -98,6 +103,7 @@ test "parseRoot follows the Python patterns" {
     try std.testing.expectEqual(Syntax.tcl, parseRoot("set root /opt/b\nlocal root = \"/opt/a\"\n").?.syntax);
     try std.testing.expectEqualStrings("/opt/b", parseRoot("set root    /opt/b  \n").?.path);
     try std.testing.expectEqualStrings("/q r", parseRoot("set root \"/q r\"\n").?.path);
+    try std.testing.expectEqualStrings("/q r", parseRoot("set root {/q r}\n").?.path);
     try std.testing.expectEqualStrings("a\\\"b", parseRoot("local root = \"a\\\"b\"").?.path);
     // \s spans lines.
     try std.testing.expectEqualStrings("/m", parseRoot("local root\n=\n\"/m\"\n").?.path);

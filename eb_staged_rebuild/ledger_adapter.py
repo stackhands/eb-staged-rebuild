@@ -10,6 +10,7 @@ the log, so the caller retries the same record and ``build.event_id`` makes
 the retry idempotent.
 """
 
+import errno
 import hashlib
 import json
 import math
@@ -17,6 +18,7 @@ import os
 import re
 import selectors
 import signal
+import stat
 import subprocess
 import time
 
@@ -90,8 +92,16 @@ def load_config(path):
     """Read and check a ``--ledger-config`` file, and fill in its defaults."""
     path = os.path.abspath(path)
     try:
-        with open(path, encoding="utf-8") as handle:
-            config = json.load(handle)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "Invalid argument", path)
+            with os.fdopen(fd, encoding="utf-8") as handle:
+                fd = None
+                config = json.load(handle)
+        finally:
+            if fd is not None:
+                os.close(fd)
     except (OSError, ValueError) as exc:
         raise Refused(f"cannot read ledger config {path}: {exc}") from exc
     if not isinstance(config, dict):
