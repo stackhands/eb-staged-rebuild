@@ -4,6 +4,7 @@ const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
 const common = @import("zig_common");
+const main_mod = @import("main.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -196,13 +197,10 @@ fn readInt(a: Allocator, path: []const u8) union(enum) { ok: i64, err: []const u
     return .{ .ok = n };
 }
 
+/// Python's str() of an OSError that carries a filename. `main.osError`
+/// already formats that text, including an error that is not an OSError.
 fn osText(a: Allocator, err: anyerror, path: []const u8) []const u8 {
-    const t: struct { n: u32, s: []const u8 } = switch (err) {
-        error.NotFound => .{ .n = 2, .s = "No such file or directory" },
-        error.AccessDenied => .{ .n = 13, .s = "Permission denied" },
-        else => return a.print("{t}: '{s}'", .{ err, path }) catch path,
-    };
-    return a.print("[Errno {d}] {s}: '{s}'", .{ t.n, t.s, path }) catch path;
+    return main_mod.osError(a, err, path);
 }
 
 fn probeUserNamespaces(a: Allocator) Py {
@@ -772,6 +770,14 @@ fn writeProc(a: Allocator, path: []const u8, text: []const u8) ?[]const u8 {
     defer sys.close(fd);
     sys.writeAll(fd, text) catch |err| return a.print("{s}: {s}", .{ path, sys.describe(err) }) catch oom();
     return null;
+}
+
+test "osText matches Python's OSError text" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    try std.testing.expectEqualStrings("[Errno 17] File exists: '/tmp/left'", osText(a, error.Exists, "/tmp/left"));
+    try std.testing.expectEqualStrings("[Errno 2] No such file or directory: \"/tmp/a'b\"", osText(a, error.NotFound, "/tmp/a'b"));
 }
 
 test "parentId reads a uid_map" {
