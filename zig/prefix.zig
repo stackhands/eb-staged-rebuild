@@ -5,7 +5,10 @@
 //! keeps an ELF string table's following entries where they are. The bytes
 //! are published by renaming a finished temporary file, so a crash does not
 //! tear the original, a symbolic link is not followed, and a file that is
-//! not owner-writable is not chmod'd. The completion stamp is left alone.
+//! not owner-writable is not chmod'd. A later rewrite finishes a replacement
+//! left in `.<inode>.ebsr-ready` and drops `.ebsr-link` and `.ebsr-symlink`
+//! temporaries, so a killed hard-link publish can be repeated. The completion
+//! stamp is left alone.
 const std = @import("std");
 const linux = std.os.linux;
 const common = @import("zig_common");
@@ -139,10 +142,14 @@ fn openWritable(a: Allocator, directory: []const u8, why: *[]const u8) Error!Win
     };
     const mode = info.perm();
     const sealed = mode & 0o200 == 0;
-    if (sealed and linux.errno(atomic.ops.fchmod(fd, mode | 0o300)) != .SUCCESS) {
-        sys.close(fd);
-        why.* = try a.print("{s} is not writable and its mode could not be opened", .{directory});
-        return error.Refused;
+    if (sealed) {
+        const rc = atomic.ops.fchmod(fd, mode | 0o300);
+        const failed = linux.errno(rc);
+        if (failed != .SUCCESS) {
+            sys.close(fd);
+            why.* = main_mod.errnoPath(a, failed, directory);
+            return error.Refused;
+        }
     }
     return .{ .fd = fd, .mode = mode, .sealed = sealed };
 }
@@ -276,7 +283,10 @@ fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: 
             }
         }.go;
         link(ready, temporary) catch |err| return fail(a, why, err, name);
-        sys.renameat(fsx.cwd, temporary, fsx.cwd, name) catch |err| return fail(a, why, err, name);
+        sys.renameat(fsx.cwd, temporary, fsx.cwd, name) catch |err| {
+            sys.unlinkat(fsx.cwd, temporary, 0) catch {};
+            return fail(a, why, err, name);
+        };
         atomic.fsyncDir(parent) catch {};
     }
     sys.unlinkat(fsx.cwd, ready, 0) catch {};
@@ -338,9 +348,19 @@ fn rewriteSymlink(a: Allocator, path: []const u8, old: []const u8, new: []const 
     atomic.fsyncDir(parent) catch {};
 }
 
+const private_suffixes = [_][]const u8{
+    ".ebsr-partial",
+    ".ebsr-ready",
+    ".ebsr-symlink",
+    ".ebsr-link",
+};
+
 fn ours(name: []const u8) bool {
     if (std.mem.eql(u8, name, skip_name)) return true;
-    return std.mem.endsWith(u8, name, ".ebsr-partial") or std.mem.endsWith(u8, name, ".ebsr-ready") or std.mem.endsWith(u8, name, ".ebsr-symlink") or std.mem.endsWith(u8, name, ".ebsr-link");
+    for (private_suffixes) |suffix| {
+        if (std.mem.endsWith(u8, name, suffix)) return true;
+    }
+    return false;
 }
 
 const Group = struct { dev: u64, ino: u64, nlink: u32, names: std.ArrayList([]const u8) };
@@ -402,8 +422,101 @@ fn containsChunked(fd: fsx.fd_t, old: []const u8) !bool {
     }
 }
 
+fn discardPath(path: []const u8) void {
+    sys.unlinkat(fsx.cwd, path, 0) catch {};
+}
+
+fn pathLess(_: void, left: []const u8, right: []const u8) bool {
+    return std.mem.order(u8, left, right) == .lt;
+}
+
+/// Finish `.<inode>.ebsr-ready` left by a killed publish, then drop private
+/// link temporaries. The inode in the name is the inode that had not yet
+/// been replaced. A `.ebsr-link` is another name for the replacement, and
+/// leaving it makes the link count disagree with the files in the tree.
+fn recoverTree(a: Allocator, root: []const u8, why: *[]const u8) Error!void {
+    var readies: std.ArrayList([]const u8) = .empty;
+    try sweepReady(a, root, &readies, true, why);
+    for (readies.items) |ready| {
+        const inode = readyInode(ready) orelse continue;
+        var names: std.ArrayList([]const u8) = .empty;
+        try namesOnInode(a, root, inode, ready, &names, why);
+        if (names.items.len == 0) {
+            discardPath(ready);
+            continue;
+        }
+        std.mem.sort([]const u8, names.items, {}, pathLess);
+        try commitNames(a, names.items, ready, why);
+    }
+    var gone: std.ArrayList([]const u8) = .empty;
+    try sweepReady(a, root, &gone, false, why);
+}
+
+fn readyInode(ready: []const u8) ?u64 {
+    const base = std.fs.path.basename(ready);
+    if (base.len < 2 or base[0] != '.') return null;
+    const rest = base[1..];
+    const dot = std.mem.indexOfScalar(u8, rest, '.') orelse return null;
+    if (!std.mem.eql(u8, rest[dot + 1 ..], "ebsr-ready")) return null;
+    return std.fmt.parseInt(u64, rest[0..dot], 10) catch null;
+}
+
+fn sweepReady(a: Allocator, root: []const u8, found: *std.ArrayList([]const u8), keep_ready: bool, why: *[]const u8) Error!void {
+    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+    defer sys.close(fd);
+    var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
+    var subdirs: std.ArrayList([]const u8) = .empty;
+    while (true) {
+        const entry = it.next() catch |err| return fail(a, why, err, root);
+        const item = entry orelse break;
+        const child = try std.fs.path.join(a, &.{ root, item.name });
+        const kind = main_mod.lstatKind(child);
+        if (std.mem.eql(u8, kind, "symlink")) continue;
+        if (std.mem.eql(u8, kind, "dir")) {
+            try subdirs.append(a, child);
+            continue;
+        }
+        if (keep_ready and std.mem.startsWith(u8, item.name, ".") and std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
+            try found.append(a, child);
+        } else if (!std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
+            for (private_suffixes) |suffix| {
+                if (std.mem.endsWith(u8, item.name, suffix)) {
+                    discardPath(child);
+                    break;
+                }
+            }
+        }
+    }
+    for (subdirs.items) |dir| try sweepReady(a, dir, found, keep_ready, why);
+}
+
+fn namesOnInode(a: Allocator, root: []const u8, inode: u64, ready: []const u8, names: *std.ArrayList([]const u8), why: *[]const u8) Error!void {
+    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+    defer sys.close(fd);
+    var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
+    var subdirs: std.ArrayList([]const u8) = .empty;
+    while (true) {
+        const entry = it.next() catch |err| return fail(a, why, err, root);
+        const item = entry orelse break;
+        if (ours(item.name)) continue;
+        const child = try std.fs.path.join(a, &.{ root, item.name });
+        if (std.mem.eql(u8, child, ready)) continue;
+        const kind = main_mod.lstatKind(child);
+        if (std.mem.eql(u8, kind, "symlink")) continue;
+        if (std.mem.eql(u8, kind, "dir")) {
+            try subdirs.append(a, child);
+            continue;
+        }
+        if (!std.mem.eql(u8, kind, "file")) continue;
+        const info = fsx.statAt(fsx.cwd, child, false) catch continue;
+        if (info.isReg() and info.ino == inode) try names.append(a, child);
+    }
+    for (subdirs.items) |dir| try namesOnInode(a, dir, inode, ready, names, why);
+}
+
 fn rewriteTree(a: Allocator, root: []const u8, old: []const u8, new: []const u8, why: *[]const u8) Error!void {
     if (std.mem.eql(u8, old, new)) return;
+    try recoverTree(a, root, why);
     var groups: std.ArrayList(Group) = .empty;
     var links: std.ArrayList([]const u8) = .empty;
     try collect(a, root, &groups, &links, why);
@@ -477,6 +590,107 @@ test "a generation prefix becomes the stable prefix, and a tight binary is refus
     // Same length, different bytes: the C string is replaced, the NUL stays.
     const same = try rewriteBinary(a, "/aaa/lib\x00next\x00", "/aaa", "/bbb", "libdemo.so", &why);
     try std.testing.expectEqualStrings("/bbb/lib\x00next\x00", same);
+}
+
+fn readOnlyChmod(_: sys.fd_t, _: u32) usize {
+    return @as(usize, @bitCast(@as(isize, -@as(isize, @backingInt(linux.E.ROFS)))));
+}
+
+test "a read-only directory names that directory" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-ro-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o755);
+    defer {
+        var restore: [sys.path_max:0]u8 = undefined;
+        if (sys.z(&restore, root)) |z| {
+            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755, 0);
+        } else |_| {}
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const old = "/state/generations/run1";
+    const file = try std.fmt.allocPrint(a, "{s}/tool", .{root});
+    const body = try std.fmt.allocPrint(a, "prefix {s} suffix", .{old});
+    {
+        const fd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644);
+        try sys.writeAll(fd, body);
+        sys.close(fd);
+    }
+    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555, 0)) == .SUCCESS);
+    defer atomic.ops.* = .{};
+    atomic.ops.fchmod = readOnlyChmod;
+    var why: []const u8 = "";
+    try std.testing.expectError(error.Refused, rewriteTree(a, root, old, "/stable", &why));
+    try std.testing.expect(std.mem.indexOf(u8, why, "[Errno 30] Read-only file system: '") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, root) != null);
+    atomic.ops.* = .{};
+    const fd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    defer sys.close(fd);
+    const text = try fsx.readAll(a, fd, 256);
+    try std.testing.expectEqualStrings(body, text);
+}
+
+test "an interrupted hard-link publish is finished on the next rewrite" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-resume-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o755);
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const bindir = try std.fmt.allocPrint(a, "{s}/bin", .{root});
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, bindir)).ptr, 0o755);
+    const old = "/state/generations/run1";
+    const body = try std.fmt.allocPrint(a, "#!{s}/bin/python\n", .{old});
+    const updated = "#!/stable/bin/python\n";
+    const file = try std.fmt.allocPrint(a, "{s}/python", .{bindir});
+    const alias = try std.fmt.allocPrint(a, "{s}/python3", .{bindir});
+    const fd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644);
+    try sys.writeAll(fd, body);
+    sys.close(fd);
+    {
+        var zf: [sys.path_max:0]u8 = undefined;
+        var zt: [sys.path_max:0]u8 = undefined;
+        try std.testing.expect(linux.errno(linux.linkat(linux.AT.FDCWD, (try sys.z(&zf, file)).ptr, linux.AT.FDCWD, (try sys.z(&zt, alias)).ptr, 0)) == .SUCCESS);
+    }
+    const ino = (try fsx.statAt(fsx.cwd, file, false)).ino;
+    const ready = try std.fmt.allocPrint(a, "{s}/.{d}.ebsr-ready", .{ bindir, ino });
+    {
+        const rfd = try sys.openat(fsx.cwd, ready, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, 0o644);
+        try sys.writeAll(rfd, updated);
+        sys.close(rfd);
+    }
+    sys.unlinkat(fsx.cwd, file, 0) catch {};
+    {
+        var zf: [sys.path_max:0]u8 = undefined;
+        var zt: [sys.path_max:0]u8 = undefined;
+        try std.testing.expect(linux.errno(linux.linkat(linux.AT.FDCWD, (try sys.z(&zf, ready)).ptr, linux.AT.FDCWD, (try sys.z(&zt, file)).ptr, 0)) == .SUCCESS);
+    }
+    const leftover = try std.fmt.allocPrint(a, "{s}/.python3.999.ebsr-link", .{bindir});
+    {
+        var zf: [sys.path_max:0]u8 = undefined;
+        var zt: [sys.path_max:0]u8 = undefined;
+        try std.testing.expect(linux.errno(linux.linkat(linux.AT.FDCWD, (try sys.z(&zf, ready)).ptr, linux.AT.FDCWD, (try sys.z(&zt, leftover)).ptr, 0)) == .SUCCESS);
+    }
+    var why: []const u8 = "";
+    try rewriteTree(a, root, old, "/stable", &why);
+    const got = try fsx.statAt(fsx.cwd, file, false);
+    const alias_st = try fsx.statAt(fsx.cwd, alias, false);
+    try std.testing.expectEqual(got.ino, alias_st.ino);
+    try std.testing.expect(got.nlink == 2);
+    const rfd = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    defer sys.close(rfd);
+    const text = try fsx.readAll(a, rfd, 1024);
+    try std.testing.expectEqualStrings(updated, text);
+    try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(leftover), "missing"));
+    try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(ready), "missing"));
+    try rewriteTree(a, root, old, "/stable", &why);
+    const again = try fsx.statAt(fsx.cwd, file, false);
+    try std.testing.expectEqual(got.ino, again.ino);
 }
 
 test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" {

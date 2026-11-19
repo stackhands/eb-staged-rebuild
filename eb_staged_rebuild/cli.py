@@ -239,6 +239,10 @@ def main(argv=None):
     A refusal, an intervention or an ``OSError`` is printed as ``eb-staged-rebuild: MESSAGE``
     and gives exit status 2; otherwise the status is the command's.
     """
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="surrogateescape")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(errors="surrogateescape")
     parser = _parser()
     args = parser.parse_args(argv)
     try:

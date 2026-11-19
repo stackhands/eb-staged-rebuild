@@ -173,6 +173,7 @@ rebuild command implemented by the Zig binary.
 | TransactionTests.test_the_fail_hook_fails_each_step_it_names | fail_matrix "one module: run fails at build.start" |
 | TransactionTests.test_failed_build_never_touches_live_tree | differential "run, eb fails" |
 | TransactionTests.test_dry_run_creates_no_state_and_changes_nothing | differential "run --dry-run, installpath", "run --dry-run, auto", "run --dry-run, userns" |
+| TransactionTests.test_dry_run_refuses_a_short_generation_filesystem | `zig/engine.zig` test "a dry run refuses a short generation filesystem" |
 | TransactionTests.test_missing_rebuild_target_is_refused_before_build | differential "run, no installed target" |
 | TransactionTests.test_symlink_rebuild_target_is_refused_before_build | differential "run, symlinked target" |
 | TransactionTests.test_module_path_cannot_escape_software_root | differential "run, module escapes" |
@@ -223,6 +224,7 @@ rebuild command implemented by the Zig binary.
 | RetireTests.test_refuses_already_retired | differential "retire again" |
 | RetireTests.test_refuses_non_regular_files | differential "retire, a directory", "retire, a symlinked module file", "retire, no module file" |
 | RetireTests.test_refuses_module_without_root | differential "retire, no root assignment" |
+| RetireCliParityTests.test_retire_refuses_non_utf8_module_path | CLI reproducer: `eb-staged-rebuild retire --state-root <state> --module-file <non-UTF-8 path>` returns exit 2 with `module path is not UTF-8 text` in both implementations |
 | RetireTests.test_refuses_when_lock_is_held | signal_harness "retire while the state lock is held: refused, module kept" |
 | RetireTests.test_refuses_different_filesystem | differential "retire, state root on another filesystem" (where `/dev/shm` is writable) |
 | RetireTests.test_crash_before_rename_leaves_module_and_rolls_back | crash_matrix "retire killed at retire.fsync", "retire killed at retire.rename" (a second retire is refused, the rollback restores the module file) |
@@ -242,6 +244,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | SwapTests.test_exchange_swaps_the_complete_directories | `zig/swap.zig` test "swap exchanges two sibling directories and back" |
 | SwapTests.test_exchange_failure_after_success_restores_live | `zig/swap.zig` test "an exchange whose sync fails is exchanged back"; fail_matrix "one module: run fails at swap:all/demo/1.lua.exchange.after" |
 | SwapTests.test_non_fallback_exchange_error_leaves_live_unchanged | `zig/swap.zig` test "an exchange error other than unsupported leaves live unchanged" |
+| SwapTests.test_a_full_or_read_only_exchange_names_the_live_directory | `zig/swap.zig` test "a full or read-only exchange names the live directory" |
 | SwapTests.test_unsupported_exchange_uses_fallback | `zig/swap.zig` test "an unsupported exchange uses the fallback" |
 | SwapTests.test_unsupported_exchange_is_refused_when_fallback_is_disabled | `zig/swap.zig` test "an unsupported exchange is refused when fallback is disabled" |
 | SwapTests.test_every_injected_fallback_failure_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" (the injected step precedes the rename that fails) |
@@ -299,6 +302,9 @@ tests cover the same bytes, mode, hard links and symbolic links.
 | PrefixPublishTests.test_a_binary_without_room_to_shorten_is_refused | `zig/prefix.zig` test "a generation prefix becomes the stable prefix, and a tight binary is refused" |
 | PrefixPublishTests.test_the_completion_stamp_is_not_rewritten | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
 | PrefixPublishTests.test_a_symlink_is_not_followed_into_another_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_full_filesystem_names_the_temporary_file | `zig/main.zig` `errnoPath` on the temporary file; `os.write` already reports that path |
+| PrefixPublishTests.test_a_read_only_directory_names_the_directory | `zig/prefix.zig` test "a read-only directory names that directory" |
+| PrefixPublishTests.test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite | `zig/prefix.zig` test "an interrupted hard-link publish is finished on the next rewrite" |
 
 ### tests/test_backends.py
 

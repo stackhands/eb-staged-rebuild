@@ -4,7 +4,9 @@
 
 * Machine-readable command output
 
-=probe --json=, =gc --json=, =status --json=, and =resolve= print one JSON document on stdout.
+=probe --json=, =gc --json= and =status --json= print one JSON document on
+stdout on success. =resolve= prints one JSON document when it can read the
+path.
 
 ** JSON Schema files
 
@@ -16,9 +18,14 @@ Draft 2020-12 schemas live beside this page:
 | =gc --json= | =json/gc.schema.json= | One object with an =actions= array; no actions produce ={"actions": []}= |
 | =status --json= | =json/status.schema.json= | One object with a =runs= array; an empty root is ={"runs": []}= |
 
+On success, =probe --json=, =gc --json= and =status --json= print one
+document with keys sorted, indented by two spaces, and a single trailing
+newline.
+
 ** =resolve=
 
-=resolve= always prints JSON with sorted keys, indented by two spaces.
+=resolve= prints JSON with sorted keys, indented by two spaces, when the path
+was read.
 It has no =--json= flag: the document is the only output.
 A missing or incomplete installation still prints the document and exits 1.
 
@@ -28,7 +35,7 @@ Usage errors exit 2 before any JSON is printed.
 
 | Command | JSON on stdout | Exit 0 | Exit 1 | Exit 2 |
 |---------+----------------+--------+--------+--------|
-| =probe --json= | When the probe finishes | Report printed | Out of memory in the binary, or an unexpected Python traceback | Refused or an operating-system error |
+| =probe --json= | When the probe finishes; also when =--require-eb= exits 1 | Report printed | =--no-create= refused a missing =--path=, or =--require-eb= did not find the =--eb= command after printing the report | Refused or an operating-system error |
 | =gc --json= | After the collection pass | Document printed, including ={"actions": []}= | Out of memory in the binary, or an unexpected Python traceback | Refused or an operating-system error |
 | =status --json= | When journals were read | Document printed, including ={"runs": []}= | — | Refused, including an unknown =RUN_ID= |
 | =resolve= | Always when the path was read | Complete installation named | Not a regular file, or not complete | Refused or unreadable file |

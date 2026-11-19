@@ -1,1 +1,0 @@
-The README release pointer uses the latest release URL, and the rebuild how-to documents the install-path fallback when bubblewrap and user namespaces are both unavailable.

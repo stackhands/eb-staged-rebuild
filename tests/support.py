@@ -1,11 +1,15 @@
-"""Shared fixtures for eb-staged-rebuild tests."""
+"""Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
 import os
 import stat
+import subprocess
+import sys
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.paths import abspath
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 PROBES = {
     "bwrap": {
@@ -157,5 +161,75 @@ def restore_os(originals):
         setattr(os, name, original)
 
 
+
+
+def _lock_and_sleep(state_root: str) -> None:
+    from eb_staged_rebuild.lockfile import FileLock
+
+    lock = FileLock(state_root)
+    lock.acquire(0)
+    try:
+        import time
+
+        time.sleep(30)
+    finally:
+        lock.release()
+
+
+def start_lock_holder_process(state_root: str):
+    import multiprocessing as mp
+    import time
+    from eb_staged_rebuild.errors import Refused
+    from eb_staged_rebuild.lockfile import FileLock
+
+    proc = mp.Process(target=_lock_and_sleep, args=(state_root,))
+    proc.start()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        contender = FileLock(state_root)
+        try:
+            contender.acquire(0)
+        except Refused:
+            return proc
+        else:
+            contender.release()
+            time.sleep(0.01)
+    proc.terminate()
+    proc.join(5)
+    raise RuntimeError("lock holder did not acquire the state-root lock")
+
 def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+def _run(argv, env=None, cwd=None):
+    merged = dict(os.environ)
+    if env:
+        merged.update(env)
+    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
+    return subprocess.CompletedProcess(
+        completed.args,
+        completed.returncode,
+        completed.stdout.decode("utf-8", "surrogateescape"),
+        completed.stderr.decode("utf-8", "surrogateescape"),
+    )
+
+
+def run_cli(
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere."""
+    if cwd is not None:
+        search = [_REPO, os.environ.get("PYTHONPATH", "")]
+        env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
+    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env, cwd)
+
+
+def run_cli_optional_binary(
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str] | None:
+    """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
+    tool = os.environ.get("TOOL_BIN")
+    if not tool:
+        return None
+    return _run([tool, *args], env, cwd)

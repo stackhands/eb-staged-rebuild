@@ -12,18 +12,26 @@ another version or commit, and a tag that disagrees with the Python
 `__version__`. It then opens a draft
 release with the binaries, `SHA256SUMS` and build provenance attestations.
 
-## Checklist
+`cog bump` does the mechanical part. `cog.toml` runs `tools/release-prepare`
+before the bump commit; the script's header lists what it sets and what it
+leaves to a person.
 
-1. `__version__` in `eb_staged_rebuild/__init__.py`, `version` in
-   `pyproject.toml` and `.version` in `build.zig.zon` name the new version.
-2. `CHANGELOG.md` has a section for it: `towncrier build --version X.Y.Z`
-   writes the fragments in `changelog.d/` into it and removes them.
-3. `TESTMAP.md` has no row marked "not yet", and `COMPAT.md` lists every
-   deliberate difference between the Zig build and the Python tool.
-4. CI on `main` is green on both architectures, including the real-EasyBuild
+## Steps
+
+1. Branch from `main`: `git switch -c chore/release-X.Y.Z origin/main`.
+2. Check, and fix in a commit of its own: `TESTMAP.md` has no row marked
+   "not yet", `COMPAT.md` lists every deliberate difference between the Zig
+   build and the Python tool, and the `--version` example of
+   `docs/orgmode/reference/cli.org` names this release.
+3. `cog bump --minor` (or `--patch`, `--major`, `--version X.Y.Z`). It runs
+   the hook, commits `chore(version): X.Y.Z` and creates the tag on that
+   commit. `cog bump --minor --dry-run` prints the version only.
+4. Push the branch, open the pull request, and merge it with a merge commit
+   once its checks pass on both architectures, including the real-EasyBuild
    integration job (Python and the binary) and the ledger tests against a
-   real eb-stack.
-5. Tag and push: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+   real eb-stack, so the tagged commit is on `main`.
+5. Sign the tag and push it:
+   `git tag -s -f vX.Y.Z -m "eb-staged-rebuild X.Y.Z" 'vX.Y.Z^{}' && git push origin vX.Y.Z`.
 6. Check the draft release: two binaries, `SHA256SUMS`, attestations
    (`gh attestation verify FILE --repo stackhands/eb-staged-rebuild`), and a
    local build of the tag with the same sha256 (`zig build -Drelease=true
@@ -31,3 +39,5 @@ release with the binaries, `SHA256SUMS` and build provenance attestations.
    `-Dcommit` and refuses it, so build that tag without it).
 7. Publish the draft. Assets cannot change after that, so nothing is added
    to a published release.
+8. `docs/orgmode/howto/install.org` walks through one release with its
+   checksum and attestation; move it to this release once the assets exist.

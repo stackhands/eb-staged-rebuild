@@ -76,6 +76,27 @@ class SwapTests(unittest.TestCase):
                 swap_directories(live, staged, exchange_call=denied)
             self.assert_original_pair(live, staged)
 
+    def test_a_full_or_read_only_exchange_names_the_live_directory(self):
+        cases = (
+            (errno.ENOSPC, "No space left on device"),
+            (errno.EROFS, "Read-only file system"),
+            (errno.EDQUOT, "Disk quota exceeded"),
+        )
+        for number, text in cases:
+            with self.subTest(errno=number):
+                with tempfile.TemporaryDirectory() as root:
+                    live, staged = _pair(root)
+
+                    def failed(_first, _second, number=number, text=text):
+                        raise OSError(number, f"renameat2(RENAME_EXCHANGE): {text}")
+
+                    with self.assertRaises(OSError) as caught:
+                        swap_directories(live, staged, exchange_call=failed)
+                    self.assertEqual(caught.exception.errno, number)
+                    self.assertEqual(caught.exception.filename, os.path.abspath(live))
+                    self.assertIn(os.path.abspath(live), str(caught.exception))
+                    self.assert_original_pair(live, staged)
+
     def test_unsupported_exchange_uses_fallback(self):
         with tempfile.TemporaryDirectory() as root:
             live, staged = _pair(root)

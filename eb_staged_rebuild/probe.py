@@ -214,7 +214,7 @@ def probe_rename_exchange(directory):
             ctypes.c_uint,
         ]
         func.restype = ctypes.c_int
-        rc = func(AT_FDCWD, left.encode(), AT_FDCWD, right.encode(), RENAME_EXCHANGE)
+        rc = func(AT_FDCWD, os.fsencode(left), AT_FDCWD, os.fsencode(right), RENAME_EXCHANGE)
         if rc == 0:
             with open(os.path.join(left, "mark"), encoding="utf-8") as handle:
                 swapped = handle.read() == "R"

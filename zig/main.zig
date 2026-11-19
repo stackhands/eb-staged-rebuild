@@ -139,13 +139,15 @@ fn optionLike(arg: []const u8) bool {
 /// argparse long options: --name, --name=value, any unique prefix of a name;
 /// -h and --help print `help`. Positionals are returned in order; a word
 /// that is optionLike but no option is unrecognized.
-fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const u8, usage: []const u8, who: []const u8, extra: *std.ArrayList([]const u8)) []const []const u8 {
+fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const u8, usage: []const u8, who: []const u8, extra: *std.ArrayList([]const u8), leftovers: *std.ArrayList([]const u8)) []const []const u8 {
     var pos: std.ArrayList([]const u8) = .empty;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--")) {
+            leftovers.append(a, "--") catch oom();
             for (args[i + 1 ..]) |p| pos.append(a, p) catch oom();
+            for (args[i + 1 ..]) |p| leftovers.append(a, p) catch oom();
             break;
         }
         if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
@@ -154,6 +156,7 @@ fn parseOpts(a: Allocator, args: []const []const u8, opts: []Opt, help: []const 
         }
         if (!optionLike(arg)) {
             pos.append(a, arg) catch oom();
+            leftovers.append(a, arg) catch oom();
             continue;
         }
         if (!std.mem.startsWith(u8, arg, "--")) {
@@ -212,6 +215,35 @@ fn unrecognized(a: Allocator, extra: []const []const u8) void {
     usageError(top_usage, prog, "unrecognized arguments: {s}", .{joined});
 }
 
+fn unrecognizedMerged(
+    a: Allocator,
+    top_extra: []const []const u8,
+    extra: []const []const u8,
+    leftovers: []const []const u8,
+    consumed_positionals: usize,
+    keep_separator: bool,
+) void {
+    var all: std.ArrayList([]const u8) = .empty;
+    all.appendSlice(a, top_extra) catch oom();
+    all.appendSlice(a, extra) catch oom();
+    var consumed = consumed_positionals;
+    // argparse drops only the first "--" of a command with positionals.
+    var dropped = keep_separator;
+    for (leftovers) |token| {
+        const separator = std.mem.eql(u8, token, "--");
+        if (consumed > 0 and !separator) {
+            consumed -= 1;
+            continue;
+        }
+        if (separator and !dropped) {
+            dropped = true;
+            continue;
+        }
+        all.append(a, token) catch oom();
+    }
+    unrecognized(a, all.items);
+}
+
 // ---- resolve -----------------------------------------------------------
 
 /// lstat_kind: missing, symlink, dir, file or other.
@@ -244,24 +276,38 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
     return false;
 }
 
-/// Python's str() of an OSError with a filename: "[Errno N] text: 'path'",
-/// the path as repr() gives it. An error that is not an OSError is named.
-pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
+/// Python's str() of an errno with a filename: "[Errno N] text: 'path'",
+/// the path as repr() gives it.
+pub fn errnoPath(a: Allocator, err: linux.E, path: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, if (common.sys.asError(err)) |e| common.sys.describe(e) else @errorName(err)) catch oom();
+    out.appendSlice(a, common.sys.describeErrno(err)) catch oom();
     out.appendSlice(a, ": ") catch oom();
     pyfmt.reprStr(&out, a, path) catch oom();
     return out.items;
 }
 
-fn cmdResolve(a: Allocator, args: []const []const u8) u8 {
+/// Python's str() of an OSError with a filename. Other errors are named.
+pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
+    if (common.sys.asError(err)) |e| {
+        const described = common.sys.describe(e);
+        const close = std.mem.indexOfScalar(u8, described, ']') orelse unreachable;
+        const number = std.fmt.parseInt(u16, described["[Errno ".len..close], 10) catch unreachable;
+        return errnoPath(a, @fromBackingInt(@intCast(number)), path);
+    }
+    var out: std.ArrayList(u8) = .empty;
+    out.appendSlice(a, @errorName(err)) catch oom();
+    out.appendSlice(a, ": ") catch oom();
+    pyfmt.reprStr(&out, a, path) catch oom();
+    return out.items;
+}
+
+fn cmdResolve(a: Allocator, args: []const []const u8, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{};
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, resolve_help, resolve_usage, prog ++ " resolve", &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, resolve_help, resolve_usage, prog ++ " resolve", &extra, &leftovers);
     if (pos.len == 0) usageError(resolve_usage, prog ++ " resolve", "the following arguments are required: module", .{});
-    var all_extra = extra;
-    for (pos[1..]) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const path = pos[0];
     const kind = lstatKind(path);
     var described: std.ArrayList(Py.Entry) = .empty;
@@ -452,19 +498,18 @@ fn statusDocument(a: Allocator, journals: []const Py) Py {
     return .{ .dict = top.items };
 }
 
-fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdStatus(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     const sr = StateRoot.of(env, status_usage, status_help);
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "json", .takes_value = false },
     };
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " status", &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, prog ++ " status", &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default orelse
         usageError(sr.usage, prog ++ " status", "the following arguments are required: --state-root", .{});
-    var all_extra = extra;
-    if (pos.len > 1) for (pos[1..]) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, if (pos.len > 0) 1 else 0, false);
     var journals = listJournals(a, state_root);
     if (pos.len > 0) {
         const want = pos[0];
@@ -686,7 +731,7 @@ fn adminCtx(a: Allocator, env: probe.Env) admin.Ctx {
     return .{ .a = a, .env = env, .pause = .{ .env = env } };
 }
 
-fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "module-file", .takes_value = true },
@@ -699,21 +744,20 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " retire";
     const sr = StateRoot.of(env, retire_usage, retire_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    _ = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (opts[1].value == null) need.append(a, "--module-file") catch oom();
     missing(a, sr.usage, who, need.items);
-    var all_extra = extra;
-    for (pos) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
 
-fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
@@ -721,21 +765,20 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " rollback";
     const sr = StateRoot.of(env, rollback_usage, rollback_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
-    var all_extra = extra;
-    for (pos[1..]) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     return admin.rollback(&ctx, state_root.?, pos[0], timeout);
 }
 
-fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "grace-hours", .takes_value = true },
@@ -750,12 +793,11 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " gc";
     const sr = StateRoot.of(env, gc_usage, gc_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    _ = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
     if (state_root == null) missing(a, sr.usage, who, &.{"--state-root"});
-    var all_extra = extra;
-    for (pos) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
     const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     const grace = grace_cli orelse envGrace(a, env);
@@ -781,8 +823,9 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 
 /// run's options; the first word that is no option, or "--", starts the
 /// easyconfig arguments (argparse REMAINDER).
-fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     const who = prog ++ " run";
+    unrecognizedMerged(a, top_extra, &.{}, &.{}, 0, false);
     const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes", "require-exchange" };
     const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true, false };
     var vals: [names.len]?[]const u8 = @splat(null);
@@ -942,7 +985,7 @@ const resume_help = resume_usage ++
     \\
 ;
 
-fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
@@ -950,15 +993,14 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const who = prog ++ " resume";
     const sr = StateRoot.of(env, resume_usage, resume_help);
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
     const state_root = opts[0].value orelse sr.default;
     var need: std.ArrayList([]const u8) = .empty;
     if (state_root == null) need.append(a, "--state-root") catch oom();
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
-    var all_extra = extra;
-    for (pos[1..]) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
     const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
@@ -971,7 +1013,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
 
 // ---- probe -------------------------------------------------------------
 
-fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
+fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     var opts = [_]Opt{
         .{ .name = "path", .takes_value = true },
         .{ .name = "no-create", .takes_value = false },
@@ -980,10 +1022,9 @@ fn cmdProbe(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "json", .takes_value = false },
     };
     var extra: std.ArrayList([]const u8) = .empty;
-    const pos = parseOpts(a, args, &opts, probe_help, probe_usage, prog ++ " probe", &extra);
-    var all_extra = extra;
-    for (pos) |p| all_extra.append(a, p) catch oom();
-    unrecognized(a, all_extra.items);
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    _ = parseOpts(a, args, &opts, probe_help, probe_usage, prog ++ " probe", &extra, &leftovers);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const eb_default = env.get("EB_STAGED_REBUILD_EB") orelse "eb";
     const eb = opts[2].value orelse eb_default;
     const directory = blk: {
@@ -1038,6 +1079,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (args.len > 0 and std.mem.eql(u8, args[0], probe.sandbox_command)) return probe.sandboxMain(a, env, args[1..]);
 
     var i: usize = 0;
+    var top_extra: std.ArrayList([]const u8) = .empty;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (std.mem.eql(u8, arg, "-h") or (arg.len >= 3 and std.mem.startsWith(u8, "--help", arg))) {
@@ -1048,20 +1090,23 @@ pub fn main(init: std.process.Init.Minimal) u8 {
             cli.put(1, comptime cli.versionLine(prog, version, build_options.commit));
             return 0;
         }
-        if (optionLike(arg)) usageError(top_usage, prog, "unrecognized arguments: {s}", .{arg});
+        if (optionLike(arg)) {
+            top_extra.append(a, arg) catch oom();
+            continue;
+        }
         break;
     }
     if (i >= args.len) usageError(top_usage, prog, "the following arguments are required: command", .{});
     const cmd = args[i];
     const rest = args[i + 1 ..];
-    if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest);
-    if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env);
-    if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env);
-    if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env);
-    if (std.mem.eql(u8, cmd, "rollback")) return cmdRollback(a, rest, env);
-    if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env);
-    if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env);
-    if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env);
+    if (std.mem.eql(u8, cmd, "resolve")) return cmdResolve(a, rest, top_extra.items);
+    if (std.mem.eql(u8, cmd, "status")) return cmdStatus(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "probe")) return cmdProbe(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "retire")) return cmdRetire(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "rollback")) return cmdRollback(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env, top_extra.items);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
     usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
 }
