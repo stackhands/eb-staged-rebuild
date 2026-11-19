@@ -442,6 +442,8 @@ This is the case =robot= of =site.sh=.
 ** If it fails
 
 A build that fails leaves the installation as it was; [[file:recover.org][Finish a run that failed or stopped]] says what to do next.
+A publication that stops while it rewrites the generation path inside the staged tree is finished by =resume=.
+That includes a file with several hard links when the rewrite was killed after only some of the names had been replaced: the next attempt finishes those names and removes the temporary links, instead of refusing because the link count no longer matches.
 =run= is the command that builds and then swaps. There is no =swap= command. A build that prints =eb exited N; live modules were not changed= did not swap, and the live tree is as it was.
 =status --state-root DIR RUN= repeats that line. =DIR= is the state root the dry run printed, or =.eb-staged-rebuild= beside the software tree when =--state-root= was left out.
 =rollback= refuses a run whose state is =failed=, because nothing was published.

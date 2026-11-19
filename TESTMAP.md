@@ -303,6 +303,7 @@ tests cover the same bytes, mode, hard links and symbolic links.
 | PrefixPublishTests.test_a_symlink_is_not_followed_into_another_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
 | PrefixPublishTests.test_a_full_filesystem_names_the_temporary_file | `zig/main.zig` `errnoPath` on the temporary file; `os.write` already reports that path |
 | PrefixPublishTests.test_a_read_only_directory_names_the_directory | `zig/prefix.zig` test "a read-only directory names that directory" |
+| PrefixPublishTests.test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite | `zig/prefix.zig` test "an interrupted hard-link publish is finished on the next rewrite" |
 
 ### tests/test_backends.py
 

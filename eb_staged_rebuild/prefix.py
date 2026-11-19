@@ -330,8 +330,12 @@ def _commit(names, ready):
                     raise Refused(f"temporary link is not a private file: {temporary}")
                 os.unlink(temporary)
             os.link(ready, temporary)
-            os.replace(temporary, name)
-            fsync_dir(parent)
+            try:
+                os.replace(temporary, name)
+                fsync_dir(parent)
+            except BaseException:
+                _discard(temporary)
+                raise
 
         _with_writable_dir(parent, publish_one)
     os.unlink(ready)
@@ -477,7 +481,7 @@ def _recover(root):
             path = os.path.join(dirpath, name)
             if name.startswith(".") and name.endswith(".ebsr-ready"):
                 found.append(path)
-            elif name.endswith(".ebsr-partial"):
+            elif name.endswith((".ebsr-partial", ".ebsr-link", ".ebsr-symlink")):
                 _discard(path)
     for ready in found:
         stem = os.path.basename(ready)[1:].split(".", 1)[0]
@@ -510,6 +514,9 @@ def rewrite_tree(root, old, new):
     Each regular file is published by renaming a completed temporary file
     over it, or, when several names share the inode, by linking that file
     onto every name. The previous inode stays until the new one is durable.
+    A later call finishes a replacement left in ``.<inode>.ebsr-ready`` and
+    drops ``.ebsr-link`` and ``.ebsr-symlink`` temporaries, so a killed
+    hard-link publish can be repeated.
     """
     if old == new:
         return

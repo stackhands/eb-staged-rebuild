@@ -229,6 +229,31 @@ class PrefixPublishTests(unittest.TestCase):
         self.assertIn(parent, str(caught.exception))
         self.assertEqual(Path(path).read_bytes(), before)
 
+    def test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite(self):
+        path = self._file("bin/python", b"#!" + OLD + b"/bin/python\n")
+        alias = os.path.join(self.root, "bin/python3")
+        os.link(path, alias)
+        inode = os.lstat(path).st_ino
+        ready = os.path.join(self.root, "bin", f".{inode}.ebsr-ready")
+        updated = b"#!" + NEW + b"/bin/python\n"
+        with open(ready, "wb") as handle:
+            handle.write(updated)
+        os.unlink(path)
+        os.link(ready, path)
+        leftover = os.path.join(self.root, "bin", ".python3.999.ebsr-link")
+        os.link(ready, leftover)
+        rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(Path(path).read_bytes(), updated)
+        self.assertEqual(Path(alias).read_bytes(), updated)
+        self.assertEqual(os.lstat(path).st_ino, os.lstat(alias).st_ino)
+        self.assertEqual(os.lstat(path).st_nlink, 2)
+        self.assertFalse(os.path.lexists(leftover))
+        self.assertFalse(os.path.lexists(ready))
+        again = os.lstat(path).st_ino
+        rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(os.lstat(path).st_ino, again)
+        self.assertEqual(Path(path).read_bytes(), updated)
+
 
 if __name__ == "__main__":
     unittest.main()
