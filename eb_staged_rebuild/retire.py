@@ -115,6 +115,10 @@ def _links_to(module):
 
 def _plan(state_root, module):
     module = abspath(module)
+    try:
+        module.encode("utf-8")
+    except UnicodeError as exc:
+        raise Refused("module path is not UTF-8 text") from exc
     if is_within(module, state_root):
         raise Refused(f"{module} is inside the state root")
     previous = _already_retired(state_root, module)

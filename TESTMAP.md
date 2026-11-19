@@ -223,6 +223,7 @@ rebuild command implemented by the Zig binary.
 | RetireTests.test_refuses_already_retired | differential "retire again" |
 | RetireTests.test_refuses_non_regular_files | differential "retire, a directory", "retire, a symlinked module file", "retire, no module file" |
 | RetireTests.test_refuses_module_without_root | differential "retire, no root assignment" |
+| RetireCliParityTests.test_retire_refuses_non_utf8_module_path | CLI reproducer: `eb-staged-rebuild retire --state-root <state> --module-file <non-UTF-8 path>` returns exit 2 with `module path is not UTF-8 text` in both implementations |
 | RetireTests.test_refuses_when_lock_is_held | signal_harness "retire while the state lock is held: refused, module kept" |
 | RetireTests.test_refuses_different_filesystem | differential "retire, state root on another filesystem" (where `/dev/shm` is writable) |
 | RetireTests.test_crash_before_rename_leaves_module_and_rolls_back | crash_matrix "retire killed at retire.fsync", "retire killed at retire.rename" (a second retire is refused, the rollback restores the module file) |
