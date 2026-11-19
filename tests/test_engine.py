@@ -485,6 +485,24 @@ class TransactionTests(unittest.TestCase):
             self.assert_old_live(installed)
             self.assertIn("installpath-software", result.command)
 
+    def test_dry_run_refuses_a_short_generation_filesystem(self):
+        with tempfile.TemporaryDirectory() as root:
+            software, modules, state, installed, builder = _fixture(root)
+            spec = _spec(software, modules, state, builder)
+            spec.dry_run = True
+            spec.min_free_bytes = 2**64 - 1
+            result = run(spec)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("dry-run would refuse:", result.message)
+            self.assertIn("--min-free-bytes requires", result.message)
+            self.assertIn(str(spec.min_free_bytes), result.message)
+            self.assertFalse(os.path.lexists(state))
+            self.assert_old_live(installed)
+            spec.min_free_bytes = 0
+            clear = run(spec)
+            self.assertEqual(clear.returncode, 0)
+            self.assertFalse(os.path.lexists(state))
+
     def test_missing_rebuild_target_is_refused_before_build(self):
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")

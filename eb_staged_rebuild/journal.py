@@ -105,8 +105,12 @@ def load_journal(path):
         raise Refused(f"no journal at {path}")
     try:
         data = json.loads(read_bytes(path).decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except OSError as exc:
         raise NeedsIntervention(f"journal cannot be read: {path}: {exc}") from exc
+    except UnicodeError as exc:
+        raise NeedsIntervention(f"journal cannot be read: {path}: not UTF-8 text") from exc
+    except json.JSONDecodeError as exc:
+        raise NeedsIntervention(f"journal cannot be read: {path}: not valid JSON") from exc
     if not isinstance(data, dict):
         raise NeedsIntervention(f"journal is not a JSON object: {path}")
     schema = data.get("schema")

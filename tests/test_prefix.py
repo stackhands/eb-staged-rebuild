@@ -6,6 +6,7 @@ owner-writable. chmod replaces an NFSv4 ACL with a mode ACL, so the file
 itself must not be chmod'd. These tests exercise that publication.
 """
 
+import errno
 import os
 import stat
 import struct
@@ -194,6 +195,64 @@ class PrefixPublishTests(unittest.TestCase):
         rewrite_tree(self.root, OLD, NEW)
         self.assertEqual(Path(innocent).read_bytes(), b"untouched\n")
         self.assertEqual(os.readlink(planted), NEW.decode() + "/bin/tool")
+
+    def test_a_full_filesystem_names_the_temporary_file(self):
+        path = self._file("bin/tool", b"prefix " + OLD + b" suffix")
+        before = Path(path).read_bytes()
+
+        def refuse(_fd, _data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        with patch("eb_staged_rebuild.prefix.os.write", side_effect=refuse):
+            with self.assertRaises(OSError) as caught:
+                rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(caught.exception.errno, errno.ENOSPC)
+        self.assertTrue(str(caught.exception.filename).endswith(".ebsr-partial"))
+        self.assertIn(".ebsr-partial", str(caught.exception))
+        self.assertEqual(Path(path).read_bytes(), before)
+        self.assertFalse(any(name.endswith(".ebsr-partial") for name in os.listdir(os.path.dirname(path))))
+
+    def test_a_read_only_directory_names_the_directory(self):
+        path = self._file("bin/tool", b"prefix " + OLD + b" suffix")
+        before = Path(path).read_bytes()
+        parent = os.path.dirname(path)
+        os.chmod(parent, 0o555)
+
+        def refuse(_fd, _mode):
+            raise OSError(errno.EROFS, "Read-only file system")
+
+        with patch("eb_staged_rebuild.prefix.os.fchmod", side_effect=refuse):
+            with self.assertRaises(OSError) as caught:
+                rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(caught.exception.errno, errno.EROFS)
+        self.assertEqual(caught.exception.filename, parent)
+        self.assertIn(parent, str(caught.exception))
+        self.assertEqual(Path(path).read_bytes(), before)
+
+    def test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite(self):
+        path = self._file("bin/python", b"#!" + OLD + b"/bin/python\n")
+        alias = os.path.join(self.root, "bin/python3")
+        os.link(path, alias)
+        inode = os.lstat(path).st_ino
+        ready = os.path.join(self.root, "bin", f".{inode}.ebsr-ready")
+        updated = b"#!" + NEW + b"/bin/python\n"
+        with open(ready, "wb") as handle:
+            handle.write(updated)
+        os.unlink(path)
+        os.link(ready, path)
+        leftover = os.path.join(self.root, "bin", ".python3.999.ebsr-link")
+        os.link(ready, leftover)
+        rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(Path(path).read_bytes(), updated)
+        self.assertEqual(Path(alias).read_bytes(), updated)
+        self.assertEqual(os.lstat(path).st_ino, os.lstat(alias).st_ino)
+        self.assertEqual(os.lstat(path).st_nlink, 2)
+        self.assertFalse(os.path.lexists(leftover))
+        self.assertFalse(os.path.lexists(ready))
+        again = os.lstat(path).st_ino
+        rewrite_tree(self.root, OLD, NEW)
+        self.assertEqual(os.lstat(path).st_ino, again)
+        self.assertEqual(Path(path).read_bytes(), updated)
 
 
 if __name__ == "__main__":

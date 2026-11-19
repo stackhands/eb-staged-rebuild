@@ -13,7 +13,7 @@ from eb_staged_rebuild.journal import list_journals
 from eb_staged_rebuild.lockfile import FileLock
 from eb_staged_rebuild.paths import lstat_kind
 from eb_staged_rebuild.retire import retire
-from tests.support import PROBES, classic_install, installpath_builder
+from tests.support import PROBES, classic_install, installpath_builder, run_cli, run_cli_optional_binary
 
 GRACE = 144
 T0 = 1_700_000_000.0
@@ -418,6 +418,27 @@ class RetireGcTests(unittest.TestCase):
             self.assertTrue(os.path.isdir(live))
             self.assertEqual(_read(os.path.join(live, "PAYLOAD")), "v1\n")
             self.assertEqual(lstat_kind(module), "missing")
+
+
+class RetireCliParityTests(unittest.TestCase):
+    def test_retire_refuses_non_utf8_module_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            state = os.path.join(root, "state")
+            os.makedirs(state, exist_ok=True)
+            module = os.path.join(root, (b"nonutf-\xff.lua").decode("utf-8", "surrogateescape"))
+            with open(module, "w", encoding="utf-8") as handle:
+                handle.write('local root = "/x"\n')
+
+            py = run_cli("retire", "--state-root", state, "--module-file", module)
+            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
+            self.assertEqual(py.stdout, "")
+            self.assertIn("module path is not UTF-8 text", py.stderr)
+
+            zig = run_cli_optional_binary("retire", "--state-root", state, "--module-file", module)
+            if zig is not None:
+                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                self.assertEqual(zig.stdout, "")
+                self.assertEqual(zig.stderr, py.stderr)
 
 
 if __name__ == "__main__":

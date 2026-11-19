@@ -78,6 +78,8 @@ class FileLock:
         reason = assert_real_components(self.state_root)
         if reason:
             raise Refused(f"state root is unsafe: {reason}")
+        if os.path.lexists(self.state_root) and not os.path.isdir(self.state_root):
+            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), self.state_root)
         os.makedirs(self.state_root, exist_ok=True)
         reason = assert_real_components(self.state_root)
         if reason:
