@@ -33,7 +33,9 @@ def load(run_dir):
         return {"schema": SCHEMA, "events": []}
     try:
         data = json.loads(read_bytes(path).decode("utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
+    except ValueError as exc:
+        raise NeedsIntervention(f"outbox cannot be read: {path}: not valid JSON") from exc
+    except (OSError, UnicodeError) as exc:
         raise NeedsIntervention(f"outbox cannot be read: {path}: {exc}") from exc
     if data.get("schema") != SCHEMA:
         raise NeedsIntervention(f"outbox schema {data.get('schema')!r} is not {SCHEMA}")
