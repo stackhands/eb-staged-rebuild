@@ -99,7 +99,7 @@ case_fail() {
 }
 
 case_resume() {
-    step 0 cp "$HOME/sources/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
+    step 0 cp "$here/site/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
     step 0 eb-staged-rebuild resume --state-root "$STATE" example-3
     step 0 eb-staged-rebuild status --state-root "$STATE" example-3
 }
@@ -136,6 +136,7 @@ case_retire() {
 
 case_lock() {
     # Another process holds the state root's lock for three seconds.
+    : > "$STATE/.lock"
     flock "$STATE/.lock" sleep 3 &
     sleep 0.5
     step 2 eb-staged-rebuild gc --state-root "$STATE" --dry-run --lock-timeout 0.2
