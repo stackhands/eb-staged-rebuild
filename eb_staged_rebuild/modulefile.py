@@ -12,7 +12,7 @@ from eb_staged_rebuild.errors import Refused
 from eb_staged_rebuild.paths import abspath
 
 LUA_ROOT = re.compile(r'(?m)^local root\s*=\s*"((?:\\.|[^"\\])*)"\s*$')
-TCL_ROOT = re.compile(r'(?m)^set root\s+(?:"([^"]*)"|(\S+))\s*$')
+TCL_ROOT = re.compile(r'(?m)^set root\s+(?:"([^"]*)"|\{([^}]*)\}|(\S+))\s*$')
 LOAD_STMT = re.compile(r'(?m)^\s*(?:load|depends_on)\("([^"]+)"\)')
 TCL_LOAD = re.compile(r'(?m)^\s*module\s+load\s+\{?([^\s}]+)\}?\s*$')
 
@@ -27,7 +27,9 @@ def parse_root(text):
             return None
         if match.group(1) is not None:
             return match.group(1)
-        return match.group(2)
+        if match.group(2) is not None:
+            return match.group(2)
+        return match.group(3)
 
     if lua and tcl:
         if lua.start() < tcl.start():
