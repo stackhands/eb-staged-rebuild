@@ -5,18 +5,23 @@
 #
 # `cog bump` runs this with the version it is about to tag, then commits what
 # changed and creates the tag. For NEW_VERSION and the version pyproject.toml
-# still names (OLD) it sets the version in:
-#   - pyproject.toml, eb_staged_rebuild/__init__.py, build.zig.zon and
-#     zig/main.zig, which the release workflow compares with the tag;
-#   - README.md and docs/intro/install.md: the download command and the
-#     `--version` line.
+# still names (OLD) it sets:
+#   - CHANGELOG.md: `towncrier build` writes the fragments of changelog.d/
+#     under a heading for NEW_VERSION and removes them;
+#   - pyproject.toml, eb_staged_rebuild/__init__.py and build.zig.zon: the
+#     version, which the release workflow compares with the tag. The Zig build
+#     reads its own from build.zig.zon;
+#   - README.md: the download command;
+#   - docs/orgmode/tutorials/first-staged-rebuild.org: the `--version` line.
 #
-# CHANGELOG.md is written by hand in this repository. The script refuses to
-# go on until it has a `## NEW_VERSION` section, so write that section in a
-# commit before the bump.
+# Not done here, because it is prose: docs/orgmode/howto/install.org, which
+# walks through one release with its checksum, its attestation and the commit
+# its binary prints, and the `--version` example of
+# docs/orgmode/reference/cli.org. Edit those in a commit before the bump, or
+# after the release when they quote its digests.
 #
-# A refused run can leave edited files behind; `git checkout -- .` puts the
-# tree back.
+# Needs: towncrier (or uvx). A refused run can leave edited files behind;
+# `git checkout -- .` puts the tree back.
 set -euo pipefail
 
 new=${1:?usage: tools/release-prepare NEW_VERSION}
@@ -40,16 +45,18 @@ old=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' pyproject.toml | head -n 1)
 [ -n "${old}" ] || die "pyproject.toml names no version"
 [ "${old}" != "${new}" ] || die "pyproject.toml already names ${new}"
 old_re=${old//./\\.}
-grep -q -E "^## \[?${new//./\\.}(\]| |\$)" CHANGELOG.md || die "CHANGELOG.md has no section for ${new}"
+
+if command -v towncrier > /dev/null 2>&1; then
+    towncrier build --version "${new}" --yes
+else
+    uvx towncrier build --version "${new}" --yes
+fi
 
 set_in pyproject.toml "0,/^version = /s/^(version = )\"${old_re}\"\$/\1\"${new}\"/"
 set_in eb_staged_rebuild/__init__.py "s/^(__version__ = )\"${old_re}\"\$/\1\"${new}\"/"
 set_in build.zig.zon "s/^( *\.version = )\"${old_re}\",\$/\1\"${new}\",/"
-set_in zig/main.zig "s/^(pub const version = )\"${old_re}\";\$/\1\"${new}\";/"
 set_in README.md "s/^(v=)${old_re}( arch=)/\1${new}\2/"
-set_in docs/intro/install.md \
-    -e "s/^(v=)${old_re}( arch=)/\1${new}\2/" \
-    -e "s/^(eb-staged-rebuild )${old_re}\$/\1${new}/"
+set_in docs/orgmode/tutorials/first-staged-rebuild.org "s/^(eb-staged-rebuild )${old_re}\$/\1${new}/"
 
 echo "release-prepare: ${old} -> ${new}"
 git status --short | awk '{print $1}' | sort | uniq -c
