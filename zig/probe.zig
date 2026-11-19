@@ -52,16 +52,51 @@ fn pathEnv(env: Env) []const u8 {
     return env.get("PATH") orelse "/bin:/usr/bin";
 }
 
-/// execvp-style lookup used for subprocess.run and os.execvpe behavior.
+/// execvp-style lookup of a bare name. A name that already contains '/' is
+/// a path, not a PATH search, and is returned unchanged.
 fn whichExec(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    if (std.mem.findScalar(u8, name, '/') != null) return name;
     return proc.which(a, name, pathEnv(env)) catch null;
 }
 
-/// shutil.which-style lookup used by probe.py call sites.
+fn executableRegular(path: []const u8) bool {
+    var zb: [sys.path_max:0]u8 = undefined;
+    const z = sys.z(&zb, path) catch return false;
+    if (linux.errno(linux.faccessat(linux.AT.FDCWD, z.ptr, linux.X_OK, 0)) != .SUCCESS) return false;
+    const st = fsx.statAt(fsx.cwd, path, true) catch return false;
+    return st.isReg();
+}
+
+/// The path `shutil.which` reports. `proc.which` in zig-common 0.10.0 finds
+/// the same file and then makes the path absolute, so a relative directory
+/// or an empty entry (the current directory) would not match. An unset PATH
+/// uses `/bin:/usr/bin`. An empty PATH returns null.
 fn whichProbe(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
-    const path = pathEnv(env);
+    if (name.len == 0 or std.mem.findScalar(u8, name, '/') != null) return null;
+    const path = env.get("PATH") orelse return proc.which(a, name, "/bin:/usr/bin") catch null;
     if (path.len == 0) return null;
-    return proc.which(a, name, path) catch null;
+    var it = std.mem.splitScalar(u8, path, ':');
+    while (it.next()) |dir_raw| {
+        const cand = std.fs.path.join(a, &.{ if (dir_raw.len == 0) "" else dir_raw, name }) catch return null;
+        if (!executableRegular(cand)) {
+            a.free(cand);
+            continue;
+        }
+        return cand;
+    }
+    return null;
+}
+
+/// proc.run requires an absolute executable. A relative path is joined to
+/// the current directory; a bare name is looked up on PATH.
+fn runExe(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    if (name.len > 0 and name[0] == '/') return name;
+    if (std.mem.findScalar(u8, name, '/') != null) {
+        var rb: [sys.path_max]u8 = undefined;
+        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch return null;
+        return std.fs.path.join(a, &.{ cwd, name }) catch null;
+    }
+    return whichExec(a, env, name);
 }
 
 const Ran = union(enum) {
@@ -71,8 +106,8 @@ const Ran = union(enum) {
 
 /// subprocess.run(text=True, timeout=...): the result, or the exception text.
 fn run(a: Allocator, env: Env, argv: []const []const u8, timeout_ms: u32) Ran {
-    const exe = if (argv[0].len > 0 and argv[0][0] == '/') argv[0] else (whichExec(a, env, argv[0]) orelse
-        return .{ .failed = a.print("[Errno 2] No such file or directory: '{s}'", .{argv[0]}) catch "not found" });
+    const exe = runExe(a, env, argv[0]) orelse
+        return .{ .failed = a.print("[Errno 2] No such file or directory: '{s}'", .{argv[0]}) catch "not found" };
     const r = proc.run(a, exe, argv, env.envp, .{
         .stdout_limit = 16 << 20,
         .stderr_limit = 1 << 20,
