@@ -16,6 +16,10 @@ Draft 2020-12 schemas live beside this page:
 | =gc --json= | =json/gc.schema.json= | One object with an =actions= array; no actions produce ={"actions": []}= |
 | =status --json= | =json/status.schema.json= | One object with a =runs= array; an empty root is ={"runs": []}= |
 
+On success, =probe --json=, =gc --json= and =status --json= print one
+document with keys sorted, indented by two spaces, and a single trailing
+newline.
+
 ** =resolve=
 
 =resolve= always prints JSON with sorted keys, indented by two spaces.
