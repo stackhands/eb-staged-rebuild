@@ -9,6 +9,8 @@ from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.paths import abspath
 
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 PROBES = {
     "bwrap": {
         "installed": True,
@@ -163,11 +165,11 @@ def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-def _run(argv, env=None):
+def _run(argv, env=None, cwd=None):
     merged = dict(os.environ)
     if env:
         merged.update(env)
-    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged)
+    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
     return subprocess.CompletedProcess(
         completed.args,
         completed.returncode,
@@ -176,16 +178,21 @@ def _run(argv, env=None):
     )
 
 
-def run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    """Run the Python CLI with ARGS."""
-    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env)
+def run_cli(
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere."""
+    if cwd is not None:
+        search = [_REPO, os.environ.get("PYTHONPATH", "")]
+        env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
+    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env, cwd)
 
 
 def run_cli_optional_binary(
-    *args: str, env: dict[str, str] | None = None
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
     tool = os.environ.get("TOOL_BIN")
     if not tool:
         return None
-    return _run([tool, *args], env)
+    return _run([tool, *args], env, cwd)

@@ -57,6 +57,26 @@ class ProbeBlackBoxExtraTests(unittest.TestCase):
                 self.assertEqual(binary.stderr, "")
                 self.assertEqual(json.loads(binary.stdout), data)
 
+    def test_probe_empty_path_does_not_search_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = os.path.join(tmp, "probe-empty-path-eb")
+            with open(script, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n")
+                handle.write("echo 'This is EasyBuild 5.4.2'\n")
+            os.chmod(script, 0o755)
+            env = {"PATH": ""}
+            proc = run_cli("probe", "--json", "--eb", "probe-empty-path-eb", env=env, cwd=tmp)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(proc.stderr, "")
+            binary = run_cli_optional_binary("probe", "--json", "--eb", "probe-empty-path-eb", env=env, cwd=tmp)
+            if binary is not None:
+                self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
+                self.assertEqual(proc.stdout, binary.stdout)
+                self.assertEqual(proc.stderr, binary.stderr)
+            report = json.loads(proc.stdout)
+            self.assertFalse(report["easybuild"]["found"])
+            self.assertIsNone(report["easybuild"]["path"])
+
 
 if __name__ == "__main__":
     unittest.main()

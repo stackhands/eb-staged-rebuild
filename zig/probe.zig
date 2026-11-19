@@ -48,9 +48,19 @@ fn put(a: Allocator, d: *D, k: []const u8, v: Py) void {
     d.append(a, .{ .key = k, .value = v }) catch oom();
 }
 
-/// shutil.which: PATH, or os.defpath when PATH is unset.
-fn which(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
-    const path = env.get("PATH") orelse "/bin:/usr/bin";
+fn pathEnv(env: Env) []const u8 {
+    return env.get("PATH") orelse "/bin:/usr/bin";
+}
+
+/// execvp-style lookup used for subprocess.run and os.execvpe behavior.
+fn whichExec(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    return proc.which(a, name, pathEnv(env)) catch null;
+}
+
+/// shutil.which-style lookup used by probe.py call sites.
+fn whichProbe(a: Allocator, env: Env, name: []const u8) ?[]const u8 {
+    const path = pathEnv(env);
+    if (path.len == 0) return null;
     return proc.which(a, name, path) catch null;
 }
 
@@ -61,7 +71,7 @@ const Ran = union(enum) {
 
 /// subprocess.run(text=True, timeout=...): the result, or the exception text.
 fn run(a: Allocator, env: Env, argv: []const []const u8, timeout_ms: u32) Ran {
-    const exe = if (argv[0].len > 0 and argv[0][0] == '/') argv[0] else (which(a, env, argv[0]) orelse
+    const exe = if (argv[0].len > 0 and argv[0][0] == '/') argv[0] else (whichExec(a, env, argv[0]) orelse
         return .{ .failed = a.print("[Errno 2] No such file or directory: '{s}'", .{argv[0]}) catch "not found" });
     const r = proc.run(a, exe, argv, env.envp, .{
         .stdout_limit = 16 << 20,
@@ -103,7 +113,7 @@ fn orNone(s: []const u8) Py {
 
 fn probeBwrap(a: Allocator, env: Env) Py {
     var d: D = .empty;
-    const path = which(a, env, "bwrap") orelse {
+    const path = whichProbe(a, env, "bwrap") orelse {
         put(a, &d, "installed", .{ .bool = false });
         put(a, &d, "usable", .{ .bool = false });
         put(a, &d, "path", .null);
@@ -189,7 +199,7 @@ pub fn selfExe(a: Allocator) []const u8 {
 
 fn probeUsernsSandbox(a: Allocator, env: Env) Py {
     var d: D = .empty;
-    const path = which(a, env, "unshare");
+    const path = whichProbe(a, env, "unshare");
     put(a, &d, "installed", .{ .bool = path != null });
     put(a, &d, "usable", .{ .bool = false });
     put(a, &d, "path", if (path) |p| Py.s(p) else .null);
@@ -424,7 +434,7 @@ fn isFileFollow(p: []const u8) bool {
 
 fn probeEasybuild(a: Allocator, env: Env, eb: []const u8) Py {
     var d: D = .empty;
-    const path: ?[]const u8 = if (std.mem.findScalar(u8, eb, '/') == null) which(a, env, eb) else (if (isFileFollow(eb)) eb else null);
+    const path: ?[]const u8 = if (std.mem.findScalar(u8, eb, '/') == null) whichProbe(a, env, eb) else (if (isFileFollow(eb)) eb else null);
     put(a, &d, "eb", Py.s(eb));
     put(a, &d, "path", if (path) |p| Py.s(p) else .null);
     put(a, &d, "found", .{ .bool = path != null });
@@ -656,7 +666,7 @@ pub fn sandboxMain(a: Allocator, env: Env, args: []const []const u8) u8 {
         return sandbox_setup_exit;
     }
     // os.execvpe(command[0], command, os.environ): a PATH search for a name.
-    const exe = if (std.mem.findScalar(u8, command[0], '/') != null) command[0] else (which(a, env, command[0]) orelse {
+    const exe = if (std.mem.findScalar(u8, command[0], '/') != null) command[0] else (whichExec(a, env, command[0]) orelse {
         cli.err(prefix ++ "[Errno 2] No such file or directory\n", .{});
         return sandbox_setup_exit;
     });
