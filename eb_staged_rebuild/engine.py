@@ -1198,8 +1198,9 @@ def _publisher(journal):
     return EbStackLedger(policy)
 
 
-def _record(journal, faults, publisher, records, step):
-    run_dir = run_dir_for(journal["state_root"], journal["run_id"])
+def _record(state_root, journal, faults, publisher, records, step):
+    """Queue RECORDS in the outbox of the journal's run under the caller's STATE_ROOT, and deliver what is queued."""
+    run_dir = run_dir_for(state_root, journal["run_id"])
     if records:
         outbox.enqueue(run_dir, records, faults, step)
     return outbox.deliver(run_dir, publisher, faults)
@@ -1214,7 +1215,7 @@ def _record_finished(spec, journal, faults, publisher, message):
     code = 0
     if publisher is not None:
         finished = publication_records(publisher.config, journal, "finished", _clock(spec)())
-        left = _record(journal, faults, publisher, finished, "outbox.finished")
+        left = _record(spec.state_root, journal, faults, publisher, finished, "outbox.finished")
         if left:
             message = f"{message}; {_pending_message(left, 'run resume')}"
             code = outbox.PENDING_EXIT
@@ -1269,7 +1270,7 @@ def _publish_recorded(spec, journal, faults):
     if publisher is not None:
         _validate_publication_set(journal)
         started = publication_records(publisher.config, journal, "started", _clock(spec)())
-        left = _record(journal, faults, publisher, started, "outbox.started")
+        left = _record(spec.state_root, journal, faults, publisher, started, "outbox.started")
         if left and publisher.required:
             journal["message"] = "the live directory was not swapped: " + _pending_message(left, "run resume")
             save_journal(
@@ -1591,7 +1592,7 @@ def _check_live_trees(journal):
         )
 
 
-def _record_rollback(journal, faults, publisher, finished, started, now, message):
+def _record_rollback(state_root, journal, faults, publisher, finished, started, now, message):
     """After the restore: finish the correction, or abort a publication that never finished.
 
     Then print ``message`` once, with what is left.
@@ -1605,7 +1606,7 @@ def _record_rollback(journal, faults, publisher, finished, started, now, message
         records = publication_records(publisher.config, journal, "aborted", now())
     else:
         records = []
-    left = _record(journal, faults, publisher, records, "outbox.rollback_finished")
+    left = _record(state_root, journal, faults, publisher, records, "outbox.rollback_finished")
     code = 0
     if left:
         message = f"{message}; {_pending_message(left, 'run rollback again')}"
@@ -1655,7 +1656,7 @@ def _rollback_run(state_root, run_id, faults, now):
     finished = {}
     started = False
     if publisher is not None:
-        left = _record(journal, faults, publisher, [], None)
+        left = _record(state_root, journal, faults, publisher, [], None)
         if left and publisher.required:
             message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
             _log(message)
@@ -1673,13 +1674,13 @@ def _rollback_run(state_root, run_id, faults, now):
         mod.get("status") == "restored" for mod in journal.get("modules_plan") or []
     ):
         message = f"run {run_id} is already rolled back"
-        return _record_rollback(journal, faults, publisher, finished, started, now, message)
+        return _record_rollback(state_root, journal, faults, publisher, finished, started, now, message)
     if journal["state"] != "complete":
         raise Refused(f"run {run_id} is {journal['state']}; only a complete run can roll back")
     _check_live_trees(journal)
     if finished:
         records = publication_records(publisher.config, journal, "started", now(), corrects=finished)
-        left = _record(journal, faults, publisher, records, "outbox.rollback_started")
+        left = _record(state_root, journal, faults, publisher, records, "outbox.rollback_started")
         if left and publisher.required:
             message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
             _log(message)
@@ -1737,7 +1738,7 @@ def _rollback_run(state_root, run_id, faults, now):
             ) from recovery_error
         raise
     message = f"run {run_id} rolled back; replacement kept at its retired path"
-    return _record_rollback(journal, faults, publisher, finished, started, now, message)
+    return _record_rollback(state_root, journal, faults, publisher, finished, started, now, message)
 
 
 def _when(value):
