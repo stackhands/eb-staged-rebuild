@@ -42,7 +42,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
 sys.path.insert(0, REPO)
 
-from eb_staged_rebuild.engine import Spec, rollback, run  # noqa: E402
+from eb_staged_rebuild.engine import Spec, _tree_run_id, rollback, run  # noqa: E402
 from eb_staged_rebuild.faults import FaultInjector  # noqa: E402
 
 FALLBACK = ("live-to-hold", "staged-to-live", "hold-to-staged")
@@ -457,14 +457,6 @@ def steps_rollback_to(fixture, fallback):
         remove(root)
 
 
-def tree_run(path):
-    stamp = os.path.join(path, ".eb-staged-rebuild-complete")
-    if not os.path.exists(stamp):
-        return None
-    with open(stamp) as handle:
-        return json.load(handle)["run_id"]
-
-
 def trees(fixture, root):
     """The run marker of every live and hidden tree of each install path."""
     found = {}
@@ -472,7 +464,7 @@ def trees(fixture, root):
         name = rel.split("/")[0]
         parent = os.path.join(root, "software", name)
         for entry in sorted(os.listdir(parent)):
-            found[f"{name}/{entry}"] = tree_run(os.path.join(parent, entry))
+            found[f"{name}/{entry}"] = _tree_run_id(os.path.join(parent, entry))
     return found
 
 

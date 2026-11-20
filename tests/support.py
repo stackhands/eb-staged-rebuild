@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 from eb_staged_rebuild.atomicio import atomic_write
@@ -226,11 +226,11 @@ def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-def _run(argv, env=None, cwd=None, clear=()):
+def _run(argv, env=None, cwd=None, clear=(), prefix=()):
     merged = {key: value for key, value in os.environ.items() if key not in clear}
     if env:
         merged.update(env)
-    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
+    completed = subprocess.run([*prefix, *argv], capture_output=True, text=False, check=False, env=merged, cwd=cwd)
     return subprocess.CompletedProcess(
         completed.args,
         completed.returncode,
@@ -243,26 +243,35 @@ PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
 
 
 def run_cli(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere.
 
     The variables named in CLEAR are left out of the inherited environment; ENV is added after.
+    PREFIX is a command, such as ``unshare``, that runs the CLI.
     """
     if cwd is not None:
         search = [_REPO, os.environ.get("PYTHONPATH", "")]
         env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([*PYTHON_CLI, *args], env, cwd, clear)
+    return _run([*PYTHON_CLI, *args], env, cwd, clear, prefix)
 
 
 def run_cli_optional_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
     tool = os.environ.get("TOOL_BIN")
     if not tool:
         return None
-    return _run([tool, *args], env, cwd, clear)
+    return _run([tool, *args], env, cwd, clear, prefix)
 
 
 def require_tool_bin() -> str:
@@ -274,10 +283,14 @@ def require_tool_bin() -> str:
 
 
 def run_cli_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the binary front end named by TOOL_BIN, which this test requires."""
-    return _run([require_tool_bin(), *args], env, cwd, clear)
+    return _run([require_tool_bin(), *args], env, cwd, clear, prefix)
 
 
 def run_cli_or_binary(
@@ -406,9 +419,9 @@ class Implementation(NamedTuple):
     name: str
     command: tuple[str, ...]
 
-    def run(self, *args, env=None, cwd=None, clear=()):
+    def run(self, *args, env=None, cwd=None, clear=(), prefix=()):
         runner = run_cli if self.name == "python" else run_cli_binary
-        return runner(*args, env=env, cwd=cwd, clear=clear)
+        return runner(*args, env=env, cwd=cwd, clear=clear, prefix=prefix)
 
 
 def implementations():
@@ -477,8 +490,8 @@ class Site:
         write(self.eb, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_EB}" "$@"\n', 0o755)
         self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
 
-    def cli(self, *args, **env):
-        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared())
+    def cli(self, *args, prefix=(), **env):
+        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared(), prefix=prefix)
 
     def cleared(self):
         return [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
