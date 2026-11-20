@@ -223,7 +223,7 @@ def _parser():
     retire_p.add_argument("--dry-run", action="store_true")
     retire_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
     retire_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
-    retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
+    retire_p.add_argument("--lock-timeout", type=_lock_timeout, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
     _add_state_root(status_p)

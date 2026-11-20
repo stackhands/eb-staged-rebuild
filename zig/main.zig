@@ -780,7 +780,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (opts[1].value == null) need.append(a, "--module-file") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
-    const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| lockTimeoutArg(a, sr.usage, who, v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
