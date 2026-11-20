@@ -1029,7 +1029,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
     const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {

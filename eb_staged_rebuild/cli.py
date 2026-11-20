@@ -186,7 +186,7 @@ def _parser():
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
     _add_state_root(resume_p)
-    resume_p.add_argument("--lock-timeout", type=float, default=None)
+    resume_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     resume_p.add_argument("run_id")
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")

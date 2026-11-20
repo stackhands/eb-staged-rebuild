@@ -17,7 +17,6 @@ class ResumeBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.stdout, "")
             self.assertIn(f"no journal at {state_root}/runs/run-missing/journal.json", proc.stderr)
 
-    @unittest.expectedFailure
     def test_resume_rejects_non_finite_lock_timeout(self) -> None:
         """Reproducer: eb-staged-rebuild resume --state-root TMP --lock-timeout nan run1"""
         with tempfile.TemporaryDirectory() as state_root:
