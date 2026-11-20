@@ -1367,8 +1367,10 @@ fn publisher(r: *R) E!?Py {
     return policy.?;
 }
 
+/// _record: queue records in the outbox of the journal's run under the
+/// caller's state root, and deliver what is queued.
 fn record(r: *R, config: Py, recs_in: []const Py, step: ?[]const u8) E![]const Py {
-    const rdir = runDir(r.a, r.str("state_root"), r.str("run_id"));
+    const rdir = runDir(r.a, r.spec.state_root, r.str("run_id"));
     var why: []const u8 = "";
     if (recs_in.len > 0) publish_mod.enqueue(r.a, rdir, recs_in, r.faults(), step.?, &why) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
@@ -1776,7 +1778,7 @@ pub fn rollbackRun(r: *R) E!Result {
             return .{ .code = publish_mod.pending_exit, .message = m };
         }
         var why: []const u8 = "";
-        const data = publish_mod.load(a, runDir(a, r.str("state_root"), run_id), &why) catch |err| return switch (err) {
+        const data = publish_mod.load(a, runDir(a, r.spec.state_root, run_id), &why) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.NeedsIntervention => r.intervene("{s}", .{why}),
             error.Refused => r.refuse("{s}", .{why}),
