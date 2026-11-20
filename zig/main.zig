@@ -330,6 +330,7 @@ fn cmdResolve(a: Allocator, args: []const []const u8, top_extra: []const []const
         described.append(a, .{ .key = "root", .value = if (root) |r| Py.s(r.path) else .null }) catch oom();
         described.append(a, .{ .key = "root_kind", .value = if (root) |r| (if (r.path.len > 0) Py.s(lstatKind(r.path)) else .null) else .null }) catch oom();
         described.append(a, .{ .key = "complete", .value = .{ .bool = complete } }) catch oom();
+        if (root == null) described.append(a, .{ .key = "error", .value = Py.s("module file has no root assignment") }) catch oom();
     }
     const out = json.dumps(a, .{ .dict = described.items }, 2, true) catch return 1;
     cli.put(1, out);

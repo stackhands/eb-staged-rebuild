@@ -1710,7 +1710,7 @@ def describe_module(path):
     except UnicodeDecodeError as exc:
         raise Refused(f"{path} is not UTF-8 text") from exc
     syntax, root = parse_root(text)
-    return {
+    described = {
         "path": os.fspath(path),
         "kind": "file",
         "syntax": syntax,
@@ -1718,3 +1718,6 @@ def describe_module(path):
         "root_kind": lstat_kind(root) if root else None,
         "complete": bool(root) and generation_complete(root),
     }
+    if syntax is None:
+        described["error"] = "module file has no root assignment"
+    return described
