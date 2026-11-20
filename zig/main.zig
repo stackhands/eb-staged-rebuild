@@ -418,11 +418,13 @@ fn lessName(_: void, x: []const u8, y: []const u8) bool {
 /// name order; an entry without a regular journal.json is left out.
 pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
     var found: std.ArrayList(Py) = .empty;
-    const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch return &.{};
-    const fd = fsx.openDir(fsx.cwd, runs, true) catch return &.{};
+    const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch oom();
+    const runs_st = fsx.statAt(fsx.cwd, runs, true) catch return &.{};
+    if (!runs_st.isDir()) return &.{};
+    const fd = fsx.openDir(fsx.cwd, runs, true) catch |err| refuse("{s}", .{osError(a, err, runs)});
     defer sys.close(fd);
     var names: std.ArrayList([]const u8) = .empty;
-    var it = fsx.DirIter.init(a, fd) catch return &.{};
+    var it = fsx.DirIter.init(a, fd) catch oom();
     while (it.next() catch |err| refuse("{s}", .{osError(a, err, runs)})) |e| names.append(a, a.dupe(u8, e.name) catch continue) catch oom();
     std.mem.sort([]const u8, names.items, {}, lessName);
     for (names.items) |n| {

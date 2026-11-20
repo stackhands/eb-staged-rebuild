@@ -1,0 +1,1 @@
+The Zig binary reports directory-open errors such as `Permission denied` when `STATE_ROOT/runs` is an unreadable directory instead of silently treating the run list as empty, matching the Python implementation.
