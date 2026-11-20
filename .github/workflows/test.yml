@@ -68,6 +68,8 @@ jobs:
           ls -1 "${RUNNER_TEMP}/esr-cli-one/completions" "${RUNNER_TEMP}/esr-cli-one/man"
       - name: every test that imports the Python code has a TESTMAP.md row
         run: python tests/check_testmap.py
+      - name: the zig job exclusion list names real modules
+        run: python tests/check_zig_job.py
 
   integration:
     runs-on: ubuntu-latest
@@ -169,8 +171,8 @@ jobs:
           bash docs/examples/site.sh all
 
   zig:
-    # The Zig build: its unit tests, and the read-only commands compared
-    # with the Python tool.
+    # The Zig build: its unit tests, and every Python test compared with
+    # the built binaries. Discover loads new modules on its own.
     strategy:
       fail-fast: false
       matrix:
@@ -204,27 +206,25 @@ jobs:
       - name: build.zig.zon's version and -Dcommit reach --version
         run: bash tests/build_version.sh
       - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
-      - name: parser error-shape parity against Python 3.14
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_cli_parser_error_shape_parity
+      - name: ledger CLI
+        uses: ./.github/actions/pinned-ledger
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
+      - name: every unittest against the built binaries
+        env:
+          TOOL_BIN: ${{ github.workspace }}/zig-out/bin/eb-staged-rebuild
+          TOOL_BIN_TEST_OPS: ${{ github.workspace }}/zig-out/bin/eb-staged-rebuild-test-ops
+        run: |
+          python -m pip install jsonschema
+          python tests/check_zig_job.py
+          python tests/run_zig_unittests.py
       - name: commands against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/differential.sh
       - name: a run and a rollback killed at every step, then resumed
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/crash_matrix.py
       - name: a run signalled while its build command runs
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/signal_harness.py
-      - name: ledger CLI
-        uses: ./.github/actions/pinned-ledger
       - name: publication access metadata against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_metadata.py
-      - name: ACL publication tests against the test artifact
-        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli
       - name: a run and a rollback failed at every step, against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
-      - name: ledger append, recovery and idempotence against eb-stack, both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
-      - name: the bounded ledger call through run, both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_bounded_cli
-      - name: promtool 3.16.0
-        uses: ./.github/actions/pinned-promtool
-      - name: metrics output and atomic failures against both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli
