@@ -769,14 +769,16 @@ fn withWritableDir(r: *R, dir: []const u8) E!?u32 {
     const st = fsx.statAt(fsx.cwd, dir, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
     const mode = st.perm();
     if (mode & 0o200 != 0) return null;
-    chmod(dir, mode | 0o300);
+    chmod(dir, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
     return mode;
 }
 
-fn chmod(p: []const u8, mode: u32) void {
+fn chmod(p: []const u8, mode: u32) sys.Error!void {
     var zb: [sys.path_max:0]u8 = undefined;
-    const z = sys.z(&zb, p) catch return;
-    _ = linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode));
+    const z = try sys.z(&zb, p);
+    while (true) {
+        if (try sys.result(linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode)))) |_| return;
+    }
 }
 
 fn plan(r: *R) E!void {
@@ -827,7 +829,7 @@ fn plan(r: *R) E!void {
         const stamp_text = try a.print("{s}\n", .{try json.dumps(a, stamp, 2, true)});
         const sealed = try withWritableDir(r, d.staged);
         const res = write(r, try std.fs.path.join(a, &.{ d.staged, ".eb-staged-rebuild-complete" }), stamp_text, try a.print("stamp:{s}", .{d.rel}), null, r.faults());
-        if (sealed) |m| chmod(d.staged, m);
+        if (sealed) |m| chmod(d.staged, m) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, d.staged)});
         try res;
         const existed = isKind(d.live_module, "file");
         var old_hash: Py = .null;
@@ -982,13 +984,13 @@ fn prepareBackup(r: *R, m: Py) E!void {
 fn moveSealed(r: *R, source: []const u8, destination: []const u8) E!void {
     const st = fsx.statAt(fsx.cwd, source, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     const mode = st.perm();
-    if (mode & 0o200 == 0) chmod(source, mode | 0o300);
+    if (mode & 0o200 == 0) chmod(source, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     sys.renameat(fsx.cwd, source, fsx.cwd, destination) catch |err| {
-        if (mode & 0o200 == 0) chmod(source, mode);
+        if (mode & 0o200 == 0) chmod(source, mode) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, source)});
         if (err == error.CrossDevice) return r.refuse("the stage and live software tree are on different filesystems; place --state-root beside the software tree", .{});
         return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     };
-    if (mode & 0o200 == 0) chmod(destination, mode);
+    if (mode & 0o200 == 0) chmod(destination, mode) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
 }
 
 fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
