@@ -115,6 +115,8 @@ class SealedDirChmodTests(unittest.TestCase):
         env = dict(os.environ)
         env["FAULTFS_SEAL"] = "/generations/r1/software/demo/1"
         env.pop("FAULTFS_FALLOCATE", None)
+        env.pop("FAULTFS_FSYNC_DIR", None)
+        env.pop("FAULTFS_FSYNC_DIR_SKIP", None)
         mounted = subprocess.Popen(
             [binary, back, mnt],
             stdout=subprocess.DEVNULL,

@@ -124,6 +124,8 @@ class PrefixPunchEioTests(unittest.TestCase):
         env = dict(os.environ)
         env["FAULTFS_FALLOCATE"] = "eio"
         env.pop("FAULTFS_SEAL", None)
+        env.pop("FAULTFS_FSYNC_DIR", None)
+        env.pop("FAULTFS_FSYNC_DIR_SKIP", None)
         mounted = subprocess.Popen(
             [binary, back, mnt],
             stdout=subprocess.DEVNULL,

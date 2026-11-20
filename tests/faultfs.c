@@ -17,11 +17,17 @@
 
 /* Passthrough of one directory. FAULTFS_FALLOCATE=eio makes fallocate
  * return EIO. FAULTFS_SEAL is one absolute mount path whose mode is
- * reported without a write bit and whose chmod returns EPERM. */
+ * reported without a write bit and whose chmod returns EPERM.
+ * FAULTFS_FSYNC_DIR is one mount path whose directory flush returns
+ * EIO. FAULTFS_FSYNC_DIR_SKIP is how many of those flushes succeed
+ * before the failure, so an earlier flush can stay durable. */
 
 static char backing[PATH_MAX];
 static char seal[PATH_MAX];
 static int fallocate_eio;
+static int fsync_dir_eio;
+static char fsync_dir[PATH_MAX];
+static int fsync_dir_skip;
 
 static int join(char *out, size_t outlen, const char *path) {
 	int n = snprintf(out, outlen, "%s%s", backing, path);
@@ -218,6 +224,27 @@ static int fs_fsync(const char *path, int datasync, struct fuse_file_info *fi) {
 	return 0;
 }
 
+static int fs_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi) {
+	(void)datasync;
+	(void)fi;
+	if (fsync_dir_eio && strcmp(path, fsync_dir) == 0) {
+		if (fsync_dir_skip > 0) {
+			fsync_dir_skip -= 1;
+		} else {
+			return -EIO;
+		}
+	}
+	char full[PATH_MAX];
+	int rc = join(full, sizeof full, path);
+	if (rc) return rc;
+	int fd = open(full, O_RDONLY | O_DIRECTORY);
+	if (fd < 0) return -errno;
+	rc = fsync(fd);
+	int err = errno;
+	close(fd);
+	return rc < 0 ? -err : 0;
+}
+
 static int fs_fallocate(const char *path, int mode, off_t offset, off_t length, struct fuse_file_info *fi) {
 	(void)path;
 	if (fallocate_eio) return -EIO;
@@ -328,6 +355,7 @@ static const struct fuse_operations ops = {
 	.flush = fs_flush,
 	.release = fs_release,
 	.fsync = fs_fsync,
+	.fsyncdir = fs_fsyncdir,
 	.fallocate = fs_fallocate,
 	.opendir = fs_opendir,
 	.readdir = fs_readdir,
@@ -351,6 +379,17 @@ int main(int argc, char **argv) {
 	}
 	const char *want = getenv("FAULTFS_FALLOCATE");
 	fallocate_eio = want != NULL && strcmp(want, "eio") == 0;
+	const char *dir_sync = getenv("FAULTFS_FSYNC_DIR");
+	fsync_dir[0] = '\0';
+	fsync_dir_eio = 0;
+	fsync_dir_skip = 0;
+	if (dir_sync != NULL && dir_sync[0] != '\0') {
+		if (strlen(dir_sync) >= sizeof fsync_dir) return 1;
+		memcpy(fsync_dir, dir_sync, strlen(dir_sync) + 1);
+		fsync_dir_eio = 1;
+		const char *skip = getenv("FAULTFS_FSYNC_DIR_SKIP");
+		if (skip != NULL && skip[0] != '\0') fsync_dir_skip = atoi(skip);
+	}
 	const char *sealed_path = getenv("FAULTFS_SEAL");
 	seal[0] = '\0';
 	if (sealed_path != NULL && sealed_path[0] != '\0') {
