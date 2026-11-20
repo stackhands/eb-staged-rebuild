@@ -121,5 +121,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
     def test_unlink_eio_keeps_the_published_tree(self):
         self._compare(5, "unlink", 1, "modules/tools/demo/1.lua")
 
+    def test_link_dir_open_eio_keeps_the_published_tree(self):
+        self._compare(5, "open", 1, "modules/tools/demo")
+
     def test_link_dir_fsync_eio_keeps_the_published_tree(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
