@@ -238,4 +238,4 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-          TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity
+          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity

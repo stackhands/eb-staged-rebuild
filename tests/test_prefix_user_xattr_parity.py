@@ -4,7 +4,8 @@ The staged install is an overlay whose upper layer is ramfs. listxattr
 on the lower file succeeds. setxattr of the new temporary file returns
 ENOTSUP. The mount is made in a user namespace, which is what can mount
 the overlay. Without that namespace, or without overlay, the test skips.
-A child that exits with a status other than 0 or 2 did not run the tool.
+Once that probe has passed, a timeout or any other child status fails
+and reports the status and the error text.
 """
 
 from __future__ import annotations
@@ -18,6 +19,12 @@ import unittest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TIMEOUT = 60
+
+
+def _skip(case: unittest.TestCase, reason: str) -> None:
+    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
+        case.fail(reason)
+    case.skipTest(reason)
 
 _PROBE = """
 import os, subprocess, sys, tempfile
@@ -175,13 +182,13 @@ def _inside(tool: str) -> int:
 class PrefixUserXattrParityTests(unittest.TestCase):
     def test_refused_user_xattr_keeps_the_original_file(self) -> None:
         if os.geteuid() == 0:
-            self.skipTest("the overlay is mounted in a user namespace")
+            _skip(self, "the overlay is mounted in a user namespace")
         tool = os.environ.get("TOOL_BIN")
         if not tool:
-            self.skipTest("TOOL_BIN is unset")
+            _skip(self, "TOOL_BIN is unset")
         problem = _namespace_problem()
         if problem:
-            self.skipTest(problem)
+            _skip(self, problem)
         python = self._run("python")
         binary = self._run(tool)
         detail_py = python.stdout + python.stderr
@@ -216,11 +223,12 @@ class PrefixUserXattrParityTests(unittest.TestCase):
                 env=env,
                 timeout=_TIMEOUT,
             )
-        except subprocess.TimeoutExpired:
-            self.skipTest("user namespaces are not available")
+        except subprocess.TimeoutExpired as exc:
+            err = (exc.stderr or b"").decode("utf-8", "replace")
+            self.fail(f"timed out after {_TIMEOUT}s\n{err}")
         if done.returncode not in (0, 2):
-            err = done.stderr.decode("utf-8", "replace").strip()
-            self.skipTest(f"user namespace or overlay mount is not available: exit {done.returncode} {err}")
+            err = done.stderr.decode("utf-8", "replace")
+            self.fail(f"exit {done.returncode}\n{err}")
         return subprocess.CompletedProcess(
             done.args,
             done.returncode,
