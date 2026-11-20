@@ -19,6 +19,7 @@ import stat
 
 from eb_staged_rebuild.atomicio import _restore_metadata, fsync_dir, read_metadata
 from eb_staged_rebuild.errors import Refused
+from eb_staged_rebuild.faults import FaultInjector
 from eb_staged_rebuild.paths import abspath, lstat_kind
 
 # A path token ends at anything that is not these characters, matching
@@ -338,6 +339,12 @@ def _commit(names, ready):
                 raise
 
         _with_writable_dir(parent, publish_one)
+    # The test artifact names this step in EB_STAGED_REBUILD_FAIL_AT. The
+    # release binary has no such step. A directory made unwritable before
+    # the rewrite is opened and made writable for the whole publish, so the
+    # mode cannot single out this unlink.
+    if "prefix.ready.unlink" in FaultInjector.failing:
+        raise OSError(errno.EACCES, "Permission denied", ready)
     os.unlink(ready)
     fsync_dir(os.path.dirname(ready) or ".")
 
