@@ -112,12 +112,22 @@ pub fn swapInstallFor(a: Allocator, text: []const u8, stage_software: []const u8
 
 /// order_module_files: dependencies first, ties and the remainder of a
 /// cycle in path order. Returns the order and each file's text.
-pub fn orderModuleFiles(a: Allocator, files: []const []const u8, modules_root: []const u8) Error!struct { order: []const []const u8, texts: std.StringArrayHashMapUnmanaged([]const u8) } {
+pub fn orderModuleFiles(a: Allocator, files: []const []const u8, modules_root: []const u8, why: *[]const u8) Error!struct { order: []const []const u8, texts: std.StringArrayHashMapUnmanaged([]const u8) } {
     var texts: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     for (files) |p| {
-        const f = fsx.openRegular(fsx.cwd, p, true) catch return error.Refused;
+        const f = fsx.openRegular(fsx.cwd, p, true) catch |err| {
+            why.* = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
+            return error.Refused;
+        };
         defer sys.close(f.fd);
-        const t = fsx.readAll(a, f.fd, 64 << 20) catch return error.Refused;
+        const t = fsx.readAll(a, f.fd, 64 << 20) catch |err| {
+            why.* = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
+            return error.Refused;
+        };
+        if (!std.unicode.utf8ValidateSlice(t)) {
+            why.* = try a.print("{s} is not UTF-8 text", .{p});
+            return error.Refused;
+        }
         try texts.put(a, p, t);
     }
     var by_identity: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
@@ -189,8 +199,12 @@ test "ordering puts dependencies first and maps links" {
     var w: []const u8 = "";
     const tree = try walkModuleTree(a, m, &w);
     try std.testing.expectEqual(@as(usize, 2), tree.files.len);
-    const o = try orderModuleFiles(a, tree.files, m);
+    const o = try orderModuleFiles(a, tree.files, m, &w);
     try std.testing.expect(std.mem.endsWith(u8, o.order[0], "zlib/2.lua"));
+    const bad = try a.print("{s}/app/bad.lua", .{m});
+    try common.atomic.atomicWrite(a, bad, "local root = \"/x\"\n\xff\n", .{}, &why);
+    try std.testing.expectError(error.Refused, orderModuleFiles(a, &.{bad}, m, &w));
+    try std.testing.expect(std.mem.endsWith(u8, w, " is not UTF-8 text"));
     try std.testing.expectEqualStrings("/live/all/x", mapLinkTarget(a, "/stage/all/x", "/stage", "/live"));
     try std.testing.expectEqualStrings("rel/x", mapLinkTarget(a, "rel/x", "/stage", "/live"));
 }

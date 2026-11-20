@@ -2,8 +2,14 @@
 
 import os
 
+from eb_staged_rebuild.atomicio import read_bytes
 from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.modulefile import loads, module_identity, parse_root, rewrite_root
+from eb_staged_rebuild.modulefile import (
+    loads,
+    module_identity,
+    parse_root,
+    rewrite_root,
+)
 from eb_staged_rebuild.paths import abspath, is_real_dir, is_within, lstat_kind
 
 
@@ -103,8 +109,14 @@ def order_module_files(files, modules_root):
     """Publish dependencies first. A cycle falls back to path order for the rest."""
     texts = {}
     for path in files:
-        with open(path, encoding="utf-8") as handle:
-            texts[path] = handle.read()
+        try:
+            raw = read_bytes(path)
+        except OSError as exc:
+            raise Refused(f"cannot read staged module file {path}: {exc}") from exc
+        try:
+            texts[path] = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise Refused(f"{path} is not UTF-8 text") from exc
     identity = {path: module_identity(modules_root, path).replace(os.sep, "/") for path in files}
     by_identity = {}
     for path, name in identity.items():
