@@ -1,5 +1,6 @@
 """Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
+import contextlib
 import os
 import stat
 import subprocess
@@ -198,6 +199,20 @@ def start_lock_holder_process(state_root: str):
     proc.terminate()
     proc.join(5)
     raise RuntimeError("lock holder did not acquire the state-root lock")
+
+
+@contextlib.contextmanager
+def hold_state_root_lock(state_root: str, timeout: float | None = 0):
+    """Hold ``FileLock(state_root)`` in the test process for the duration of the block."""
+    from eb_staged_rebuild.lockfile import FileLock
+
+    lock = FileLock(state_root)
+    lock.acquire(timeout)
+    try:
+        yield lock
+    finally:
+        lock.release()
+
 
 def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)

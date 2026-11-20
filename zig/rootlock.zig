@@ -18,6 +18,47 @@ const Allocator = std.mem.Allocator;
 /// link.
 pub const Error = state.RootLock.AcquireError || error{ Unsafe, Gate };
 
+/// Join `state_root` and `name` the way Python's `os.path.join` does:
+/// append `/` only when `state_root` is non-empty and does not already end
+/// with `/`.
+pub fn joinPath(a: Allocator, state_root: []const u8, name: []const u8) []const u8 {
+    if (state_root.len == 0) return name;
+    if (state_root[state_root.len - 1] == '/') {
+        return a.print("{s}{s}", .{ state_root, name }) catch state_root;
+    }
+    return a.print("{s}/{s}", .{ state_root, name }) catch state_root;
+}
+
+/// Normalize `path` the way `os.path.abspath(os.path.normpath(path))` does,
+/// without following symbolic links in `path` itself.
+fn normalizePath(a: Allocator, path: []const u8) Allocator.Error![]u8 {
+    var owned_full: ?[]u8 = null;
+    defer if (owned_full) |buf| a.free(buf);
+    const full: []const u8 = if (path.len == 0 or path[0] != '/') blk: {
+        var rb: [sys.path_max]u8 = undefined;
+        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch ".";
+        const joined = try std.fs.path.join(a, &.{ cwd, path });
+        owned_full = joined;
+        break :blk joined;
+    } else path;
+
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(a);
+    var it = std.mem.splitScalar(u8, full, '/');
+    while (it.next()) |seg| {
+        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
+        if (std.mem.eql(u8, seg, "..")) {
+            _ = parts.pop();
+            continue;
+        }
+        try parts.append(a, seg);
+    }
+    if (parts.items.len == 0) return a.dupe(u8, "/");
+    const joined = try std.mem.join(a, "/", parts.items);
+    defer a.free(joined);
+    return a.print("/{s}", .{joined});
+}
+
 fn isLink(path: []const u8) bool {
     const st = fsx.statAt(fsx.cwd, path, false) catch return false;
     return st.isLink();
@@ -47,15 +88,18 @@ fn tighten(fd: fsx.fd_t) bool {
 }
 
 /// Lock `root` the way `FileLock.acquire` does.
-/// `detail` receives the symlink component when the error is `Unsafe`.
+/// `detail` receives an owned copy of the symlink component when the error is
+/// `Unsafe`.
 pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]const u8) Error!state.RootLock {
-    if (offendingComponent(root)) |component| {
-        detail.* = component;
+    const normalized = normalizePath(a, root) catch return error.OutOfMemory;
+    defer a.free(normalized);
+    if (offendingComponent(normalized)) |component| {
+        detail.* = a.dupe(u8, component) catch return error.OutOfMemory;
         return error.Unsafe;
     }
-    if (!(privateFile(a, root, ".lock") catch return error.OutOfMemory)) return error.Gate;
-    if (!(privateFile(a, root, ".lock.posix") catch return error.OutOfMemory)) return error.NotPrivate;
-    const lock = try state.RootLock.acquire(a, root, timeout_ms);
+    if (!(privateFile(a, normalized, ".lock") catch return error.OutOfMemory)) return error.Gate;
+    if (!(privateFile(a, normalized, ".lock.posix") catch return error.OutOfMemory)) return error.NotPrivate;
+    const lock = try state.RootLock.acquire(a, normalized, timeout_ms);
     if (!tighten(lock.gate) or !tighten(lock.posix)) {
         lock.release();
         return error.Unexpected;
@@ -102,7 +146,19 @@ test "a hard-linked gate is not truncated and a symlink root is refused" {
     var zlink: [sys.path_max:0]u8 = undefined;
     try std.testing.expect(linux.errno(linux.symlinkat((try sys.z(&zreal, real)).ptr, linux.AT.FDCWD, (try sys.z(&zlink, link)).ptr)) == .SUCCESS);
     try std.testing.expectError(error.Unsafe, acquire(a, link, 0, &detail));
+    defer a.free(detail);
     try std.testing.expectEqualStrings(link, detail);
+    const link_slash = try std.fmt.allocPrint(a, "{s}/", .{link});
+    defer a.free(link_slash);
+    var detail_slash: []const u8 = "";
+    try std.testing.expectError(error.Unsafe, acquire(a, link_slash, 0, &detail_slash));
+    defer a.free(detail_slash);
+    try std.testing.expectEqualStrings(link, detail_slash);
+    const joined = joinPath(a, link_slash, ".lock");
+    defer a.free(joined);
+    const expected_joined = try std.fmt.allocPrint(a, "{s}/.lock", .{link});
+    defer a.free(expected_joined);
+    try std.testing.expectEqualStrings(expected_joined, joined);
     const created = try std.fmt.allocPrint(a, "{s}/.lock", .{real});
     defer a.free(created);
     try std.testing.expect(fsx.statAt(fsx.cwd, created, false) == error.NotFound);
