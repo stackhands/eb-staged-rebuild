@@ -1413,9 +1413,9 @@ fn lockRoot(r: *R) E!state.RootLock {
     const ms: ?u32 = if (r.spec.lock_timeout) |t| @intFromFloat(@min(@max(t, 0) * 1000, 4.0e9)) else null;
     var detail: []const u8 = r.spec.state_root;
     return rootlock.acquire(r.a, r.spec.state_root, ms, &detail) catch |err| switch (err) {
-        error.Busy => r.refuse("another eb-staged-rebuild holds the lock at {s}/.lock", .{r.spec.state_root}),
-        error.NotPrivate => r.refuse("record lock requires a private regular file: {s}/.lock.posix", .{r.spec.state_root}),
-        error.Gate => r.refuse("lock file must be a private regular file: {s}/.lock", .{r.spec.state_root}),
+        error.Busy => r.refuse("another eb-staged-rebuild holds the lock at {s}", .{rootlock.joinPath(r.a, r.spec.state_root, ".lock")}),
+        error.NotPrivate => r.refuse("record lock requires a private regular file: {s}", .{rootlock.joinPath(r.a, r.spec.state_root, ".lock.posix")}),
+        error.Gate => r.refuse("lock file must be a private regular file: {s}", .{rootlock.joinPath(r.a, r.spec.state_root, ".lock")}),
         error.Unsafe => r.refuse("state root is unsafe: {s} is a symlink", .{detail}),
         else => r.refuse("{s}", .{main_mod.osError(r.a, err, r.spec.state_root)}),
     };
