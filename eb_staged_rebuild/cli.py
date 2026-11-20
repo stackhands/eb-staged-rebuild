@@ -49,6 +49,17 @@ def _hours(text):
     return value
 
 
+def _lock_timeout(text):
+    """A finite lock timeout. nan and infinity are rejected."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {text!r}") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError("--lock-timeout is not a finite number")
+    return value
+
+
 def _bytes(text):
     try:
         value = int(text)
