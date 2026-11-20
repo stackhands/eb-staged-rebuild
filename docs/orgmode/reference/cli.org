@@ -21,7 +21,7 @@ eb-staged-rebuild run [--software DIR] [--modules DIR] [--state-root DIR] [--eb 
                       [--verify] [--force]
                       [--ledger-config FILE] [--build-dir DIR] [--min-free-bytes BYTES]
                       [--require-exchange] -- EASYCONFIG [EB-ARGUMENT...]
-eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] RUN_ID
+eb-staged-rebuild resume --state-root DIR [--lock-timeout SECONDS] [--verify] [--force] RUN_ID
 eb-staged-rebuild verify --state-root DIR [--lock-timeout SECONDS] STAGE
 eb-staged-rebuild rollback --state-root DIR [--lock-timeout SECONDS] (RUN_ID | --latest | --to GEN)
 eb-staged-rebuild gc --state-root DIR [--grace-hours HOURS] [--dry-run]
