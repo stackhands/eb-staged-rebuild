@@ -135,12 +135,16 @@ case_retire() {
 }
 
 case_lock() {
-    # Another process holds the state root's lock for three seconds.
+    # Another process holds the state root's lock, says so, and lets go
+    # when this case writes a line to it.
     : > "$STATE/.lock"
-    flock "$STATE/.lock" sleep 3 &
-    sleep 0.5
+    local to from
+    coproc HOLDER { flock "$STATE/.lock" sh -c 'echo held; read -r _'; }
+    from=${HOLDER[0]} to=${HOLDER[1]}
+    read -r _ <&"$from"
     step 2 eb-staged-rebuild gc --state-root "$STATE" --dry-run --lock-timeout 0.2
-    wait
+    echo release >&"$to"
+    wait "$HOLDER_PID"
 }
 
 case_robot() {
