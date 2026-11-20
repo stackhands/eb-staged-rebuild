@@ -131,6 +131,55 @@ def load_journal(path):
     return data
 
 
+# What a rebuild journal has to record before a command reads it.
+RUN_FIELDS = ("software", "modules", "generation_root", "state", "backend")
+PLAN_FIELDS = ("rel", "live_module", "prepared", "staged", "live_software", "retired")
+
+
+def load_run_journal(state_root, run_id):
+    """Return the path and journal of run RUN_ID under the caller's STATE_ROOT, checked.
+
+    The path is made from STATE_ROOT and the plain name RUN_ID alone; see
+    ``check_run_journal`` for what the journal has to record.
+    """
+    require_plain_run_id(run_id)
+    path = journal_path(state_root, run_id)
+    data = load_journal(path)
+    check_run_journal(run_id, data)
+    return path, data
+
+
+def check_run_journal(run_id, data):
+    """Require a journal read from ``runs/RUN_ID`` to be one a command may act on.
+
+    It has to name that run and record its state root. A rebuild journal also
+    has to record, as non-empty text, each field of RUN_FIELDS and each field
+    of PLAN_FIELDS in every module plan entry, so no command reads a field that
+    is missing.
+    """
+    require_matching_run_id(data, run_id)
+    _recorded(data, "state_root")
+    if data.get("kind") == "retire":
+        return
+    for field in RUN_FIELDS:
+        _recorded(data, field)
+    plan = data.get("modules_plan")
+    if not isinstance(plan, list):
+        raise NeedsIntervention("journal does not record modules_plan")
+    for mod in plan:
+        for field in PLAN_FIELDS:
+            value = mod.get(field)
+            if not isinstance(value, str) or not value:
+                raise NeedsIntervention(f"journal module plan does not record {field}")
+
+
+def _recorded(data, field):
+    value = data.get(field)
+    if not isinstance(value, str) or not value:
+        raise NeedsIntervention(f"journal does not record {field}")
+    return value
+
+
 def list_journals(state_root):
     """Return the journals under ``STATE_ROOT/runs``, in name order.
 
