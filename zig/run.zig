@@ -1789,8 +1789,11 @@ fn rollbackSteps(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
             try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
-            sys.unlinkat(fsx.cwd, path, 0) catch {};
-            atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, path)});
+            const parent = std.fs.path.dirname(path) orelse "/";
+            const dir = sys.openat(fsx.cwd, parent, .{}, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+            defer sys.close(dir);
+            sys.fsync(dir) catch |err| return r.refuse("{s}", .{sys.describe(err)});
         }
         r.setItem("links_plan", k, "created", .{ .bool = false });
         r.setItem("links_plan", k, "status", Py.s("removed"));
