@@ -763,7 +763,7 @@ pub fn removeTree(c: *Ctx, path_in: []const u8, boundary_in: []const u8) void {
     );
     sys.close(fd);
     sys.unlinkat(parent, name, linux.AT.REMOVEDIR) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
-    sys.fsync(parent) catch {};
+    sys.fsync(parent) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(path))});
 }
 
 fn openOwned(c: *Ctx, parent: sys.fd_t, name: []const u8, dev: u64) sys.fd_t {
