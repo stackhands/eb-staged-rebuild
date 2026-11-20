@@ -844,16 +844,19 @@ compare_admin "gc --keep, not a count" gc --state-root @ROOT@/state --keep x
 compare_admin "gc --keep, negative" gc --state-root @ROOT@/state --keep=-1
 compare_admin "gc --keep, a negative number as the next word" gc --state-root @ROOT@/state --keep -1
 compare_admin "gc --keep, a value with a quote" gc --state-root @ROOT@/state --keep "a'b"
-ready="${work}/holder-ready"
-python3 -c 'import os, sys, time; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[2:]]; open(sys.argv[1], "w").close(); time.sleep(600)' \
-    "${ready}" "${work}/py/software/demo/.1.l2" "${work}/zig/software/demo/.1.l2" \
-    "${work}/py/state/generations/l1" "${work}/zig/state/generations/l1" &
-holder=$!
-for _ in $(seq 600); do [ -e "${ready}" ] && break; sleep 0.1; done
+# The holder prints a line once it has every path open and lets go when it
+# reads one back.
+coproc HOLDER {
+    exec python3 -c 'import os, sys; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[1:]]; print("ready", flush=True); sys.stdin.readline()' \
+        "${work}/py/software/demo/.1.l2" "${work}/zig/software/demo/.1.l2" \
+        "${work}/py/state/generations/l1" "${work}/zig/state/generations/l1"
+}
+holder_out=${HOLDER[0]} holder_in=${HOLDER[1]}
+read -r _ <&"${holder_out}"
 compare_admin "gc --keep, a tree in use without --check-in-use, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
 compare_admin "gc --check-in-use keeps a tree and a generation in use" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --check-in-use
-kill "${holder}"
-wait "${holder}" 2>/dev/null
+echo release >&"${holder_in}"
+wait "${HOLDER_PID}"
 compare_admin "gc --keep once the tree is free" gc --state-root @ROOT@/state --keep 1 --grace-hours 0
 compare_admin "list after gc --keep" list --state-root @ROOT@/state
 unset NORM_HASH

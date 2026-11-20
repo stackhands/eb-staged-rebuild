@@ -12,10 +12,9 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 import unittest
 
-from tests.support import Site, sites, write
+from tests.support import Site, pause_fifo, sites, wait_for_pause, write
 
 ISO = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
 MISSING = {"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}
@@ -139,16 +138,13 @@ class RollbackCliTests(Generations):
 
     def killed_at(self, site, step, *args):
         """Run rollback until it pauses before ``step``, then SIGKILL it there."""
-        ready = os.path.join(site.root, "paused")
+        ready, fifo = pause_fifo(site.root)
         env = site.environ(EB_STAGED_REBUILD_PAUSE_AT=step, EB_STAGED_REBUILD_PAUSE_READY=ready)
         command = [*site.implementation.command, "rollback", "--state-root", site.state, *args]
         with subprocess.Popen(command, env=env, cwd=site.root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
-            deadline = time.monotonic() + 60
-            while not os.path.exists(ready):
-                self.assertIsNone(proc.poll(), f"rollback exited before {step}")
-                self.assertLess(time.monotonic(), deadline, f"rollback never reached {step}")
-                time.sleep(0.05)
+            reached = wait_for_pause(proc, fifo)
             proc.kill()
+        self.assertTrue(reached, f"rollback exited, or did not reach {step} within 60 seconds")
 
     def module(self, site):
         with open(os.path.join(site.modules, "all", "demo", "1.lua"), encoding="utf-8") as handle:
@@ -311,6 +307,13 @@ class GcCliTests(Generations):
         self.assertEqual(holder.stdout.readline(), "ready\n")
         return holder
 
+    def waiting(self, program, cwd):
+        """PROGRAM, with its working directory in CWD, reading its standard input until the test closes it."""
+        proc = subprocess.Popen([program], stdin=subprocess.PIPE, cwd=cwd)
+        self.addCleanup(proc.wait, 60)
+        self.addCleanup(proc.stdin.close)
+        return proc
+
     def test_gc_keep_keeps_each_install_paths_newest_generations(self):
         for site in self.sites():
             with self.subTest(tool=site.name):
@@ -360,9 +363,7 @@ class GcCliTests(Generations):
             with self.subTest(tool=site.name):
                 self.publish(site, "r1")
                 self.publish(site, "r2")
-                working = subprocess.Popen(["sleep", "600"], cwd=self.hidden(site, "r1"))
-                self.addCleanup(working.wait, 60)
-                self.addCleanup(working.kill)
+                self.waiting("cat", self.hidden(site, "r1"))
                 self.assertEqual(self.gc(site, "--grace-hours", "0"), [*self.removed("r1"), *self.removed("r2")])
                 self.assertFalse(os.path.lexists(self.hidden(site, "r1")))
 
@@ -372,14 +373,11 @@ class GcCliTests(Generations):
             with self.subTest(tool=site.name):
                 for run_id in ("r1", "r2", "r3", "r4", "r5"):
                     self.publish(site, run_id)
-                program = os.path.join(self.hidden(site, "r4"), "bin", "sleep")
+                program = os.path.join(self.hidden(site, "r4"), "bin", "cat")
                 os.makedirs(os.path.dirname(program))
-                shutil.copy2(shutil.which("sleep"), program)
-                working = subprocess.Popen(["sleep", "600"], cwd=self.hidden(site, "r1"))
-                running = subprocess.Popen([program, "600"], cwd=site.root)
-                for proc in (working, running):
-                    self.addCleanup(proc.wait, 60)
-                    self.addCleanup(proc.kill)
+                shutil.copy2(shutil.which("cat"), program)
+                working = self.waiting("cat", self.hidden(site, "r1"))
+                running = self.waiting(program, site.root)
                 opened = self.held(sys.executable, "-c", HOLDER, "open", os.path.join(self.hidden(site, "r2"), "PAYLOAD"))
                 mapped = self.held(sys.executable, "-c", HOLDER, "map", os.path.join(self.hidden(site, "r3"), "PAYLOAD"))
                 expected = [
@@ -399,10 +397,7 @@ class GcCliTests(Generations):
                     self.gc(site, "--grace-hours", "0", "--keep", "1", "--check-in-use"),
                     expected[:4] + ["keep: SW/demo/.1.r5 (kept by --keep 1)"],
                 )
-                for proc in (working, running):
-                    proc.kill()
-                    proc.wait(60)
-                for holder in [opened, mapped] + ([rooted] if namespaces else []):
+                for holder in [working, running, opened, mapped] + ([rooted] if namespaces else []):
                     holder.stdin.close()
                     holder.wait(60)
                 self.assertEqual(self.gc(site, "--grace-hours", "0", "--check-in-use"), everything)
@@ -413,9 +408,7 @@ class GcCliTests(Generations):
                 self.publish(site, "r1")
                 self.publish(site, "r2")
                 generation = os.path.join(site.state, "generations", "r1")
-                working = subprocess.Popen(["sleep", "600"], cwd=generation)
-                self.addCleanup(working.wait, 60)
-                self.addCleanup(working.kill)
+                working = self.waiting("cat", generation)
                 self.assertEqual(
                     self.gc(site, "--grace-hours", "0", "--check-in-use"),
                     [
@@ -425,7 +418,7 @@ class GcCliTests(Generations):
                     ],
                 )
                 self.assertTrue(os.path.isdir(generation))
-                working.kill()
+                working.stdin.close()
                 working.wait(60)
                 self.assertEqual(self.gc(site, "--grace-hours", "0"), self.removed("r1")[1:])
 
