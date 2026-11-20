@@ -1948,7 +1948,7 @@ fn isRetire(j: Py) bool {
 /// _newest_complete: the run rollback --latest undoes.
 pub fn newestComplete(r: *R) E![]const u8 {
     var best: ?Py = null;
-    for (main_mod.listJournals(r.a, r.spec.state_root)) |j| {
+    for (main_mod.runJournals(r.a, r.spec.state_root)) |j| {
         if (isRetire(j) or !admin.eqlStr(pyfmt.get(j, "state"), "complete")) continue;
         if (best == null or completedLess(best.?, j)) best = j;
     }
@@ -2076,13 +2076,8 @@ fn select(r: *R, undo: *const Run) void {
 pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
     const a = r.a;
     const state_root = r.spec.state_root;
-    const journals = main_mod.listJournals(a, state_root);
-    var found: ?Py = null;
-    for (journals) |j| if (std.mem.eql(u8, s(pyfmt.get(j, "run_id")), gen)) {
-        found = j;
-        break;
-    };
-    const target = found orelse return r.refuse("no journal at {s}", .{runJournal(a, state_root, gen)});
+    const journals = main_mod.runJournals(a, state_root);
+    const target = admin.loadRunJournal(a, state_root, gen).journal;
     if (isRetire(target)) return r.refuse("run {s} is a retire record, not a published generation", .{gen});
     if (!admin.eqlStr(pyfmt.get(target, "state"), "complete")) return r.refuse("run {s} is {s}; rollback --to returns to a complete run", .{ gen, pyStr(a, pyfmt.get(target, "state")) });
     for (journals) |j| if (admin.eqlStr(pyfmt.get(j, "state"), "rolling_back") and !admin.eqlStr(pyfmt.get(j, "rollback_to"), gen)) return r.refuse("{s}", .{rollingBack(a, j)});
@@ -2099,8 +2094,9 @@ pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
         return .{ .code = 0, .message = m };
     }
     if (runs.len == 1 and admin.eqlStr(pyfmt.get(runs[0].journal, "state"), "complete")) {
-        r.path = runs[0].path;
-        r.journal = main_mod.loadJournal(a, r.path);
+        const loaded = admin.loadRunJournal(a, state_root, s(pyfmt.get(runs[0].journal, "run_id")));
+        r.path = loaded.path;
+        r.journal = loaded.journal;
         return rollbackRun(r);
     }
     var ledgered: std.ArrayList([]const u8) = .empty;

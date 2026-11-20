@@ -617,7 +617,7 @@ pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout:
 pub fn rollback(c: *Ctx, state_root: []const u8, run_id: ?[]const u8, to: ?[]const u8, latest: bool, lock_timeout: ?f64) u8 {
     if (@as(u8, @intFromBool(run_id != null)) + @intFromBool(to != null) + @intFromBool(latest) != 1)
         refuse("give one of a run id, --latest and --to GEN", .{});
-    if (run_id) |rid| if (!plainRunId(rid)) refuse("run id is not a plain name: '{s}'", .{rid});
+    if (run_id orelse to) |rid| if (!plainRunId(rid)) refuse("run id is not a plain name: '{s}'", .{rid});
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
     const run_mod = @import("run.zig");
@@ -640,12 +640,9 @@ fn outcome(r: anytype, result: anytype) u8 {
 
 fn rollbackOne(c: *Ctx, r: anytype, state_root: []const u8, run_id: []const u8) u8 {
     const a = c.a;
-    const path = journalPath(a, state_root, run_id);
-    const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
-    if (!st.isReg()) refuse("no journal at {s}", .{path});
-    var journal = main_mod.loadJournal(a, path);
-    if (!matchingRunId(journal, run_id))
-        refuse("journal run id does not match its directory", .{});
+    const loaded = loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    var journal = loaded.journal;
     if (!eqlStr(pyfmt.get(journal, "kind"), "retire")) {
         r.journal = journal;
         r.path = path;

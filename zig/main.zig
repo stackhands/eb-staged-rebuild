@@ -430,6 +430,18 @@ fn lessName(_: void, x: []const u8, y: []const u8) bool {
 /// list_journals: the journals under the state root's runs directory, in
 /// name order; an entry without a regular journal.json is left out.
 pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
+    return journalsUnder(a, state_root, false);
+}
+
+/// run_journals: the journals listJournals returns, each checked as
+/// admin.loadRunJournal checks one. A command that chooses among the runs
+/// refuses them all if one names another run or state root or lacks a
+/// field, before it chooses.
+pub fn runJournals(a: Allocator, state_root: []const u8) []const Py {
+    return journalsUnder(a, state_root, true);
+}
+
+fn journalsUnder(a: Allocator, state_root: []const u8, checked: bool) []const Py {
     var found: std.ArrayList(Py) = .empty;
     const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch oom();
     const runs_st = fsx.statAt(fsx.cwd, runs, true) catch return &.{};
@@ -444,7 +456,9 @@ pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
         const p = std.fs.path.join(a, &.{ runs, n, "journal.json" }) catch continue;
         const st = fsx.statAt(fsx.cwd, p, false) catch continue;
         if (!st.isReg()) continue;
-        found.append(a, loadJournal(a, p)) catch oom();
+        const j = loadJournal(a, p);
+        if (checked) admin.checkRunJournal(a, state_root, n, j);
+        found.append(a, j) catch oom();
     }
     return found.items;
 }
