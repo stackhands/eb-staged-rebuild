@@ -216,8 +216,8 @@ jobs:
         uses: ./.github/actions/pinned-ledger
       - name: publication access metadata against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_metadata.py
-      - name: ACL publication tests against the test artifact
-        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli
+      - name: ACL publication and ready-unlink parity tests against the test artifact
+        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli tests.test_prefix_ready_unlink_parity
       - name: a run and a rollback failed at every step, against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
       - name: ledger append, recovery and idempotence against eb-stack, both implementations
