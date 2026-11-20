@@ -757,7 +757,10 @@ pub fn removeTree(c: *Ctx, path_in: []const u8, boundary_in: []const u8) void {
     const dev = (fsx.fstat(parent) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)})).dev;
     const name = std.fs.path.basename(path);
     const fd = openOwned(c, parent, name, dev);
-    emptyDir(c, fd, (fsx.fstat(fd) catch refuse("cleanup directory changed: {s}", .{name})).dev);
+    emptyDir(c, fd, (fsx.fstat(fd) catch refuse("cleanup directory changed: {s}", .{name})).dev) catch refuse(
+        "cleanup refuses a directory nested too deep: {s}",
+        .{name},
+    );
     sys.close(fd);
     sys.unlinkat(parent, name, linux.AT.REMOVEDIR) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
     sys.fsync(parent) catch {};
@@ -784,7 +787,18 @@ fn openOwned(c: *Ctx, parent: sys.fd_t, name: []const u8, dev: u64) sys.fd_t {
     return fd;
 }
 
-fn emptyDir(c: *Ctx, fd: sys.fd_t, dev: u64) void {
+/// The bound of the cleanup walk: Python's rmtree stops at its own
+/// recursion limit around a thousand levels, and the refusal is clean
+/// and far inside both the descriptor and the stack limits the walk
+/// would otherwise have to survive.
+const empty_depth: u32 = 512;
+
+fn emptyDir(c: *Ctx, fd: sys.fd_t, dev: u64) error{TooDeep}!void {
+    return emptyDirDepth(c, fd, dev, 0);
+}
+
+fn emptyDirDepth(c: *Ctx, fd: sys.fd_t, dev: u64, depth: u32) error{TooDeep}!void {
+    if (depth == empty_depth) return error.TooDeep;
     var names: std.ArrayList([]const u8) = .empty;
     var it = fsx.DirIter.init(c.a, fd) catch return;
     while (it.next() catch |err| refuse("{t}", .{err})) |e| names.append(c.a, c.a.dupe(u8, e.name) catch continue) catch oom();
@@ -792,7 +806,7 @@ fn emptyDir(c: *Ctx, fd: sys.fd_t, dev: u64) void {
         const info = fsx.statAt(fd, n, false) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, n)});
         if (info.isDir()) {
             const child = openOwned(c, fd, n, dev);
-            emptyDir(c, child, dev);
+            try emptyDirDepth(c, child, dev, depth + 1);
             sys.close(child);
             sys.unlinkat(fd, n, linux.AT.REMOVEDIR) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, n)});
         } else sys.unlinkat(fd, n, 0) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, n)});
@@ -1196,4 +1210,61 @@ test "linksTo finds the links that resolve to a module file beside it and in eac
     for (found, [_][]const u8{ "modules/all/demo/default", "modules/lib/demo/1.lua", "modules/tools/demo/1.lua" }) |got, want| {
         try std.testing.expectEqualStrings(try a.print("{s}/{s}", .{ root, want }), got);
     }
+}
+
+test "emptyDir refuses a tree nested past its depth bound" {
+    const gpa = std.testing.allocator;
+    const seed: u64 = 0x5EEDC2;
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+    var cwd_buf: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &cwd_buf);
+    const base = try std.fmt.allocPrint(gpa, "{s}/.zig-cache/ebsr-emptydeep-{d}", .{ here, linux.getpid() });
+    defer gpa.free(base);
+    try common.atomic.makedirs(base);
+
+    // a chain past the bound, built with two descriptors at a time
+    const beyond: u32 = empty_depth + 16;
+    var names: std.ArrayList(u8) = .empty;
+    defer names.deinit(gpa);
+    var zb: [sys.path_max:0]u8 = undefined;
+    var fd = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(fd);
+    var depth: u32 = 0;
+    while (depth < beyond) : (depth += 1) {
+        const c: u8 = 'a' + @as(u8, @intCast(rand.uintLessThan(u8, 26)));
+        try names.append(gpa, c);
+        const nm = names.items[names.items.len - 1 ..];
+        _ = try sys.call(linux.mkdirat, .{ fd, (try sys.z(&zb, nm)).ptr, @as(linux.mode_t, 0o755) });
+        const sub = try fsx.openDir(fd, nm, false);
+        sys.close(fd);
+        fd = sub;
+    }
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    var c: Ctx = .{ .a = arena_state.allocator(), .env = undefined, .pause = undefined };
+    const st = try fsx.statAt(fsx.cwd, base, false);
+    const root = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(root);
+    std.testing.expectError(error.TooDeep, emptyDir(&c, root, st.dev)) catch |err| {
+        std.debug.print("emptyDir walk seed: {d}: gave {s}\n", .{ seed, @errorName(err) });
+        return err;
+    };
+
+    // teardown by path, bottom-up with a shrinking prefix
+    var full: std.ArrayList(u8) = .empty;
+    defer full.deinit(gpa);
+    try full.appendSlice(gpa, base);
+    var k: u32 = 0;
+    while (k < beyond) : (k += 1) {
+        try full.append(gpa, '/');
+        try full.append(gpa, names.items[k]);
+    }
+    var fz: [sys.path_max:0]u8 = undefined;
+    while (full.items.len > base.len) {
+        _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, full.items), linux.AT.REMOVEDIR);
+        full.shrinkRetainingCapacity(full.items.len - 2);
+    }
+    _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, base), linux.AT.REMOVEDIR);
 }
