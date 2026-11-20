@@ -76,8 +76,9 @@ fn renamePath(a: Allocator, from: []const u8, to: []const u8, why: *Why) Error!v
 }
 
 fn syncParent(a: Allocator, live: []const u8, why: *Why) Error!void {
-    ops.sync_dir(std.fs.path.dirname(live) orelse "/") catch |err|
-        return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, live)});
+    const parent = std.fs.path.dirname(live) orelse "/";
+    ops.sync_dir(parent) catch |err|
+        return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, parent)});
 }
 
 fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []const u8, why: *Why) Error!void {
@@ -279,6 +280,25 @@ fn configuredExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
 
 fn unsupportedExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
     return .OPNOTSUPP;
+}
+
+test "a failed parent flush names the parent directory" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "parent");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer ops.* = .{};
+    calls = 0;
+    failing_call = 1;
+    ops.sync_dir = failingSync;
+    var why: Why = .{};
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+    const parent = std.fs.path.dirname(p.live).?;
+    try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
+    try testing.expect(std.mem.indexOf(u8, why.msg, p.live) == null);
+    ops.* = .{};
+    try expectOriginal(a, p);
 }
 
 test "an exchange whose sync fails is exchanged back" {

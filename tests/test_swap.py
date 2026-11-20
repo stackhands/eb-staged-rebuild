@@ -2,6 +2,7 @@ import errno
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
 from eb_staged_rebuild.swap import (
@@ -175,6 +176,39 @@ class SwapTests(unittest.TestCase):
             os.rename(live, hold)
             recover_interrupted_swap(live, staged)
             self.assert_original_pair(live, staged)
+
+    def test_a_failed_parent_flush_names_the_parent_directory(self):
+        cases = (
+            (errno.EIO, "Input/output error"),
+            (errno.EACCES, "Permission denied"),
+            (errno.ENOSPC, "No space left on device"),
+        )
+        real_fsync = os.fsync
+        for number, text in cases:
+            with self.subTest(errno=number):
+                with tempfile.TemporaryDirectory() as root:
+                    live, staged = _pair(root)
+                    parent = os.path.dirname(os.path.abspath(live))
+                    seen = {"n": 0}
+
+                    def flaky(fd, number=number, text=text, seen=seen):
+                        seen["n"] += 1
+                        if seen["n"] == 1:
+                            raise OSError(number, text)
+                        return real_fsync(fd)
+
+                    with (
+                        patch("eb_staged_rebuild.atomicio.os.fsync", side_effect=flaky),
+                        self.assertRaises(OSError) as caught,
+                    ):
+                        swap_directories(
+                            live,
+                            staged,
+                            exchange_call=_portable_exchange,
+                        )
+                    self.assertEqual(caught.exception.errno, number)
+                    self.assertEqual(caught.exception.filename, parent)
+                    self.assert_original_pair(live, staged)
 
     def test_recover_after_second_fallback_rename(self):
         with tempfile.TemporaryDirectory() as root:

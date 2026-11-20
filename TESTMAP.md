@@ -245,6 +245,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | SwapTests.test_exchange_failure_after_success_restores_live | `zig/swap.zig` test "an exchange whose sync fails is exchanged back"; fail_matrix "one module: run fails at swap:all/demo/1.lua.exchange.after" |
 | SwapTests.test_non_fallback_exchange_error_leaves_live_unchanged | `zig/swap.zig` test "an exchange error other than unsupported leaves live unchanged" |
 | SwapTests.test_a_full_or_read_only_exchange_names_the_live_directory | `zig/swap.zig` test "a full or read-only exchange names the live directory" |
+| SwapTests.test_a_failed_parent_flush_names_the_parent_directory | `zig/swap.zig` test "a failed parent flush names the parent directory" |
 | SwapTests.test_unsupported_exchange_uses_fallback | `zig/swap.zig` test "an unsupported exchange uses the fallback" |
 | SwapTests.test_unsupported_exchange_is_refused_when_fallback_is_disabled | `zig/swap.zig` test "an unsupported exchange is refused when fallback is disabled" |
 | SwapTests.test_every_injected_fallback_failure_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" (the injected step precedes the rename that fails) |
