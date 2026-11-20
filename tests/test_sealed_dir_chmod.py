@@ -19,6 +19,12 @@ _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 
 
+def _skip(case: unittest.TestCase, reason: str) -> None:
+    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
+        case.fail(reason)
+    case.skipTest(reason)
+
+
 def _fuse_ready() -> str | None:
     if not os.path.exists("/dev/fuse"):
         return "FUSE is not available"
@@ -58,13 +64,13 @@ def _compile(binary: str) -> None:
 class SealedDirChmodTests(unittest.TestCase):
     def test_refused_chmod_leaves_the_live_tree(self) -> None:
         if os.geteuid() == 0:
-            self.skipTest("the filesystem is mounted by an unprivileged user")
+            _skip(self, "the filesystem is mounted by an unprivileged user")
         reason = _fuse_ready()
         if reason:
-            self.skipTest(reason)
+            _skip(self, reason)
         tool = os.environ.get("TOOL_BIN")
         if not tool:
-            self.skipTest("TOOL_BIN is unset")
+            _skip(self, "TOOL_BIN is unset")
         python = self._run("python")
         binary = self._run(tool)
         detail_py = python.stdout + python.stderr
