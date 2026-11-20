@@ -422,8 +422,11 @@ fn containsChunked(fd: fsx.fd_t, old: []const u8) !bool {
     }
 }
 
-fn discardPath(path: []const u8) void {
-    sys.unlinkat(fsx.cwd, path, 0) catch {};
+fn discardPath(a: Allocator, path: []const u8, why: *[]const u8) Error!void {
+    sys.unlinkat(fsx.cwd, path, 0) catch |err| switch (err) {
+        error.NotFound => return,
+        else => return fail(a, why, err, path),
+    };
 }
 
 fn pathLess(_: void, left: []const u8, right: []const u8) bool {
@@ -442,7 +445,7 @@ fn recoverTree(a: Allocator, root: []const u8, why: *[]const u8) Error!void {
         var names: std.ArrayList([]const u8) = .empty;
         try namesOnInode(a, root, inode, ready, &names, why);
         if (names.items.len == 0) {
-            discardPath(ready);
+            try discardPath(a, ready, why);
             continue;
         }
         std.mem.sort([]const u8, names.items, {}, pathLess);
@@ -481,7 +484,7 @@ fn sweepReady(a: Allocator, root: []const u8, found: *std.ArrayList([]const u8),
         } else if (!std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
             for (private_suffixes) |suffix| {
                 if (std.mem.endsWith(u8, item.name, suffix)) {
-                    discardPath(child);
+                    try discardPath(a, child, why);
                     break;
                 }
             }
