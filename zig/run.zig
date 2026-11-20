@@ -1010,7 +1010,8 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);
-        atomic.fsyncDir(std.fs.path.dirname(retired) orelse "/") catch {};
+        const flushed = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(flushed) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, flushed)});
     } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
