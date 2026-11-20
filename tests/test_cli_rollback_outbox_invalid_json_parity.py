@@ -84,6 +84,8 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
                     "live_software": live,
                     "retired": retired,
                     "live_module": module_file,
+                    "prepared": os.path.join(state_root, "generations", run_id, "modules", "pkg", "1.lua"),
+                    "staged": os.path.join(state_root, "generations", run_id, "software", "pkg", "1"),
                     "new_hash": "a" * 64,
                     "old_hash": "b" * 64,
                     "published_at": time.time(),

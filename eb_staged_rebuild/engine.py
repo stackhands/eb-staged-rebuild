@@ -41,11 +41,9 @@ from eb_staged_rebuild.journal import (
     SCHEMA,
     generation_root as generation_root_for,
     journal_path,
-    list_journals,
-    load_journal,
     load_run_journal,
-    require_matching_run_id,
     require_plain_run_id,
+    run_journals,
     run_dir as run_dir_for,
     save_journal,
 )
@@ -1646,8 +1644,8 @@ def rollback(state_root, run_id=None, faults=None, clock=None, lock_timeout=None
     """
     if (run_id is not None) + (to is not None) + bool(latest) != 1:
         raise Refused("give one of a run id, --latest and --to GEN")
-    if run_id is not None:
-        require_plain_run_id(run_id)
+    if run_id is not None or to is not None:
+        require_plain_run_id(to if run_id is None else run_id)
     faults = faults or FaultInjector()
     now = current_time if clock is None else clock
     lock = FileLock(state_root)
@@ -1668,10 +1666,7 @@ def _rolling_back(journal):
 
 
 def _rollback_run(state_root, run_id, faults, now):
-    require_plain_run_id(run_id)
-    path = journal_path(state_root, run_id)
-    journal = load_journal(path)
-    require_matching_run_id(journal, run_id)
+    path, journal = load_run_journal(state_root, run_id)
     if journal.get("kind") == "retire":
         from eb_staged_rebuild.retire import rollback_retire
 
@@ -1781,7 +1776,7 @@ def _completed(journal):
 
 def _newest_complete(state_root):
     """The run ``rollback --latest`` undoes: the newest complete one."""
-    complete = [j for j in list_journals(state_root) if j.get("kind") != "retire" and j.get("state") == "complete"]
+    complete = [j for j in run_journals(state_root) if j.get("kind") != "retire" and j.get("state") == "complete"]
     if not complete:
         raise Refused("no complete run to roll back")
     return max(complete, key=_completed)["run_id"]
@@ -1867,10 +1862,8 @@ def _rollback_to(state_root, gen, faults, now):
     marked ``rolling_back`` first, so an interrupted pass is finished by
     running the same command again.
     """
-    journals = list_journals(state_root)
-    target = next((j for j in journals if j["run_id"] == gen), None)
-    if target is None:
-        raise Refused(f"no journal at {journal_path(state_root, gen)}")
+    journals = run_journals(state_root)
+    _path, target = load_run_journal(state_root, gen)
     if target.get("kind") == "retire":
         raise Refused(f"run {gen} is a retire record, not a published generation")
     if target.get("state") != "complete":
