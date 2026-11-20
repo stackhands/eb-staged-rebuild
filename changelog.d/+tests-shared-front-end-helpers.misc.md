@@ -1,0 +1,1 @@
+The command-line tests that run both front ends take `implementations()`, `sites()` and the demo `Site` from `tests/support.py` and run commands through its shared runners; each test opens its own subtest per front end.

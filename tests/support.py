@@ -1,10 +1,15 @@
 """Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
 import contextlib
+import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+from collections.abc import Collection
+from typing import NamedTuple
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -218,8 +223,8 @@ def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-def _run(argv, env=None, cwd=None):
-    merged = dict(os.environ)
+def _run(argv, env=None, cwd=None, clear=()):
+    merged = {key: value for key, value in os.environ.items() if key not in clear}
     if env:
         merged.update(env)
     completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
@@ -232,23 +237,26 @@ def _run(argv, env=None, cwd=None):
 
 
 def run_cli(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
 ) -> subprocess.CompletedProcess[str]:
-    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere."""
+    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere.
+
+    The variables named in CLEAR are left out of the inherited environment; ENV is added after.
+    """
     if cwd is not None:
         search = [_REPO, os.environ.get("PYTHONPATH", "")]
         env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env, cwd)
+    return _run([*PYTHON_CLI, *args], env, cwd, clear)
 
 
 def run_cli_optional_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
     tool = os.environ.get("TOOL_BIN")
     if not tool:
         return None
-    return _run([tool, *args], env, cwd)
+    return _run([tool, *args], env, cwd, clear)
 
 
 def run_cli_or_binary(
@@ -259,3 +267,122 @@ def run_cli_or_binary(
     if binary is not None:
         return binary
     return run_cli(*args, env=env, cwd=cwd)
+
+
+PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
+
+
+class Implementation(NamedTuple):
+    """One front end: its name, the command that starts it, and how a test runs it to completion."""
+
+    name: str
+    command: tuple[str, ...]
+
+    def run(self, *args, env=None, cwd=None, clear=()):
+        runner = run_cli if self.name == "python" else run_cli_optional_binary
+        return runner(*args, env=env, cwd=cwd, clear=clear)
+
+
+def implementations():
+    """The Python front end and, when TOOL_BIN is set, the program it names."""
+    found = [Implementation("python", PYTHON_CLI)]
+    if os.environ.get("TOOL_BIN"):
+        found.append(Implementation("binary", (os.environ["TOOL_BIN"],)))
+    return found
+
+
+def remove_tree(root):
+    """Remove ROOT, first giving back the write access a test took from its directories."""
+    for directory, dirs, _files in os.walk(root):
+        for entry in dirs:
+            path = os.path.join(directory, entry)
+            if not os.path.islink(path):
+                os.chmod(path, 0o755)
+    shutil.rmtree(root)
+
+
+def sites(test, make, prefix):
+    """``make(implementation, root)`` for each front end, each in a fresh ROOT that TEST removes when it ends.
+
+    A list, so a test opens its own ``subTest`` around each site rather than a generator yielding from inside one.
+    """
+    made = []
+    for implementation in implementations():
+        root = tempfile.mkdtemp(prefix=prefix)
+        test.addCleanup(remove_tree, root)
+        made.append(make(implementation, root))
+    return made
+
+
+def write(path, data, mode=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb" if isinstance(data, bytes) else "w") as handle:
+        handle.write(data)
+    if mode is not None:
+        os.chmod(path, mode)
+
+
+FAKE_EB = os.path.join(_REPO, "tests", "fake_eb.py")
+FAKE_LMOD = os.path.join(_REPO, "tests", "fake_lmod.py")
+CLEARED = ("LMOD_CMD", "MODULEPATH", "LOADEDMODULES", "_LMFILES_", "EESSI_CVMFS_REPO", "EESSI_EPREFIX")
+
+
+class Site:
+    """A live demo/1 and the commands that stage, verify and publish it with one front end.
+
+    LMOD_CMD, the EESSI variables and EASYBUILD_* are unset unless a command sets them.
+    """
+
+    def __init__(self, implementation, root):
+        self.implementation = implementation
+        self.name = implementation.name
+        self.root = root
+        self.software = os.path.join(root, "software")
+        self.modules = os.path.join(root, "modules")
+        self.state = os.path.join(root, "state")
+        self.tmp = os.path.join(root, "tmp")
+        self.live = os.path.join(self.software, "demo", "1")
+        write(os.path.join(self.live, "PAYLOAD"), "old\n")
+        write(
+            os.path.join(self.modules, "all", "demo", "1.lua"),
+            f'local root = "{self.live}"\nsetenv("EBROOTDEMO", root)\n',
+        )
+        os.makedirs(self.tmp)
+        self.eb = os.path.join(root, "eb")
+        write(self.eb, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_EB}" "$@"\n', 0o755)
+        self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
+
+    def cli(self, *args, **env):
+        clear = [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
+        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=clear)
+
+    def run(self, *options, extra=None, verify=True, **env):
+        if extra is not None:
+            env["FAKE_EB_EXTRA"] = json.dumps(extra)
+        gate = ["--verify"] if verify else []
+        return self.cli(
+            "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
+            "--backend", "installpath", "--eb", self.eb, "--run-id", "r1", "--skip-live-check",
+            "--module", "demo/1", *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
+        )
+
+    def journal_path(self, run_id="r1"):
+        return os.path.join(self.state, "runs", run_id, "journal.json")
+
+    def journal(self, run_id="r1"):
+        with open(self.journal_path(run_id), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def report(self, run_id="r1"):
+        with open(self.report_path(run_id), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def report_path(self, run_id="r1"):
+        return os.path.join(self.state, "runs", run_id, "verify.json")
+
+    def staged(self):
+        return self.journal()["modules_plan"][0]["staged"]
+
+    def payload(self):
+        with open(os.path.join(self.live, "PAYLOAD"), encoding="utf-8") as handle:
+            return handle.read()
