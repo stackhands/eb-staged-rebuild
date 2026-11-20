@@ -154,7 +154,7 @@ def _parser():
     run_p.add_argument("--dry-run", action="store_true")
     run_p.add_argument("--module", action="append", default=[], dest="module_rels", metavar="NAME/VERSION")
     run_p.add_argument("--run-id", default=None)
-    run_p.add_argument("--lock-timeout", type=float, default=None)
+    run_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     run_p.add_argument("--skip-live-check", action="store_true")
     run_p.add_argument(
         "--prepare",

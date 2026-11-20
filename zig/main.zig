@@ -915,7 +915,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []c
     if (vals[4]) |b| if (!engine_inList(&backends, b))
         usageError(run_usage, who, "argument --backend: invalid choice: {s} (choose from 'auto', 'bwrap', 'userns', 'installpath')", .{repr(a, b)});
     const grace_cli: ?f64 = if (vals[5]) |v| graceArg(a, run_usage, who, v) else null;
-    const lock_timeout: ?f64 = if (vals[9]) |v| floatArg(a, run_usage, who, "lock-timeout", v) else null;
+    const lock_timeout: ?f64 = if (vals[9]) |v| lockTimeoutArg(a, run_usage, who, v) else null;
     const min_free_cli: ?u128 = if (vals[14]) |v| bytesArg(a, run_usage, who, v) else null;
 
     const software = nonEmpty(vals[0]) orelse nonEmpty(env.get("EASYBUILD_INSTALLPATH_SOFTWARE"));
