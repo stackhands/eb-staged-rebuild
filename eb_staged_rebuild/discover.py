@@ -1,5 +1,6 @@
 """Find module files EasyBuild wrote and decide which install directory they name."""
 
+import errno
 import os
 
 from eb_staged_rebuild.atomicio import read_bytes
@@ -13,19 +14,34 @@ from eb_staged_rebuild.modulefile import (
 from eb_staged_rebuild.paths import abspath, is_real_dir, is_within, lstat_kind
 
 
+def _raise_interrupt(error):
+    """Re-raise an interrupted directory read and leave any other error alone.
+
+    ``os.walk`` skips a directory whose ``os.scandir`` fails. An interrupt
+    would then look like an empty module tree. A directory that cannot be
+    read for another reason is left out, which is what the Zig walk does
+    when opening that directory fails.
+    """
+    if error.errno == errno.EINTR:
+        raise error
+
+
 def walk_module_tree(modules_root):
     """Return ``(files, links)``.
 
     ``files`` is a list of regular ``.lua`` and ``.tcl`` files. ``links`` is a
     list of ``(relative posix path, link text)``. Symlinked directories are not
-    descended into.
+    descended into. An interrupted read of a directory is raised. Any other
+    error reading a directory is skipped.
     """
     modules_root = os.fspath(modules_root)
     files = []
     links = []
     if lstat_kind(modules_root) != "dir":
         raise Refused(f"module tree is not a real directory: {modules_root}")
-    for dirpath, dirnames, filenames in os.walk(modules_root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(
+        modules_root, followlinks=False, onerror=_raise_interrupt
+    ):
         kept = []
         for name in list(dirnames):
             child = os.path.join(dirpath, name)
