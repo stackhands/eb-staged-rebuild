@@ -55,24 +55,32 @@ fn row(a: Allocator, rel: []const u8, kind: []const u8, st: fsx.Stat, detail: []
 
 /// os.walk without following links: symlinked directories are rows of their
 /// own and are not entered.
-fn walk(a: Allocator, root: []const u8, dir: []const u8, rows: *std.ArrayList(Py)) !void {
-    const fd = try fsx.openDir(fsx.cwd, dir, false);
-    defer sys.close(fd);
-    var it = try fsx.DirIter.init(a, fd);
-    var subdirs: std.ArrayList([]const u8) = .empty;
-    while (try it.next()) |e| {
-        const child = try std.fs.path.join(a, &.{ dir, e.name });
-        const st = try fsx.statAt(fsx.cwd, child, false);
-        const rel = @import("modulefile.zig").relpath(a, child, root);
-        if (st.isLink()) {
-            try rows.append(a, try row(a, rel, "symlink", st, try readlink(a, child)));
-        } else if (st.isDir()) {
-            try subdirs.append(a, child);
-        } else {
-            try rows.append(a, try row(a, rel, "file", st, try sha256File(a, child)));
+fn walk(a: Allocator, root: []const u8, top: []const u8, rows: *std.ArrayList(Py)) !void {
+    // the worklist holds paths, one directory open at a time whatever the
+    // depth or the width of the tree
+    var stack: std.ArrayList([]const u8) = .empty;
+    defer stack.deinit(a);
+    try stack.append(a, top);
+    while (stack.pop()) |dir_path| {
+        const fd = try fsx.openDir(fsx.cwd, dir_path, false);
+        defer sys.close(fd);
+        var it = try fsx.DirIter.init(a, fd);
+        defer it.deinit(a);
+        var subdirs: std.ArrayList([]const u8) = .empty;
+        while (try it.next()) |e| {
+            const child = try std.fs.path.join(a, &.{ dir_path, e.name });
+            const st = try fsx.statAt(fsx.cwd, child, false);
+            const rel = @import("modulefile.zig").relpath(a, child, root);
+            if (st.isLink()) {
+                try rows.append(a, try row(a, rel, "symlink", st, try readlink(a, child)));
+            } else if (st.isDir()) {
+                try subdirs.append(a, child);
+            } else {
+                try rows.append(a, try row(a, rel, "file", st, try sha256File(a, child)));
+            }
         }
+        for (subdirs.items) |d| try stack.append(a, d);
     }
-    for (subdirs.items) |d| try walk(a, root, d, rows);
 }
 
 fn lessRow(_: void, x: Py, y: Py) bool {
@@ -168,4 +176,73 @@ test "validSnapshot accepts records from snapshot and rejects other JSON shapes"
     }) };
     defer a.free(malformed.dict);
     try std.testing.expect(!validSnapshot(malformed));
+}
+
+test "walk crosses a deep tree under a tight descriptor limit" {
+    const gpa = std.testing.allocator;
+    const seed: u64 = 0x5EEDC1;
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+    var cwd_buf: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &cwd_buf);
+    const base = try std.fmt.allocPrint(gpa, "{s}/.zig-cache/ebsr-livewalk-{d}", .{ here, linux.getpid() });
+    defer gpa.free(base);
+    try common.atomic.makedirs(base);
+
+    var names: std.ArrayList(u8) = .empty;
+    defer names.deinit(gpa);
+    var zb: [sys.path_max:0]u8 = undefined;
+    var fd = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(fd);
+    var depth: usize = 0;
+    while (depth < 1300) : (depth += 1) {
+        const c: u8 = 'a' + @as(u8, @intCast(rand.uintLessThan(u8, 26)));
+        try names.append(gpa, c);
+        const nm = names.items[names.items.len - 1 ..];
+        _ = try sys.call(linux.mkdirat, .{ fd, (try sys.z(&zb, nm)).ptr, @as(linux.mode_t, 0o755) });
+        const sub = try fsx.openDir(fd, nm, false);
+        sys.close(fd);
+        fd = sub;
+    }
+    const leaf = try sys.openat(fd, "leaf.txt", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o644);
+    try sys.writeAll(leaf, "deep\n");
+    sys.close(leaf);
+
+    var old: linux.rlimit = undefined;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, null, &old)));
+    const lim: linux.rlimit = .{ .cur = 1024, .max = old.max };
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, &lim, null)));
+    defer _ = linux.prlimit(0, .NOFILE, &old, null);
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var rows: std.ArrayList(Py) = .empty;
+    walk(a, base, base, &rows) catch |err| {
+        std.debug.print("livecheck walk seed: {d}: gave {s} errno E{s}\n", .{ seed, @errorName(err), @tagName(sys.last_errno) });
+        return err;
+    };
+    var found = false;
+    for (rows.items) |r| {
+        const p = r.list[0].str;
+        if (std.mem.endsWith(u8, p, "leaf.txt")) found = true;
+    }
+    if (!found) return error.TestUnexpectedResult;
+
+    var full: std.ArrayList(u8) = .empty;
+    defer full.deinit(gpa);
+    try full.appendSlice(gpa, base);
+    for (names.items) |ch| {
+        try full.append(gpa, '/');
+        try full.append(gpa, ch);
+    }
+    try full.appendSlice(gpa, "/leaf.txt");
+    var fz: [sys.path_max:0]u8 = undefined;
+    _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, full.items), 0);
+    full.shrinkRetainingCapacity(full.items.len - "/leaf.txt".len);
+    while (full.items.len > base.len) {
+        _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, full.items), linux.AT.REMOVEDIR);
+        full.shrinkRetainingCapacity(full.items.len - 2);
+    }
+    _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, base), linux.AT.REMOVEDIR);
 }
