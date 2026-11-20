@@ -25,11 +25,7 @@ jobs:
       - name: promtool 3.16.0
         uses: ./.github/actions/pinned-promtool
       - name: user namespaces for the userns backend
-        # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        uses: ./.github/actions/unprivileged-userns
       - name: unit tests
         run: |
           python -m pip install jsonschema
@@ -84,11 +80,7 @@ jobs:
       - name: bubblewrap and Lmod
         run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl acl
       - name: user namespaces for the userns backend
-        # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        uses: ./.github/actions/unprivileged-userns
       - name: EasyBuild 5.4.2
         run: python -m pip install easybuild-framework==5.4.2 easybuild-easyblocks==5.4.2 easybuild-easyconfigs==5.4.2
       - name: rebuild stagedemo
@@ -151,11 +143,7 @@ jobs:
       - name: EasyBuild 5.4.2
         run: python -m pip install easybuild-framework==5.4.2 easybuild-easyblocks==5.4.2 easybuild-easyconfigs==5.4.2
       - name: user namespaces for the userns backend
-        # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
+        uses: ./.github/actions/unprivileged-userns
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1

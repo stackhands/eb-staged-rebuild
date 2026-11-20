@@ -1,0 +1,13 @@
+name: unprivileged user namespaces
+description: Allow unprivileged user namespaces for the userns backend on Ubuntu runners.
+runs:
+  using: composite
+  steps:
+    - name: allow unprivileged user namespaces
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
+        if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
