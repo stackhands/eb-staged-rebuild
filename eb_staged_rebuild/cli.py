@@ -191,7 +191,7 @@ def _parser():
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
     _add_state_root(back_p)
-    back_p.add_argument("--lock-timeout", type=float, default=None)
+    back_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     back_p.add_argument("run_id")
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
