@@ -790,7 +790,7 @@ fn plan(r: *R) E!void {
     var why: []const u8 = "";
     const tree = discover.walkModuleTree(a, roots.modules, &why) catch |err| return if (err == error.Refused) r.refuse("{s}", .{why}) else error.OutOfMemory;
     if (tree.files.len == 0) return r.refuse("no module files under {s}", .{roots.modules});
-    const ordered = discover.orderModuleFiles(a, tree.files, roots.modules) catch return r.refuse("cannot read the staged module files", .{});
+    const ordered = discover.orderModuleFiles(a, tree.files, roots.modules, &why) catch |err| return if (err == error.Refused) r.refuse("{s}", .{why}) else error.OutOfMemory;
     const Draft = struct { rel: []const u8, staged: []const u8, live: []const u8, retired: []const u8, text: []const u8, live_module: []const u8, path: []const u8 };
     var drafted: std.ArrayList(Draft) = .empty;
     const run_id = r.str("run_id");
