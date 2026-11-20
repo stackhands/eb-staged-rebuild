@@ -3,23 +3,71 @@
 The staged install is an overlay whose upper layer is ramfs. listxattr
 on the lower file succeeds. setxattr of the new temporary file returns
 ENOTSUP. The mount is made in a user namespace, which is what can mount
-the overlay.
+the overlay. Without that namespace, or without overlay, the test skips.
+A child that exits with a status other than 0 or 2 did not run the tool.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
 import unittest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TIMEOUT = 60
+
+_PROBE = """
+import os, subprocess, sys, tempfile
+root = tempfile.mkdtemp(prefix="xattr-probe-")
+lower = os.path.join(root, "lower")
+ram = os.path.join(root, "ram")
+mnt = os.path.join(root, "mnt")
+os.makedirs(lower)
+os.makedirs(ram)
+os.makedirs(mnt)
+try:
+    subprocess.run(["mount", "-t", "ramfs", "ramfs", ram], check=True, timeout=30)
+    os.makedirs(os.path.join(ram, "upper"))
+    os.makedirs(os.path.join(ram, "work"))
+    subprocess.run(
+        [
+            "mount", "-t", "overlay", "overlay", "-o",
+            f"lowerdir={lower},upperdir={os.path.join(ram, 'upper')},workdir={os.path.join(ram, 'work')}",
+            mnt,
+        ],
+        check=True,
+        timeout=30,
+    )
+except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    sys.stderr.write("overlay mounts are not available\\n")
+    raise SystemExit(1)
+"""
+
+
+def _namespace_problem() -> str | None:
+    if shutil.which("unshare") is None:
+        return "user namespaces are not available"
+    try:
+        done = subprocess.run(
+            ["unshare", "--user", "--map-root-user", "--mount", "--fork", sys.executable, "-c", _PROBE],
+            check=False,
+            capture_output=True,
+            timeout=_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return "user namespaces are not available"
+    if done.returncode == 0:
+        return None
+    err = done.stderr.decode("utf-8", "replace")
+    if "overlay mounts are not available" in err:
+        return "overlay mounts are not available"
+    return "user namespaces are not available"
 
 
 def _inside(tool: str) -> int:
-    import shutil
-
     work = "/tmp/prefix-user-xattr"
     shutil.rmtree(work, ignore_errors=True)
     lower = os.path.join(work, "lower")
@@ -35,10 +83,10 @@ def _inside(tool: str) -> int:
     with open(kept, "w", encoding="utf-8") as handle:
         handle.write(original)
     os.setxattr(kept, "user.ebsr", b"kept")
-    subprocess.check_call(["mount", "-t", "ramfs", "ramfs", ram])
+    subprocess.run(["mount", "-t", "ramfs", "ramfs", ram], check=True, timeout=_TIMEOUT)
     os.makedirs(os.path.join(ram, "upper"))
     os.makedirs(os.path.join(ram, "work"))
-    subprocess.check_call(
+    subprocess.run(
         [
             "mount",
             "-t",
@@ -47,7 +95,9 @@ def _inside(tool: str) -> int:
             "-o",
             f"lowerdir={lower},upperdir={os.path.join(ram, 'upper')},workdir={os.path.join(ram, 'work')}",
             mnt,
-        ]
+        ],
+        check=True,
+        timeout=_TIMEOUT,
     )
     eb = os.path.join(work, "fake-eb")
     with open(eb, "w", encoding="utf-8") as handle:
@@ -106,6 +156,7 @@ def _inside(tool: str) -> int:
         check=False,
         capture_output=True,
         env=env,
+        timeout=_TIMEOUT,
     )
     visible = os.path.join(mnt, kept_rel)
     if os.path.isfile(visible):
@@ -128,6 +179,9 @@ class PrefixUserXattrParityTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             self.skipTest("TOOL_BIN is unset")
+        problem = _namespace_problem()
+        if problem:
+            self.skipTest(problem)
         python = self._run("python")
         binary = self._run(tool)
         detail_py = python.stdout + python.stderr
@@ -144,22 +198,29 @@ class PrefixUserXattrParityTests(unittest.TestCase):
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8:strict"
-        done = subprocess.run(
-            [
-                "unshare",
-                "--user",
-                "--map-root-user",
-                "--mount",
-                "--fork",
-                sys.executable,
-                os.path.abspath(__file__),
-                "--inside",
-                tool,
-            ],
-            check=False,
-            capture_output=True,
-            env=env,
-        )
+        try:
+            done = subprocess.run(
+                [
+                    "unshare",
+                    "--user",
+                    "--map-root-user",
+                    "--mount",
+                    "--fork",
+                    sys.executable,
+                    os.path.abspath(__file__),
+                    "--inside",
+                    tool,
+                ],
+                check=False,
+                capture_output=True,
+                env=env,
+                timeout=_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self.skipTest("user namespaces are not available")
+        if done.returncode not in (0, 2):
+            err = done.stderr.decode("utf-8", "replace").strip()
+            self.skipTest(f"user namespace or overlay mount is not available: exit {done.returncode} {err}")
         return subprocess.CompletedProcess(
             done.args,
             done.returncode,
