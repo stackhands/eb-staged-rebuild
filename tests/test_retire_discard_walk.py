@@ -7,13 +7,11 @@ file. Its index is the stamp plus each component of that path.
 
 import ctypes
 import os
-import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
-from tests.support import classic_install
+from tests.support import classic_install, fs_fail_program, python314
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CHILD = """\
@@ -32,19 +30,6 @@ except Refused as exc:
 sys.stdout.write("no refuse\\n")
 raise SystemExit(1)
 """
-
-
-def _python314():
-    if sys.version_info[:2] == (3, 14):
-        return sys.executable
-    found = shutil.which("python3.14")
-    if not found:
-        return None
-    completed = subprocess.run(
-        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
-        check=False,
-    )
-    return found if completed.returncode == 0 else None
 
 
 def _ptrace_problem():
@@ -67,25 +52,19 @@ def _ptrace_problem():
 
 
 def _tracer():
-    if shutil.which("gcc") is None:
-        return None, "gcc is not on PATH, so tests/fs_fail.c cannot be built"
-    src = os.path.join(_REPO, "tests", "fs_fail.c")
-    out = os.path.join(tempfile.gettempdir(), "eb-fs-fail-retire")
-    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
-        built = subprocess.run(["gcc", "-O2", "-o", out, src], capture_output=True, text=True, check=False)
-        if built.returncode != 0:
-            detail = (built.stderr or built.stdout or "gcc failed").strip()
-            return None, f"gcc could not build tests/fs_fail.c: {detail}"
+    path, reason = fs_fail_program("eb-fs-fail-retire")
+    if path is None:
+        return None, reason
     problem = _ptrace_problem()
     if problem:
         return None, f"ptrace is unavailable: {problem}"
-    return out, None
+    return path, None
 
 
 class RetireDiscardWalkTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.python = _python314()
+        cls.python = python314()
         cls.program, cls.reason = _tracer()
 
     def setUp(self):

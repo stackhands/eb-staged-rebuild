@@ -9,33 +9,12 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
+from tests.support import fs_fail_program, python314
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _python314():
-    if sys.version_info[:2] == (3, 14):
-        return sys.executable
-    found = shutil.which("python3.14")
-    if not found:
-        return None
-    completed = subprocess.run(
-        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
-        check=False,
-    )
-    return found if completed.returncode == 0 else None
-
-
-def _program():
-    """Build tests/fs_fail.c. The release binary is static, so the tracer has to be its parent."""
-    src = os.path.join(_REPO, "tests", "fs_fail.c")
-    out = os.path.join(tempfile.gettempdir(), "eb-fs-fail-n23")
-    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
-        subprocess.run(["gcc", "-O2", "-o", out, src], check=True)
-    return out
 
 
 class GenerationParentFsyncTest(unittest.TestCase):
@@ -44,7 +23,7 @@ class GenerationParentFsyncTest(unittest.TestCase):
             if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
                 self.fail("TOOL_BIN is unset")
             self.skipTest("TOOL_BIN is unset")
-        self.python = _python314()
+        self.python = python314()
         if self.python is None:
             self.skipTest("python3.14 is not installed")
 
@@ -79,7 +58,9 @@ class GenerationParentFsyncTest(unittest.TestCase):
         # The first fsync under the generations directory is the flush of
         # that directory after the settled generation is removed.
         tool = os.environ["TOOL_BIN"]
-        program = _program()
+        program, reason = fs_fail_program("eb-fs-fail-n23")
+        if program is None:
+            self.fail(reason)
         py_root, py_state = self._layout()
         zig_root, zig_state = self._layout()
         args = [
