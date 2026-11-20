@@ -827,7 +827,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []co
     if (state_root == null) missing(a, sr.usage, who, &.{"--state-root"});
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(

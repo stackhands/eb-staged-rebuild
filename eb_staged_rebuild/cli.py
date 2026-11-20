@@ -198,7 +198,7 @@ def _parser():
     _add_state_root(gc_p)
     gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
-    gc_p.add_argument("--lock-timeout", type=float, default=None)
+    gc_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     gc_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
     gc_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
     gc_p.add_argument(
