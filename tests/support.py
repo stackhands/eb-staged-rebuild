@@ -2,9 +2,11 @@
 
 import contextlib
 import os
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -259,3 +261,41 @@ def run_cli_or_binary(
     if binary is not None:
         return binary
     return run_cli(*args, env=env, cwd=cwd)
+
+
+def python314():
+    """Return the Python 3.14 interpreter, or None when it is not installed."""
+    if sys.version_info[:2] == (3, 14):
+        return sys.executable
+    found = shutil.which("python3.14")
+    if not found:
+        return None
+    completed = subprocess.run(
+        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
+        check=False,
+    )
+    return found if completed.returncode == 0 else None
+
+
+def fs_fail_program(cache_name):
+    """Build tests/fs_fail.c.
+
+    Return ``(path, None)`` or ``(None, reason)``. The release binary is
+    static, so the tracer has to be its parent. ``cache_name`` is the file
+    in the temporary directory, so two suites do not rebuild one path.
+    """
+    if shutil.which("gcc") is None:
+        return None, "gcc is not on PATH, so tests/fs_fail.c cannot be built"
+    src = os.path.join(_REPO, "tests", "fs_fail.c")
+    out = os.path.join(tempfile.gettempdir(), cache_name)
+    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
+        built = subprocess.run(
+            ["gcc", "-O2", "-o", out, src],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if built.returncode != 0:
+            detail = (built.stderr or built.stdout or "gcc failed").strip()
+            return None, f"gcc could not build tests/fs_fail.c: {detail}"
+    return out, None
