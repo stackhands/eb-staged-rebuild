@@ -17,6 +17,7 @@ const admin = @import("admin.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
+const pyfmt = @import("pyfmt.zig");
 const oom = @import("oom.zig").oom;
 const Allocator = std.mem.Allocator;
 
@@ -176,7 +177,24 @@ fn transformed(a: Allocator, data: []const u8, old: []const u8, new: []const u8,
     return (try replacePrefix(a, data, old, new, why)).bytes;
 }
 
-fn punchZeros(fd: fsx.fd_t, data: []const u8) void {
+fn punchIgnored() bool {
+    // Python leaves the written zeros in place for these and continues.
+    return switch (sys.last_errno) {
+        .OPNOTSUPP, .NOSYS, .INVAL => true,
+        else => false,
+    };
+}
+
+fn refusePunch(a: Allocator, why: *[]const u8, partial: []const u8) Error {
+    var out: std.ArrayList(u8) = .empty;
+    const text = sys.errnoText(sys.last_errno) orelse "Unknown error";
+    out.print(a, "[Errno {d}] fallocate(PUNCH_HOLE): {s}: ", .{ @backingInt(sys.last_errno), text }) catch return error.OutOfMemory;
+    pyfmt.reprStr(&out, a, partial) catch return error.OutOfMemory;
+    why.* = out.items;
+    return error.Refused;
+}
+
+fn punchZeros(a: Allocator, fd: fsx.fd_t, data: []const u8, partial: []const u8, why: *[]const u8) Error!void {
     var index: usize = 0;
     while (index < data.len) {
         if (data[index] != 0) {
@@ -188,7 +206,12 @@ fn punchZeros(fd: fsx.fd_t, data: []const u8) void {
         const start = (index + 4095) & ~@as(usize, 4095);
         const aligned = end & ~@as(usize, 4095);
         if (aligned > start) {
-            _ = linux.fallocate(fd, 3, @intCast(start), @intCast(aligned - start));
+            while (true) {
+                if (sys.result(linux.fallocate(fd, 3, @intCast(start), @intCast(aligned - start))) catch {
+                    if (punchIgnored()) break;
+                    return refusePunch(a, why, partial);
+                }) |_| break;
+            }
         }
         index = end;
     }
@@ -315,7 +338,7 @@ fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]c
         sys.unlinkat(fsx.cwd, partial, 0) catch {};
     };
     sys.writeAll(fd, image) catch |err| return fail(a, why, err, partial);
-    punchZeros(fd, image);
+    try punchZeros(a, fd, image, partial, why);
     copyUserXattrs(src, fd);
     try restoreAccess(a, fd, meta, why);
     sys.fsync(fd) catch |err| return fail(a, why, err, partial);
