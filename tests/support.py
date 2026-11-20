@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 import json
 import os
+import select
 import shutil
 import stat
 import subprocess
@@ -220,6 +221,34 @@ def hold_state_root_lock(state_root: str, timeout: float | None = 0):
         yield lock
     finally:
         lock.release()
+
+
+def pause_fifo(directory):
+    """A FIFO to name in EB_STAGED_REBUILD_PAUSE_READY, made in DIRECTORY, and its read end.
+
+    The pause hook opens that path for writing and closes it when the command
+    reaches its pause step. With the read end opened before the command starts,
+    the close is an event ``wait_for_pause`` can wait for.
+    """
+    path = os.path.join(tempfile.mkdtemp(dir=directory, prefix="pause-"), "ready")
+    os.mkfifo(path)
+    return path, os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+
+def wait_for_pause(proc, fifo, timeout=60):
+    """Whether PROC reached its pause step: its hook opened and closed FIFO before PROC exited or TIMEOUT seconds.
+
+    FIFO is the read end ``pause_fifo`` returned; it is closed here.
+    """
+    exited = os.pidfd_open(proc.pid)
+    try:
+        poller = select.poll()
+        poller.register(fifo, select.POLLIN | select.POLLHUP)
+        poller.register(exited, select.POLLIN)
+        return fifo in dict(poller.poll(timeout * 1000))
+    finally:
+        os.close(exited)
+        os.close(fifo)
 
 
 def mode_of(path):
