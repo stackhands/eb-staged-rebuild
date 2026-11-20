@@ -1,3 +1,3 @@
 # Modules the zig job does not run. The unit job still discovers them.
 # One module stem, a tab, and why the comparison cannot pass.
-test_cli_path_bytes_parity	dry-run command line: Python has "python3 -m eb_staged_rebuild.userns_sandbox" where the binary has "eb-staged-rebuild __userns-sandbox"
+# An empty list is valid: every discovered module then runs.
