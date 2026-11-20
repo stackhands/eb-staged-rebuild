@@ -239,23 +239,21 @@ case_rollback-to() {
 }
 
 case_gc-keep() {
-    local tree=$SITE/software/Example/.1.0-GCCcore-15.2.0.example-8 job
+    local tree=$SITE/software/Example/.1.0-GCCcore-15.2.0.example-8 to from
     run_example example-8
     run_example example-9
     step 0 eb-staged-rebuild list --state-root "$STATE"
     step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --dry-run
     step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --dry-run
     # A job on this machine with its working directory in the tree that
-    # example-8 replaced.
-    (cd "$tree" && exec sleep 600) &
-    job=$!
-    until [ "$(readlink "/proc/$job/cwd")" = "$tree" ]; do
-        kill -0 "$job"
-        sleep 0.1
-    done
+    # example-8 replaced. It says so once it is there, and ends when this
+    # case writes a line to it.
+    coproc JOB { cd "$tree" && echo ready && read -r _; }
+    from=${JOB[0]} to=${JOB[1]}
+    read -r _ <&"$from"
     step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
-    kill "$job"
-    wait "$job" || true
+    echo release >&"$to"
+    wait "$JOB_PID"
     step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
     step 0 eb-staged-rebuild list --state-root "$STATE"
 }
