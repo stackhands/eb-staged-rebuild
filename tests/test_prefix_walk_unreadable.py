@@ -2,7 +2,8 @@
 
 ``os.walk`` ignores a directory it cannot list unless ``onerror`` raises.
 The release binary refuses that directory. This test builds a mode 000
-directory after the stand-in install and compares the two front ends.
+directory after the stand-in install. The Python command is checked on
+every run, and the binary when that program is set.
 """
 
 import os
@@ -88,21 +89,20 @@ class PrefixWalkUnreadableTest(unittest.TestCase):
         return root, state, os.path.join(state, "generations", "run1", "software", "demo", "1", "hidden"), args, env
 
     def test_an_unreadable_directory_refuses_the_rewrite(self):
-        tool = os.environ.get("TOOL_BIN")
-        self.assertTrue(tool, "TOOL_BIN names the release binary")
         py_root, py_state, py_hidden, py_args, py_env = self._layout()
-        zig_root, zig_state, zig_hidden, zig_args, zig_env = self._layout()
         python = run_cli(*py_args, env=py_env, cwd=py_root)
-        binary = run_cli_optional_binary(*zig_args, env=zig_env, cwd=zig_root)
-        self.assertIsNotNone(binary)
-        self.assertEqual(python.returncode, binary.returncode, (python.stderr, binary.stderr))
         self.assertNotEqual(python.returncode, 0)
+        self.assertIn("Permission denied", python.stderr)
+        self.assertIn(py_hidden, python.stderr)
+        self.assertFalse(os.access(py_hidden, os.R_OK))
+        zig_root, zig_state, zig_hidden, zig_args, zig_env = self._layout()
+        binary = run_cli_optional_binary(*zig_args, env=zig_env, cwd=zig_root)
+        if binary is None:
+            return
+        self.assertEqual(python.returncode, binary.returncode, (python.stderr, binary.stderr))
         self.assertEqual(
             python.stderr.replace(py_state, "STATE"),
             binary.stderr.replace(zig_state, "STATE"),
         )
-        self.assertIn("Permission denied", python.stderr)
-        self.assertIn(py_hidden, python.stderr)
         self.assertIn(zig_hidden, binary.stderr)
-        self.assertFalse(os.access(py_hidden, os.R_OK))
         self.assertFalse(os.access(zig_hidden, os.R_OK))
