@@ -27,6 +27,18 @@ def _sha256(data):
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+def _scratch_build(prefix):
+    """A build directory under the test's temporary directory.
+
+    EasyBuild's default build directory is shared by every suite. The tool
+    reads a build directory and passes it to EasyBuild, and the initial
+    install names the same directory in the environment EasyBuild reads.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(prefix)), "eb-build")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _easyconfig(path, digest, name="stagedemo", deps=""):
     text = f"""\
 easyblock = 'Binary'
@@ -104,6 +116,8 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         ec = os.path.join(work, "stagedemo-1.eb")
         _easyconfig(ec, _sha256(payload))
         prefix = os.path.join(work, "prefix")
+        install_env = os.environ.copy()
+        install_env["EASYBUILD_BUILDPATH"] = _scratch_build(prefix)
         completed = subprocess.run(
             [
                 "eb",
@@ -116,6 +130,7 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            env=install_env,
         )
         if completed.returncode != 0:
             self.fail(completed.stdout + "\n" + completed.stderr)
@@ -144,11 +159,14 @@ class EasyBuildIntegrationTests(unittest.TestCase):
             _easyconfig(os.path.join(work, f"{name}-1.eb"), _sha256(payload), name, deps)
         ec = os.path.join(work, "stagedemo-1.eb")
         prefix = os.path.join(work, "prefix")
+        install_env = os.environ.copy()
+        install_env["EASYBUILD_BUILDPATH"] = _scratch_build(prefix)
         completed = subprocess.run(
             ["eb", ec, f"--robot={work}:", f"--sourcepath={src}", f"--prefix={prefix}", "--module-syntax=Lua"],
             capture_output=True,
             text=True,
             check=False,
+            env=install_env,
         )
         if completed.returncode != 0:
             self.fail(completed.stdout + "\n" + completed.stderr)
@@ -165,6 +183,8 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         _easyconfig(ec, _sha256(payload), deps=deps)
 
     def _rebuild(self, prefix, ec, src, backend, *eb_args, build_dir=None):
+        if build_dir is None:
+            build_dir = _scratch_build(prefix)
         spec = Spec(
             software=os.path.join(prefix, "software"),
             modules=os.path.join(prefix, "modules"),
