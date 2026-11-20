@@ -256,21 +256,22 @@ pub fn lstatKind(path: []const u8) []const u8 {
 }
 
 /// generation_complete: a real directory with PAYLOAD, the tool's stamp or
-/// an easybuild/*.eb file.
+/// an easybuild/*.eb file. Listing that directory is not optional: an
+/// unreadable easybuild directory is the same error os.listdir raises.
 fn generationComplete(a: Allocator, path: []const u8) bool {
     if (!std.mem.eql(u8, lstatKind(path), "dir")) return false;
     for ([_][]const u8{ "PAYLOAD", ".eb-staged-rebuild-complete" }) |n| {
-        const p = std.fs.path.join(a, &.{ path, n }) catch return false;
+        const p = std.fs.path.join(a, &.{ path, n }) catch oom();
         if (std.mem.eql(u8, lstatKind(p), "file")) return true;
     }
-    const meta = std.fs.path.join(a, &.{ path, "easybuild" }) catch return false;
+    const meta = std.fs.path.join(a, &.{ path, "easybuild" }) catch oom();
     if (!std.mem.eql(u8, lstatKind(meta), "dir")) return false;
-    const fd = fsx.openDir(fsx.cwd, meta, false) catch return false;
+    const fd = fsx.openDir(fsx.cwd, meta, false) catch |err| refuse("{s}", .{osError(a, err, meta)});
     defer sys.close(fd);
-    var it = fsx.DirIter.init(a, fd) catch return false;
-    while (it.next() catch return false) |e| {
+    var it = fsx.DirIter.init(a, fd) catch oom();
+    while (it.next() catch |err| refuse("{s}", .{osError(a, err, meta)})) |e| {
         if (!std.mem.endsWith(u8, e.name, ".eb")) continue;
-        const p = std.fs.path.join(a, &.{ meta, e.name }) catch continue;
+        const p = std.fs.path.join(a, &.{ meta, e.name }) catch oom();
         if (std.mem.eql(u8, lstatKind(p), "file")) return true;
     }
     return false;
