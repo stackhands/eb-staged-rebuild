@@ -217,10 +217,15 @@ fn punchZeros(a: Allocator, fd: fsx.fd_t, data: []const u8, partial: []const u8,
     }
 }
 
-fn copyUserXattrs(src: fsx.fd_t, dst: fsx.fd_t) void {
+fn copyUserXattrs(a: Allocator, src: fsx.fd_t, dst: fsx.fd_t, source: []const u8, partial: []const u8, why: *[]const u8) Error!void {
     var names: [64 * 1024]u8 = undefined;
-    const n = atomic.ops.flistxattr(src, &names);
-    if (linux.errno(n) != .SUCCESS) return;
+    const n = while (true) {
+        if (sys.result(atomic.ops.flistxattr(src, &names)) catch |err| switch (err) {
+            // Python treats ENOTSUP and EOPNOTSUPP as an empty list.
+            error.Unsupported => return,
+            else => return fail(a, why, err, source),
+        }) |got| break got;
+    };
     var it = std.mem.splitScalar(u8, names[0..n], 0);
     while (it.next()) |name| {
         if (name.len == 0) continue;
@@ -230,9 +235,12 @@ fn copyUserXattrs(src: fsx.fd_t, dst: fsx.fd_t) void {
         @memcpy(named[0..name.len], name);
         named[name.len] = 0;
         var value: [64 * 1024]u8 = undefined;
-        const vn = atomic.ops.fgetxattr(src, named[0..name.len :0], &value);
-        if (linux.errno(vn) != .SUCCESS) continue;
-        _ = atomic.ops.fsetxattr(dst, named[0..name.len :0], value[0..vn]);
+        const vn = while (true) {
+            if (sys.result(atomic.ops.fgetxattr(src, named[0..name.len :0], &value)) catch |err| return fail(a, why, err, source)) |got| break got;
+        };
+        while (true) {
+            if (sys.result(atomic.ops.fsetxattr(dst, named[0..name.len :0], value[0..vn])) catch |err| return fail(a, why, err, partial)) |_| break;
+        }
     }
 }
 
@@ -341,7 +349,7 @@ fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]c
     };
     sys.writeAll(fd, image) catch |err| return fail(a, why, err, partial);
     try punchZeros(a, fd, image, partial, why);
-    copyUserXattrs(src, fd);
+    try copyUserXattrs(a, src, fd, source, partial, why);
     try restoreAccess(a, fd, meta, why);
     sys.fsync(fd) catch |err| return fail(a, why, err, partial);
     sys.close(fd);
