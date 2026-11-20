@@ -33,6 +33,7 @@ import struct
 import subprocess
 
 from eb_staged_rebuild.atomicio import atomic_write, read_bytes
+from eb_staged_rebuild.errors import NeedsIntervention
 from eb_staged_rebuild.paths import abspath
 
 CHECKS = ("elf", "references", "modules", "access")
@@ -597,6 +598,14 @@ class _Stage:
                 continue
             if euid != 0 and parent.st_mode & stat.S_ISVTX and euid not in (parent.st_uid, owner):
                 self.add("access", f"{install}: {directory} is sticky and {entry} belongs to uid {owner}")
+
+
+def require_stage_modules(journal, environ=None):
+    """Refuse a journal the module check cannot read: with LMOD_CMD set, it loads each module from ``stage_modules``."""
+    environ = os.environ if environ is None else environ
+    stage = journal.get("stage_modules")
+    if environ.get("LMOD_CMD") and (not isinstance(stage, str) or not stage):
+        raise NeedsIntervention("journal does not record stage_modules")
 
 
 def verify_stage(directory, journal, trees, faults, clock, environ=None):

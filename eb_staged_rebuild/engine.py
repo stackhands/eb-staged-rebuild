@@ -61,7 +61,7 @@ from eb_staged_rebuild.paths import (
 from eb_staged_rebuild.probe import probe_all, stage_paths_from_bwrap_info
 from eb_staged_rebuild.retire import _check_same_filesystem
 from eb_staged_rebuild.swap import recover_interrupted_swap, swap_directories
-from eb_staged_rebuild.verify import context as verify_context, verify_stage
+from eb_staged_rebuild.verify import context as verify_context, require_stage_modules, verify_stage
 
 import re
 
@@ -1486,6 +1486,8 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
         state = journal["state"]
         if force and not (verify or journal.get("verify_before_swap")):
             raise Refused(f"--force needs --verify; run {run_id} does not check its stage before the swap")
+        if (verify or journal.get("verify_before_swap")) and state in ("built", "publishing"):
+            require_stage_modules(journal)
         if verify and not journal.get("verify_before_swap") and state in ("created", "building", "failed", "built"):
             journal["verify_before_swap"] = True
             journal["verify_context"] = verify_context(spec.eb_args, os.environ)
@@ -1530,6 +1532,7 @@ def verify(state_root, run_id, clock=None, lock_timeout=None):
             raise Refused(f"run {run_id} is a retire record; it has no stage to verify")
         if journal["state"] != "built":
             raise Refused(f"run {run_id} is {journal['state']}; only a built run has a stage to verify")
+        require_stage_modules(journal)
         faults = FaultInjector()
         record = verify_stage(run_dir_for(state_root, run_id), journal, _verify_trees(journal), faults, clock or time.time)
         journal["verify"] = record

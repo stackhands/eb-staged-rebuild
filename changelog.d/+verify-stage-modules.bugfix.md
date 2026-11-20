@@ -1,0 +1,1 @@
+With `LMOD_CMD` set, `verify` and `resume --verify` refuse a built run whose journal does not record `stage_modules`, with exit 2 and the same message in both front ends and before anything is written, instead of failing with a `KeyError` in Python or checking the modules against an empty path in Zig.

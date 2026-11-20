@@ -129,6 +129,14 @@ pub fn checkRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8,
     };
 }
 
+/// require_stage_modules: with LMOD_CMD set, verify loads each module from
+/// the journal's stage_modules, so a journal without it is refused.
+pub fn requireStageModules(env: probe.Env, journal: Py) void {
+    const lmod = env.get("LMOD_CMD") orelse "";
+    const stage = str(pyfmt.get(journal, "stage_modules")) orelse "";
+    if (lmod.len > 0 and stage.len == 0) refuse("journal does not record stage_modules", .{});
+}
+
 fn recordedField(journal: Py, field: []const u8) []const u8 {
     const value = str(pyfmt.get(journal, field)) orelse "";
     if (value.len == 0) refuse("journal does not record {s}", .{field});
@@ -580,6 +588,7 @@ pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout:
     if (eqlStr(pyfmt.get(journal, "kind"), "retire")) refuse("run {s} is a retire record; it has no stage to verify", .{run_id});
     const state_name = str(pyfmt.get(journal, "state")) orelse "";
     if (!std.mem.eql(u8, state_name, "built")) refuse("run {s} is {s}; only a built run has a stage to verify", .{ run_id, state_name });
+    requireStageModules(c.env, journal);
     const run_mod = @import("run.zig");
     var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
     return run_mod.verifyCommand(&r) catch |err| switch (err) {

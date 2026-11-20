@@ -1687,6 +1687,7 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
     const state_name = r.str("state");
     const gated = pyfmt.truthy(r.get("verify_before_swap"));
     if (force and !(verify or gated)) return r.refuse("--force needs --verify; run {s} does not check its stage before the swap", .{run_id});
+    if ((verify or gated) and (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing"))) admin.requireStageModules(env, j);
     if (verify and !gated) for ([_][]const u8{ "created", "building", "failed", "built" }) |unpublished| {
         if (!std.mem.eql(u8, state_name, unpublished)) continue;
         r.set("verify_before_swap", .{ .bool = true });

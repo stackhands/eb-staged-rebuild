@@ -14,7 +14,7 @@ import os
 import shutil
 import unittest
 
-from tests.support import Site, sites, write
+from tests.support import FAKE_LMOD, Site, sites, write
 
 LOCK_FILES = (".lock", ".lock.posix")
 
@@ -56,12 +56,12 @@ class RunJournalCliTests(unittest.TestCase):
             write(prepare, "#!/bin/sh\nexit 0\n", 0o755)
         return made
 
-    def assert_refused(self, site, message, run_id="r1"):
-        """Each command on RUN_ID exits 2 with MESSAGE and writes nothing."""
-        for command in (["verify"], ["resume", "--verify"], ["resume"]):
+    def assert_refused(self, site, message, run_id="r1", commands=(["verify"], ["resume", "--verify"], ["resume"]), **env):
+        """Each of COMMANDS on RUN_ID exits 2 with MESSAGE and writes nothing."""
+        for command in commands:
             with self.subTest(command=command[0], verify=command[1:]):
                 before = snapshot(site.root)
-                done = site.cli(*command, "--state-root", site.state, run_id)
+                done = site.cli(*command, "--state-root", site.state, run_id, **env)
                 self.assertEqual(
                     (done.returncode, done.stdout, done.stderr), (2, "", f"eb-staged-rebuild: {message}\n")
                 )
@@ -130,6 +130,17 @@ class RunJournalCliTests(unittest.TestCase):
                         self.edit(site, lambda journal: journal["modules_plan"][0].pop(field))
                         self.assert_refused(site, f"journal module plan does not record {field}")
                         self.edit(site, lambda journal: journal.update(original))
+
+
+    def test_with_lmod_a_journal_without_its_staged_module_tree(self):
+        verifying = (["verify"], ["resume", "--verify"])
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                original = site.journal()
+                for change in (lambda journal: journal.pop("stage_modules"), lambda journal: journal.update(stage_modules="")):
+                    self.edit(site, change)
+                    self.assert_refused(site, "journal does not record stage_modules", commands=verifying, LMOD_CMD=FAKE_LMOD)
+                    self.edit(site, lambda journal: journal.update(original))
 
 
 if __name__ == "__main__":
