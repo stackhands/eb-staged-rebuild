@@ -289,7 +289,7 @@ fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: 
         };
         atomic.fsyncDir(parent) catch {};
     }
-    sys.unlinkat(fsx.cwd, ready, 0) catch {};
+    sys.unlinkat(fsx.cwd, ready, 0) catch |err| return fail(a, why, err, ready);
     atomic.fsyncDir(std.fs.path.dirname(ready) orelse "/") catch {};
 }
 
