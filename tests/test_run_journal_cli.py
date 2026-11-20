@@ -88,6 +88,16 @@ class RunJournalCliTests(unittest.TestCase):
                 self.edit(site, lambda journal: journal.update(run_id="../r1"))
                 self.assert_refused(site, "journal run id does not match its directory")
 
+    def test_a_journal_that_describes_another_state_root(self):
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                elsewhere = os.path.join(site.root, "elsewhere")
+                shutil.copytree(site.state, elsewhere, ignore=shutil.ignore_patterns(*LOCK_FILES))
+                for recorded in (elsewhere, os.path.join(site.state, "runs"), "elsewhere"):
+                    with self.subTest(recorded=recorded):
+                        self.edit(site, lambda journal: journal.update(state_root=recorded))
+                        self.assert_refused(site, f"journal state root {recorded} is not {site.state}")
+
     def test_a_journal_without_a_field_the_commands_read(self):
         for site in self.built():
             with self.subTest(tool=site.name):

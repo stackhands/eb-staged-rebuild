@@ -202,6 +202,7 @@ Example 1.0
 | =eb-staged-rebuild: journal run id does not match its directory=                          | The journal in =runs/RUN_ID= names another run, or none; it was copied or edited there.                                | Put the journal back in its own run's directory, or restore it from a known-good copy.                                          |
 | =eb-staged-rebuild: journal does not record FIELD=                                        | The journal lacks a field the command reads, or holds it as something other than text.                                 | Restore the journal from a known-good copy.                                                                                     |
 | =eb-staged-rebuild: journal module plan does not record FIELD=                            | An entry of the journal's module plan lacks one of the paths the command reads.                                        | Restore the journal from a known-good copy or roll back the staged tree by hand.                                                |
+| =eb-staged-rebuild: journal state root PATH is not STATE_ROOT=                            | The journal was written under another state root, PATH, and copied or edited into this one.                            | Give the command the state root the journal was written under, or restore the journal from a known-good copy.                   |
 
 ** Related
 
