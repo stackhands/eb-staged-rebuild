@@ -6,7 +6,7 @@ Each test changes a journal in one way the commands must not act on. Then
 published ones; ``--latest`` and ``--to`` check every journal under
 ``runs/`` before they choose. Both front ends refuse with exit 2 and the
 same message, before anything under the site is written. Runs the Python
-tool and, when TOOL_BIN is set, the program it names.
+tool and the program TOOL_BIN names.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 -m unittest -v tests.test_run_journal_cli
 """
