@@ -4,8 +4,8 @@ The same append, recovery and idempotence checks against a real eb-stack,
 driven through ``run``, ``resume`` and ``rollback``: the run is killed
 with SIGKILL after its first append returned and before the receipt was
 saved (EB_STAGED_REBUILD_PAUSE_AT="ledger.acked:*"), then resumed twice
-and rolled back twice. Runs the Python tool and, when TOOL_BIN is set, the
-program it names. Skipped unless EB_STACK_BIN is set.
+and rolled back twice. Runs the Python tool and the program TOOL_BIN
+names. Skipped unless EB_STACK_BIN is set.
 
     EB_STACK_BIN=.../eb-stack TOOL_BIN=zig-out/bin/eb-staged-rebuild \\
         python3 -m unittest -v tests.test_ledger_eb_stack_cli
@@ -22,17 +22,10 @@ import unittest
 
 from eb_staged_rebuild.journal import load_journal
 from tests import test_ledger_eb_stack as base
-from tests.support import classic_install
+from tests.support import classic_install, implementations
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
-
-
-def implementations():
-    found = [("python", [sys.executable, "-m", "eb_staged_rebuild"])]
-    if os.environ.get("TOOL_BIN"):
-        found.append(("binary", [os.environ["TOOL_BIN"]]))
-    return found
 
 
 class CliEbStackLedgerTests(base.RealEbStackLedgerTests):
@@ -72,14 +65,14 @@ class CliEbStackLedgerTests(base.RealEbStackLedgerTests):
             return handle.read()
 
     def test_append_recovery_and_idempotence(self):
-        for name, command in implementations():
-            with self.subTest(implementation=name), tempfile.TemporaryDirectory() as root:
+        for implementation in implementations():
+            with self.subTest(implementation=implementation.name), tempfile.TemporaryDirectory() as root:
                 args, state, install, log, head = self.cli_fixture(root)
-                env = dict(os.environ, PYTHONPATH=REPO, FAKE_EB_PAYLOAD="v1\n")
+                env = {"PYTHONPATH": REPO, "FAKE_EB_PAYLOAD": "v1\n"}
                 ready = os.path.join(root, "ready")
-                paused = dict(env, EB_STAGED_REBUILD_PAUSE_AT="ledger.acked:*",
+                paused = dict(os.environ, **env, EB_STAGED_REBUILD_PAUSE_AT="ledger.acked:*",
                               EB_STAGED_REBUILD_PAUSE_READY=ready, EB_STAGED_REBUILD_PAUSE_SECONDS="60")
-                child = subprocess.Popen(command + args, env=paused, cwd=root, start_new_session=True,
+                child = subprocess.Popen([*implementation.command, *args], env=paused, cwd=root, start_new_session=True,
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 deadline = time.monotonic() + 60
                 while not os.path.exists(ready):
@@ -93,7 +86,7 @@ class CliEbStackLedgerTests(base.RealEbStackLedgerTests):
                 self.assertEqual(self.entries(log)[0]["action"], "rebuild-inplace")
 
                 def tool(*words):
-                    done = subprocess.run(command + list(words), env=env, cwd=root, capture_output=True, text=True)
+                    done = implementation.run(*words, env=env, cwd=root)
                     self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
                 tool("resume", "--state-root", state, "run1")

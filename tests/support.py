@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import NamedTuple
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -236,6 +237,9 @@ def _run(argv, env=None, cwd=None):
     )
 
 
+PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
+
+
 def run_cli(
     *args: str, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -243,7 +247,7 @@ def run_cli(
     if cwd is not None:
         search = [_REPO, os.environ.get("PYTHONPATH", "")]
         env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env, cwd)
+    return _run([*PYTHON_CLI, *args], env, cwd)
 
 
 def run_cli_optional_binary(
@@ -389,3 +393,19 @@ def _wait_mount(case: unittest.TestCase, mnt: str, mounted: subprocess.Popen[byt
             case.fail(f"FUSE exited: {err}")
         time.sleep(0.05)
     case.fail("FUSE mount did not appear")
+
+
+class Implementation(NamedTuple):
+    """One front end: its name, the command that starts it, and how a test runs it to completion."""
+
+    name: str
+    command: tuple[str, ...]
+
+    def run(self, *args, env=None, cwd=None):
+        runner = run_cli if self.name == "python" else run_cli_binary
+        return runner(*args, env=env, cwd=cwd)
+
+
+def implementations():
+    """The Python front end and the program TOOL_BIN names, which the tests that use both require."""
+    return [Implementation("python", PYTHON_CLI), Implementation("binary", (require_tool_bin(),))]

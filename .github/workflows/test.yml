@@ -30,7 +30,14 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - name: zig binary for the tests that run both front ends
+        run: zig build -Drelease=true
       - name: unit tests
+        env:
+          TOOL_BIN: ${{ github.workspace }}/zig-out/bin/eb-staged-rebuild
         run: |
           python -m pip install jsonschema
           python -m unittest discover -s tests -v
