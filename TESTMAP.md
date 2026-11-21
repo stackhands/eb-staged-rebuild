@@ -196,10 +196,10 @@ rebuild command implemented by the Zig binary.
 | GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
 | GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_that_is_not_a_number | differential "gc, a grace period in the environment that is not a number", "gc, an empty grace period in the environment", "gc, a grace period in the environment that needs quoting" |
 | GarbageCollectionTests.test_run_refuses_an_environment_grace_period_that_is_not_a_number | differential "run, a grace period in the environment that is not a number" |
-| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "verify, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
+| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "verify, the state root from the environment", "list, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
 | StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
 | StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
-| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment", "verify --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
+| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment", "verify --help, the state root from the environment", "list --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
 | RunIdBoundaryTests.test_run_id_cannot_escape_the_state_root | differential "run, a run id with path components" |
 | RunIdBoundaryTests.test_resume_and_rollback_reject_path_components | differential "resume, a run id with path components", "rollback, a run id with path components" |
 | RunIdBoundaryTests.test_journal_run_id_must_match_its_directory | `zig/run.zig` enforces the same check before resume and `zig/admin.zig` before rollback |
@@ -286,6 +286,16 @@ The Python test also passes the generated text to `promtool check metrics` when 
 | MetricsTests.test_metrics_are_an_atomic_prometheus_file | zig-common `src/atomic_test.zig` atomic replacement tests; `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
 | MetricsTests.test_gc_timestamp_is_taken_after_locked_work | `zig/admin.zig` test "gc records its completion time after its starting time" |
 | MetricsTests.test_dry_run_refuses_to_write_metrics | `zig/main.zig` dispatches the same refusal in `admin.gc` |
+
+### tests/test_inuse.py
+
+The scan itself runs against both builds in `tests/test_generations_cli.py` (`GcCliTests`) and in
+differential "gc --check-in-use keeps a tree and a generation in use".
+
+| test | replacement |
+|---|---|
+| ParsingTests.test_mountinfo_fields_are_unescaped_and_a_trees_path_follows_the_mount_that_holds_it | `zig/inuse.zig` test "mountinfo fields are unescaped and a tree's path on its device follows the mount that holds it" |
+| ParsingTests.test_a_maps_line_names_the_file_after_its_first_five_fields | `zig/inuse.zig` test "a maps line names the file after its first five fields" |
 
 ### tests/test_prefix.py
 

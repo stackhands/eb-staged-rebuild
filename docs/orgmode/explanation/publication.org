@@ -60,6 +60,24 @@ A failure part way exchanges back to the published state, and the rollback can r
 The tree the run published stays under its hidden name until =gc= removes it.
 With a ledger, the rollback adds a =correction= of each =finished= record.
 
+*** Rolling back several runs
+
+=rollback --latest= rolls back the newest =complete= run, by the time its publication completed.
+=rollback --to GEN= rolls back every =complete= run published after the run =GEN= over one of its installations, so that each of them holds the tree =GEN= published again.
+With one such run, that is the rollback of the run.
+With more, it checks everything first, and then makes one pass:
+
+1. Each run to roll back is marked =rolling_back=, with =rollback_to= set to =GEN=.
+2. For each installation, the runs over it are taken oldest first, and the tree to put back moves along their hidden names, one exchange for each run, the last one at the stable path.
+   The stable path changes once, from the newest tree straight to the tree of =GEN=, and the tree of each run ends at its own hidden name, where the rollback of that run alone would have left it.
+   The exchange is the one publication uses, or the three renames when the newest run recorded that the filesystem cannot exchange.
+3. The module file goes back to the one the oldest run saved, or is removed when that run made it.
+4. Newest first, the links each run made are removed, and the run is marked =rolled_back=, with the message =rolled back to GEN=.
+
+A pass that stops part way is finished by the same command: the =.eb-staged-rebuild-complete= in each tree says how far it got.
+Until then the runs stay =rolling_back=, =list= shows their trees as =rolling back=, and =resume= or =rollback= of one of them refuses.
+A pass refuses runs that record to a ledger, since a =correction= names a single publication; those are rolled back one at a time.
+
 ** What was considered and turned down
 
 - /Replacing the module files first./
@@ -68,12 +86,16 @@ With a ledger, the rollback adds a =correction= of each =finished= record.
   A failure in the second module would leave the first one published and the second one not, for a build that installs both.
 - /=chmod= on the live module file./
   On NFSv4 it rewrites the access-control list; the new file is written with the old file's metadata instead.
+- /Rolling back several runs one after the other, newest first./
+  The stable path would hold each tree in between, if only for a moment, and a failure half way would leave a tree live that the operator did not ask for.
 
 ** Limits
 
 - Other programs do not take the state root's lock: one that reads the module files while a run publishes several of them can see some new and some old.
 - Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames, unless =--require-exchange= disables that fallback.
 - The copy of access-control lists has been tested on ext4 only.
+- =rollback --to= needs the hidden tree of every run it rolls back: once =gc= has removed one of them, it refuses.
+  =gc --keep N= keeps the trees that going back =N= runs needs.
 
 ** Further reading
 

@@ -5,13 +5,14 @@
 * Put the previous installation back
 
 Undo a rebuild that was published: put the installation it replaced back under the stable path, and the module file back as it was.
+Several rebuilds, or the latest one, can be undone the same way.
 
 ** Before you start
 
-- The run's name and its state root; =status --state-root DIR= lists the runs.
+- The run's name and its state root; =status --state-root DIR= lists the runs, and =list --state-root DIR= the trees that each installation has kept.
 - A run that is =complete=.
   A run that failed published nothing, and a run that stopped part way is finished with =resume= first, as in [[file:recover.org][Finish a run that failed or stopped]].
-- The previous tree still on disk, at =software/NAME/.VERSION.RUN_ID=: =gc= removes it once the grace period is over.
+- The previous tree still on disk, at =software/NAME/.VERSION.RUN_ID=: =gc= removes it once the grace period is over, unless =gc --keep= keeps it.
 - The run's tree still at the stable path: after a later run of the same installation, roll that one back first.
 
 ** Steps
@@ -69,16 +70,120 @@ eb-staged-rebuild: run example-3 is already rolled back
 
 =docs/examples/site.sh= in the repository runs these steps as its case =rollback=.
 
+** Go back several rebuilds at once
+
+=rollback --to= puts back the installation that an earlier run published, and rolls back every run published over it, in one pass.
+
+1. Find the run in the generations of the installation:
+
+   #+begin_src bash
+   eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+   #+end_src
+
+   #+begin_example
+   Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+     live         2026-11-17T16:01:42Z  example-7  verify -
+     replaced     2026-11-17T16:01:25Z  example-6  verify pass  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7
+     replaced     2026-11-17T16:01:09Z  example-5  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+     rolled back  2026-11-17T16:00:53Z  example-4  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4
+     replaced     2026-11-17T16:00:35Z  example-userns  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+     replaced     2026-11-17T16:00:32Z  example-robot  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns
+     replaced     2026-11-17T15:59:54Z  example-2  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot
+   #+end_example
+
+   Here =example-7= was published over =example-6=, and =example-6= over =example-5=.
+   A =replaced= tree can be put back; a =rolled back= one cannot, since its run is no longer =complete=.
+
+2. Roll back to that run:
+
+   #+begin_src bash
+   eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild --to example-5
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: restored all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: rolled back to example-5: runs example-7, example-6 rolled back; replacements kept at their retired paths
+   #+end_example
+
+   The stable path changed once, from the tree of =example-7= straight to the tree of =example-5=, and the module file is the one =example-5= published.
+
+3. Check the generations again:
+
+   #+begin_src bash
+   eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+   #+end_src
+
+   #+begin_example
+   Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+     live         2026-11-17T16:01:09Z  example-5  verify -
+     rolled back  2026-11-17T16:01:42Z  example-7  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-7
+     rolled back  2026-11-17T16:01:25Z  example-6  verify pass  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+     rolled back  2026-11-17T16:00:53Z  example-4  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4
+     replaced     2026-11-17T16:00:35Z  example-userns  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+     replaced     2026-11-17T16:00:32Z  example-robot  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns
+     replaced     2026-11-17T15:59:54Z  example-2  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot
+   #+end_example
+
+   The tree of each run rolled back waits at its own hidden name, as after the rollback of that run alone.
+   The same command again changes nothing:
+
+   #+begin_src bash
+   eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild --to example-5
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: run example-5 is already live
+   #+end_example
+
+A pass that stops part way leaves its runs =rolling_back=; run the same command again to finish it.
+
+** Roll back the latest rebuild
+
+With =--latest= instead of a run name, =rollback= rolls back the newest =complete= run, by the time its publication completed:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild --latest
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: restored all/Example/1.0-GCCcore-15.2.0.lua
+eb-staged-rebuild: run example-5 rolled back; replacement kept at its retired path
+#+end_example
+
+After the pass above, that was =example-5=, and the tree it had replaced, the one of =example-userns=, is live again:
+
+#+begin_src bash
+eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-5
+#+end_src
+
+#+begin_example
+example-5  rolled_back  backend=bwrap  modules=0/1
+  rolled back
+  restored   all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+#+end_example
+
+Each further =rollback --latest= rolls back the next one; with no =complete= run left, it refuses.
+=rollback= with neither a run name, =--latest= nor =--to= is a usage error.
+=docs/examples/site.sh= runs the steps of this section and the one before as its case =rollback-to=, after it publishes =example-7=.
+
 ** If it fails
 
-| Message                                                                                                                                                  | Cause                                                                                                          | What to do                                                                              |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------+----------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------|
-| =eb-staged-rebuild: run RUN_ID is STATE; only a complete run can roll back=                                                                              | The run published nothing, or has not finished.                                                                | A failed run changed nothing; finish one that stopped with =resume=, then roll it back. |
-| =eb-staged-rebuild: run RUN_ID cannot roll back MODULE_FILE: PATH holds the tree of run LATER; roll back LATER first=                                    | A later run of the same installation replaced the run's tree.                                                  | Roll back =LATER=, then this run; nothing was changed.                                  |
-| =eb-staged-rebuild: run RUN_ID cannot roll back MODULE_FILE: PATH is not the tree it published=                                                          | Something other than a run replaced the tree at the stable path, or removed its =.eb-staged-rebuild-complete=. | Find out what is at =PATH=; nothing was changed.                                        |
-| =eb-staged-rebuild: run RUN_ID was not rolled back: N ledger event(s) not acknowledged (...); run rollback again=, exit 75                               | The run records its publications in a ledger that did not acknowledge the rollback's record.                   | Make the ledger reachable, and run the same command again; nothing was changed.         |
-| =eb-staged-rebuild: run RUN_ID rolled back; replacement kept at its retired path; N ledger event(s) not acknowledged (...); run rollback again=, exit 75 | The rollback is done, but a ledger with ="required": false= did not acknowledge its records.                   | Make the ledger reachable, and run the same command again to deliver them.              |
-| =eb-staged-rebuild: no journal at PATH=                                                                                                                  | No run of that name in that state root.                                                                        | Check the name with =status=, and the state root.                                       |
+| Message                                                                                                                                                  | Cause                                                                                                                  | What to do                                                                              |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: run RUN_ID is STATE; only a complete run can roll back=                                                                              | The run published nothing, or has not finished.                                                                        | A failed run changed nothing; finish one that stopped with =resume=, then roll it back. |
+| =eb-staged-rebuild: run RUN_ID cannot roll back MODULE_FILE: PATH holds the tree of run LATER; roll back LATER first=                                    | A later run of the same installation replaced the run's tree.                                                          | Roll back =LATER=, then this run; nothing was changed.                                  |
+| =eb-staged-rebuild: run RUN_ID cannot roll back MODULE_FILE: PATH is not the tree it published=                                                          | Something other than a run replaced the tree at the stable path, or removed its =.eb-staged-rebuild-complete=.         | Find out what is at =PATH=; nothing was changed.                                        |
+| =eb-staged-rebuild: run RUN_ID was not rolled back: N ledger event(s) not acknowledged (...); run rollback again=, exit 75                               | The run records its publications in a ledger that did not acknowledge the rollback's record.                           | Make the ledger reachable, and run the same command again; nothing was changed.         |
+| =eb-staged-rebuild: run RUN_ID rolled back; replacement kept at its retired path; N ledger event(s) not acknowledged (...); run rollback again=, exit 75 | The rollback is done, but a ledger with ="required": false= did not acknowledge its records.                           | Make the ledger reachable, and run the same command again to deliver them.              |
+| =eb-staged-rebuild: no journal at PATH=                                                                                                                  | No run of that name in that state root.                                                                                | Check the name with =status=, and the state root.                                       |
+| =eb-staged-rebuild: no complete run to roll back=                                                                                                        | =rollback --latest= found no =complete= run.                                                                           | Nothing is published that a rollback could undo.                                        |
+| =eb-staged-rebuild: run GEN is STATE; rollback --to returns to a complete run=                                                                           | The run named with =--to= was rolled back, or did not finish publishing.                                               | Pick a =replaced= run from =list=, or publish the installation again with a new run.    |
+| =eb-staged-rebuild: cannot roll back to GEN: PATH is missing, not a kept tree=                                                                           | =gc= removed a tree that the pass needs.                                                                               | Roll back to a later run, whose trees are still kept, or publish with a new run.        |
+| =eb-staged-rebuild: rollback --to GEN would pass over runs that record to a ledger ...=                                                                  | More than one run would be rolled back, and one of them records in a ledger, where a correction names one publication. | Roll the runs back one at a time, the latest first, with =rollback RUN_ID=.             |
+| =eb-staged-rebuild: run RUN_ID is rolling back to GEN; run rollback --to GEN to finish=                                                                  | An earlier =rollback --to GEN= stopped part way; =resume= and =rollback= of its runs refuse until it is finished.      | Run =rollback --to GEN= again.                                                          |
+| =eb-staged-rebuild: run R published PATH after run RUN_ID; roll back run R first=                                                                        | A run to roll back also published another installation, which a later run =R= replaced.                                | Roll back =R= first.                                                                    |
+| =eb-staged-rebuild: give one of a run id, --latest and --to GEN=                                                                                         | More than one was given.                                                                                               | Give one.                                                                               |
+| =eb-staged-rebuild rollback: error: the following arguments are required: run_id=, exit 2                                                                | None was given.                                                                                                        | Name the run, or give =--latest= or =--to GEN=.                                         |
 
 A rollback that fails part way exchanges the trees back to the published state and says so; run it again once the cause is gone.
 
@@ -92,9 +197,20 @@ eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild example-2
 eb-staged-rebuild: run example-2 cannot roll back all/Example/1.0-GCCcore-15.2.0.lua: /opt/site/software/Example/1.0-GCCcore-15.2.0 holds the tree of run example-3; roll back example-3 first
 #+end_example
 
+A run that was rolled back cannot be gone back to with =--to=, as =site.sh= shows at the end of its case =rollback-to=:
+
+#+begin_src bash
+eb-staged-rebuild rollback --state-root /opt/site/.eb-staged-rebuild --to example-7
+#+end_src
+
+#+begin_example
+eb-staged-rebuild: run example-7 is rolled_back; rollback --to returns to a complete run
+#+end_example
+
 ** Related
 
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:remove-old-trees.org][Remove the trees a rebuild left behind]]
 - [[file:record-in-a-ledger.org][Record each rebuild in a signed ledger]], for what a rollback records
-- [[file:../explanation/publication.org][How a rebuild is published]]
+- [[file:../reference/generations.org][The generations of an installation]], for the output of =list=
+- [[file:../explanation/publication.org][How a rebuild is published]], for the steps of a rollback

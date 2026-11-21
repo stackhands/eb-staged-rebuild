@@ -41,10 +41,9 @@ from eb_staged_rebuild.journal import (
     SCHEMA,
     generation_root as generation_root_for,
     journal_path,
-    load_journal,
     load_run_journal,
-    require_matching_run_id,
     require_plain_run_id,
+    run_journals,
     run_dir as run_dir_for,
     save_journal,
 )
@@ -1199,8 +1198,9 @@ def _publisher(journal):
     return EbStackLedger(policy)
 
 
-def _record(journal, faults, publisher, records, step):
-    run_dir = run_dir_for(journal["state_root"], journal["run_id"])
+def _record(state_root, journal, faults, publisher, records, step):
+    """Queue RECORDS in the outbox of the journal's run under the caller's STATE_ROOT, and deliver what is queued."""
+    run_dir = run_dir_for(state_root, journal["run_id"])
     if records:
         outbox.enqueue(run_dir, records, faults, step)
     return outbox.deliver(run_dir, publisher, faults)
@@ -1215,7 +1215,7 @@ def _record_finished(spec, journal, faults, publisher, message):
     code = 0
     if publisher is not None:
         finished = publication_records(publisher.config, journal, "finished", _clock(spec)())
-        left = _record(journal, faults, publisher, finished, "outbox.finished")
+        left = _record(spec.state_root, journal, faults, publisher, finished, "outbox.finished")
         if left:
             message = f"{message}; {_pending_message(left, 'run resume')}"
             code = outbox.PENDING_EXIT
@@ -1270,7 +1270,7 @@ def _publish_recorded(spec, journal, faults):
     if publisher is not None:
         _validate_publication_set(journal)
         started = publication_records(publisher.config, journal, "started", _clock(spec)())
-        left = _record(journal, faults, publisher, started, "outbox.started")
+        left = _record(spec.state_root, journal, faults, publisher, started, "outbox.started")
         if left and publisher.required:
             journal["message"] = "the live directory was not swapped: " + _pending_message(left, "run resume")
             save_journal(
@@ -1506,6 +1506,8 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
             return _record_finished(spec, journal, faults, _publisher(journal), message)
         if state == "rolled_back":
             raise Refused(f"run {run_id} was rolled back; start a new run")
+        if state == "rolling_back":
+            raise Refused(_rolling_back(journal))
         if state in ("created", "building", "failed"):
             if published:
                 raise NeedsIntervention(
@@ -1590,7 +1592,7 @@ def _check_live_trees(journal):
         )
 
 
-def _record_rollback(journal, faults, publisher, finished, started, now, message):
+def _record_rollback(state_root, journal, faults, publisher, finished, started, now, message):
     """After the restore: finish the correction, or abort a publication that never finished.
 
     Then print ``message`` once, with what is left.
@@ -1604,7 +1606,7 @@ def _record_rollback(journal, faults, publisher, finished, started, now, message
         records = publication_records(publisher.config, journal, "aborted", now())
     else:
         records = []
-    left = _record(journal, faults, publisher, records, "outbox.rollback_finished")
+    left = _record(state_root, journal, faults, publisher, records, "outbox.rollback_finished")
     code = 0
     if left:
         message = f"{message}; {_pending_message(left, 'run rollback again')}"
@@ -1613,110 +1615,318 @@ def _record_rollback(journal, faults, publisher, finished, started, now, message
     return Result(code, journal["run_id"], "rolled_back", message, _command_text(journal))
 
 
-def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
-    """Exchange every retired tree back into place as one recoverable operation."""
-    require_plain_run_id(run_id)
-    path = journal_path(state_root, run_id)
+def rollback(state_root, run_id=None, faults=None, clock=None, lock_timeout=None, to=None, latest=False):
+    """Roll back one run, the newest complete run with ``latest``, or every run published over ``to``.
+
+    Each form exchanges retired trees back into place as one recoverable
+    operation under the state-root lock.
+    """
+    if (run_id is not None) + (to is not None) + bool(latest) != 1:
+        raise Refused("give one of a run id, --latest and --to GEN")
+    if run_id is not None or to is not None:
+        require_plain_run_id(to if run_id is None else run_id)
     faults = faults or FaultInjector()
     now = time.time if clock is None else clock
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
-        journal = load_journal(path)
-        require_matching_run_id(journal, run_id)
-        if journal.get("kind") == "retire":
-            from eb_staged_rebuild.retire import rollback_retire
-
-            return rollback_retire(state_root, journal, faults, now)
-        publisher = _publisher(journal)
-        finished = {}
-        started = False
-        if publisher is not None:
-            left = _record(journal, faults, publisher, [], None)
-            if left and publisher.required:
-                message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
-                _log(message)
-                return Result(outbox.PENDING_EXIT, run_id, journal["state"], message, _command_text(journal))
-            events = outbox.load(run_dir_for(state_root, run_id))["events"]
-            finished = {
-                event["record"]["build"]["module_file"]: event["receipt"]["id"]
-                for event in events
-                if event["status"] == "acknowledged"
-                and event["record"]["action"] != "correction"
-                and event["record"]["stage"] == "finished"
-            }
-            started = any(event["record"]["stage"] == "started" for event in events)
-        if journal["state"] == "rolled_back" and all(
-            mod.get("status") == "restored" for mod in journal.get("modules_plan") or []
-        ):
-            message = f"run {run_id} is already rolled back"
-            return _record_rollback(journal, faults, publisher, finished, started, now, message)
-        if journal["state"] != "complete":
-            raise Refused(f"run {run_id} is {journal['state']}; only a complete run can roll back")
-        _check_live_trees(journal)
-        if finished:
-            records = publication_records(publisher.config, journal, "started", now(), corrects=finished)
-            left = _record(journal, faults, publisher, records, "outbox.rollback_started")
-            if left and publisher.required:
-                message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
-                _log(message)
-                return Result(outbox.PENDING_EXIT, run_id, journal["state"], message, _command_text(journal))
-        try:
-            for mod in reversed(journal.get("modules_plan") or []):
-                recover_interrupted_swap(mod["live_software"], mod["retired"])
-                # An exchange the journal did not record already put the old
-                # tree back: this run's tree is at the retired name.
-                if (
-                    _tree_run_id(mod["live_software"]) != journal["run_id"]
-                    and _tree_run_id(mod["retired"]) == journal["run_id"]
-                ):
-                    method = mod.get("rollback_method") or "recovered"
-                else:
-                    method = swap_directories(
-                        mod["live_software"],
-                        mod["retired"],
-                        allow_exchange=_allow_exchange(journal),
-                        allow_fallback=not bool(journal.get("require_exchange")),
-                        faults=faults,
-                        step_prefix=f"rollback.swap:{mod['rel']}",
-                    ).method
-                mod["status"] = "restoring"
-                mod["rollback_method"] = method
-                save_journal(path, journal, faults, f"journal.rollback-swap:{mod['rel']}")
-            for mod in reversed(journal.get("modules_plan") or []):
-                _restore_old_module(mod, faults)
-                mod["status"] = "restored"
-                _log(f"restored {mod['rel']}")
-                save_journal(path, journal, faults, f"journal.restore:{mod['rel']}")
-            for link in journal.get("links_plan") or []:
-                if not link.get("created"):
-                    continue
-                link_path = link["live_path"]
-                if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
-                    faults.reach(f"rollback.unlink:{link['rel']}")
-                    os.unlink(link_path)
-                    fsync_dir(os.path.dirname(link_path))
-                link["created"] = False
-                link["status"] = "removed"
-            journal["state"] = "rolled_back"
-            journal["rolled_back_at"] = now()
-            journal["message"] = "rolled back"
-            save_journal(path, journal, faults, "journal.rolled_back")
-        except BaseException:
-            try:
-                _restore_published_baseline(journal)
-                journal["state"] = "complete"
-                journal["message"] = "rollback interrupted; published tree restored"
-                save_journal(path, journal, FaultInjector(), "journal.rollback-restored")
-            except BaseException as recovery_error:
-                raise NeedsIntervention(
-                    f"rollback failed and the published tree could not be restored: {recovery_error}"
-                ) from recovery_error
-            raise
-        message = f"run {run_id} rolled back; replacement kept at its retired path"
-        return _record_rollback(journal, faults, publisher, finished, started, now, message)
+        if to is not None:
+            return _rollback_to(state_root, to, faults, now)
+        if latest:
+            run_id = _newest_complete(state_root)
+        return _rollback_run(state_root, run_id, faults, now)
     finally:
         lock.release()
+
+
+def _rolling_back(journal):
+    target = journal.get("rollback_to")
+    return f"run {journal['run_id']} is rolling back to {target}; run rollback --to {target} to finish"
+
+
+def _rollback_run(state_root, run_id, faults, now):
+    path, journal = load_run_journal(state_root, run_id)
+    if journal.get("kind") == "retire":
+        from eb_staged_rebuild.retire import rollback_retire
+
+        return rollback_retire(state_root, journal, faults, now)
+    if journal.get("state") == "rolling_back":
+        raise Refused(_rolling_back(journal))
+    publisher = _publisher(journal)
+    finished = {}
+    started = False
+    if publisher is not None:
+        left = _record(state_root, journal, faults, publisher, [], None)
+        if left and publisher.required:
+            message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
+            _log(message)
+            return Result(outbox.PENDING_EXIT, run_id, journal["state"], message, _command_text(journal))
+        events = outbox.load(run_dir_for(state_root, run_id))["events"]
+        finished = {
+            event["record"]["build"]["module_file"]: event["receipt"]["id"]
+            for event in events
+            if event["status"] == "acknowledged"
+            and event["record"]["action"] != "correction"
+            and event["record"]["stage"] == "finished"
+        }
+        started = any(event["record"]["stage"] == "started" for event in events)
+    if journal["state"] == "rolled_back" and all(
+        mod.get("status") == "restored" for mod in journal.get("modules_plan") or []
+    ):
+        message = f"run {run_id} is already rolled back"
+        return _record_rollback(state_root, journal, faults, publisher, finished, started, now, message)
+    if journal["state"] != "complete":
+        raise Refused(f"run {run_id} is {journal['state']}; only a complete run can roll back")
+    _check_live_trees(journal)
+    if finished:
+        records = publication_records(publisher.config, journal, "started", now(), corrects=finished)
+        left = _record(state_root, journal, faults, publisher, records, "outbox.rollback_started")
+        if left and publisher.required:
+            message = f"run {run_id} was not rolled back: {_pending_message(left, 'run rollback again')}"
+            _log(message)
+            return Result(outbox.PENDING_EXIT, run_id, journal["state"], message, _command_text(journal))
+    try:
+        for mod in reversed(journal.get("modules_plan") or []):
+            recover_interrupted_swap(mod["live_software"], mod["retired"])
+            # An exchange the journal did not record already put the old
+            # tree back: this run's tree is at the retired name.
+            if (
+                _tree_run_id(mod["live_software"]) != journal["run_id"]
+                and _tree_run_id(mod["retired"]) == journal["run_id"]
+            ):
+                method = mod.get("rollback_method") or "recovered"
+            else:
+                method = swap_directories(
+                    mod["live_software"],
+                    mod["retired"],
+                    allow_exchange=_allow_exchange(journal),
+                    allow_fallback=not bool(journal.get("require_exchange")),
+                    faults=faults,
+                    step_prefix=f"rollback.swap:{mod['rel']}",
+                ).method
+            mod["status"] = "restoring"
+            mod["rollback_method"] = method
+            save_journal(path, journal, faults, f"journal.rollback-swap:{mod['rel']}")
+        for mod in reversed(journal.get("modules_plan") or []):
+            _restore_old_module(mod, faults)
+            mod["status"] = "restored"
+            _log(f"restored {mod['rel']}")
+            save_journal(path, journal, faults, f"journal.restore:{mod['rel']}")
+        for link in journal.get("links_plan") or []:
+            if not link.get("created"):
+                continue
+            link_path = link["live_path"]
+            if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
+                faults.reach(f"rollback.unlink:{link['rel']}")
+                os.unlink(link_path)
+                fsync_dir(os.path.dirname(link_path))
+            link["created"] = False
+            link["status"] = "removed"
+        journal["state"] = "rolled_back"
+        journal["rolled_back_at"] = now()
+        journal["message"] = "rolled back"
+        save_journal(path, journal, faults, "journal.rolled_back")
+    except BaseException:
+        try:
+            _restore_published_baseline(journal)
+            journal["state"] = "complete"
+            journal["message"] = "rollback interrupted; published tree restored"
+            save_journal(path, journal, FaultInjector(), "journal.rollback-restored")
+        except BaseException as recovery_error:
+            raise NeedsIntervention(
+                f"rollback failed and the published tree could not be restored: {recovery_error}"
+            ) from recovery_error
+        raise
+    message = f"run {run_id} rolled back; replacement kept at its retired path"
+    return _record_rollback(state_root, journal, faults, publisher, finished, started, now, message)
+
+
+def _when(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _completed(journal):
+    return (_when(journal.get("completed_at")) or 0, journal["run_id"])
+
+
+def _newest_complete(state_root):
+    """The run ``rollback --latest`` undoes: the newest complete one."""
+    complete = [j for j in run_journals(state_root) if j.get("kind") != "retire" and j.get("state") == "complete"]
+    if not complete:
+        raise Refused("no complete run to roll back")
+    return max(complete, key=_completed)["run_id"]
+
+
+def _live_paths(journal):
+    return [abspath(mod["live_software"]) for mod in journal.get("modules_plan") or []]
+
+
+def _runs_over(journals, target):
+    """The runs ``rollback --to`` undoes, oldest first.
+
+    Those are the complete runs published after ``target`` on one of its
+    install paths, and the runs an interrupted ``rollback --to`` left marked.
+    """
+    gen = target["run_id"]
+    ours = set(_live_paths(target))
+    chosen = []
+    for journal in journals:
+        if journal.get("kind") == "retire" or journal["run_id"] == gen:
+            continue
+        if journal.get("state") == "rolling_back":
+            chosen.append(journal)
+        elif journal.get("state") == "complete" and _completed(journal) > _completed(target):
+            if ours.intersection(_live_paths(journal)):
+                chosen.append(journal)
+    chosen.sort(key=_completed)
+    names = {journal["run_id"] for journal in chosen}
+    for journal in chosen:
+        for live in _live_paths(journal):
+            for later in journals:
+                if (
+                    later.get("kind") != "retire"
+                    and later["run_id"] not in names
+                    and later.get("state") == "complete"
+                    and _completed(later) > _completed(journal)
+                    and live in _live_paths(later)
+                ):
+                    raise Refused(
+                        f"run {later['run_id']} published {live} after run {journal['run_id']}; "
+                        f"roll back run {later['run_id']} first"
+                    )
+    return chosen
+
+
+def _rotation_stage(gen, live, chain, ours):
+    """How many runs of ``chain`` already hold their own tree at their retired path.
+
+    ``chain`` is every run ``rollback --to`` undoes on ``live``, oldest first.
+    Before it starts, the oldest run's retired path holds the tree to restore
+    and each later one holds the tree of the run before it. Each exchange
+    moves the tree to restore one place along, so the run markers show how
+    far an interrupted pass got.
+    """
+    names = [journal["run_id"] for journal, _ in chain]
+    for index in range(len(chain) - 1):
+        recover_interrupted_swap(chain[index + 1][1]["retired"], chain[index][1]["retired"])
+    recover_interrupted_swap(live, chain[-1][1]["retired"])
+    for path in [mod["retired"] for _, mod in chain] + [live]:
+        kind = lstat_kind(path)
+        if kind != "dir":
+            raise Refused(f"cannot roll back to {gen}: {path} is {kind}, not a kept tree")
+    held = [_tree_run_id(mod["retired"]) for _, mod in chain]
+    live_id = _tree_run_id(live)
+    stage = 0
+    while stage < len(chain) and held[stage] == names[stage]:
+        stage += 1
+    if stage == len(chain):
+        first, placed = live_id, True
+    else:
+        first = held[stage]
+        placed = live_id == names[-1] and all(held[i] == names[i - 1] for i in range(stage + 1, len(chain)))
+    if first in names or not placed or (ours and first != gen):
+        raise NeedsIntervention(f"cannot roll back {live} to {gen}: its trees are not where the journals put them")
+    return stage
+
+
+def _rollback_to(state_root, gen, faults, now):
+    """Undo every run published over generation ``gen`` in one pass.
+
+    Each install path switches once, straight to the tree ``gen`` left there,
+    and each undone run's tree ends at its own retired path. The runs are
+    marked ``rolling_back`` first, so an interrupted pass is finished by
+    running the same command again.
+    """
+    journals = run_journals(state_root)
+    _path, target = load_run_journal(state_root, gen)
+    if target.get("kind") == "retire":
+        raise Refused(f"run {gen} is a retire record, not a published generation")
+    if target.get("state") != "complete":
+        raise Refused(f"run {gen} is {target.get('state')}; rollback --to returns to a complete run")
+    for journal in journals:
+        if journal.get("state") == "rolling_back" and journal.get("rollback_to") != gen:
+            raise Refused(_rolling_back(journal))
+    chosen = _runs_over(journals, target)
+    if not chosen:
+        for live in _live_paths(target):
+            holder = _tree_run_id(live)
+            if holder != gen:
+                why = f"run {holder} replaced it" if holder else "the tree there has no run marker"
+                raise Refused(f"run {gen} is not live at {live}: {why}; finish or roll back that run first")
+        message = f"run {gen} is already live"
+        _log(message)
+        return Result(0, gen, "complete", message)
+    if len(chosen) == 1 and chosen[0]["state"] == "complete":
+        return _rollback_run(state_root, chosen[0]["run_id"], faults, now)
+    ledgered = [journal["run_id"] for journal in chosen if journal.get("ledger_config")]
+    if ledgered:
+        raise Refused(
+            f"rollback --to {gen} would pass over runs that record to a ledger ({', '.join(ledgered)}); "
+            "roll them back one at a time"
+        )
+    ours = set(_live_paths(target))
+    chains = {}
+    for journal in chosen:
+        for mod in journal.get("modules_plan") or []:
+            chains.setdefault(abspath(mod["live_software"]), []).append((journal, mod))
+    for live, chain in chains.items():
+        if len({abspath(mod["live_module"]) for _, mod in chain}) > 1:
+            raise Refused(f"cannot roll back {live} to {gen}: the runs over it wrote different module files")
+    stages = {live: _rotation_stage(gen, live, chain, live in ours) for live, chain in chains.items()}
+    for journal in chosen:
+        if journal["state"] != "rolling_back":
+            journal["state"] = "rolling_back"
+            journal["rollback_to"] = gen
+            journal["message"] = f"rolling back to {gen}"
+            save_journal(journal_path(state_root, journal["run_id"]), journal, faults, f"journal.rolling_back:{journal['run_id']}")
+    methods = {}
+    for live, chain in chains.items():
+        newest = chain[-1][0]
+        for index in range(stages[live], len(chain)):
+            journal, mod = chain[index]
+            if index + 1 < len(chain):
+                pair = (chain[index + 1][1]["retired"], mod["retired"])
+                step = f"rollback.rotate:{mod['rel']}:{journal['run_id']}"
+            else:
+                pair = (live, mod["retired"])
+                step = f"rollback.swap:{mod['rel']}"
+            methods[(journal["run_id"], live)] = swap_directories(
+                *pair,
+                allow_exchange=_allow_exchange(newest),
+                allow_fallback=not bool(newest.get("require_exchange")),
+                faults=faults,
+                step_prefix=step,
+            ).method
+        first, last = chain[0][1], chain[-1][1]
+        _restore_old_module(dict(first, new_hash=last["new_hash"]), faults)
+        _log(f"restored {first['rel']}")
+    undone = []
+    for journal in reversed(chosen):
+        for link in journal.get("links_plan") or []:
+            if not link.get("created"):
+                continue
+            link_path = link["live_path"]
+            if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
+                faults.reach(f"rollback.unlink:{link['rel']}")
+                os.unlink(link_path)
+                fsync_dir(os.path.dirname(link_path))
+            link["created"] = False
+            link["status"] = "removed"
+        for mod in journal.get("modules_plan") or []:
+            mod["status"] = "restored"
+            mod["rollback_method"] = (
+                methods.get((journal["run_id"], abspath(mod["live_software"])))
+                or mod.get("rollback_method")
+                or "recovered"
+            )
+        journal["state"] = "rolled_back"
+        journal["rolled_back_at"] = now()
+        journal["message"] = f"rolled back to {gen}"
+        save_journal(journal_path(state_root, journal["run_id"]), journal, faults, f"journal.rolled_back:{journal['run_id']}")
+        undone.append(journal["run_id"])
+    message = f"rolled back to {gen}: runs {', '.join(undone)} rolled back; replacements kept at their retired paths"
+    _log(message)
+    return Result(0, gen, "complete", message)
 
 
 def _dry_run(spec, probes, faults):

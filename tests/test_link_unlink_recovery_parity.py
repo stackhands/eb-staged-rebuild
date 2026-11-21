@@ -34,8 +34,10 @@ module = os.path.join(modules, "all", "demo", "1.lua")
 os.makedirs(os.path.dirname(module), exist_ok=True)
 with open(module, "w", encoding="utf-8") as handle:
     handle.write(f'local root = "{install}"\\n')
-for rel in ("alpha/demo/1.lua", "tools/demo/1.lua"):
+for rel in os.environ.get("FAKE_EB_LINKS", "alpha/demo/1.lua,tools/demo/1.lua").split(","):
     link = os.path.join(modules, rel)
+    if not rel or os.path.lexists(link):
+        continue
     os.makedirs(os.path.dirname(link), exist_ok=True)
     os.symlink(module, link)
 """
@@ -60,7 +62,7 @@ def _build_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     return software, modules, state_root, fake_eb
 
 
-def _publish_run(runner, software: Path, modules: Path, state_root: Path, fake_eb: Path):
+def _publish_run(runner, software: Path, modules: Path, state_root: Path, fake_eb: Path, run_id="r1", env=None):
     return runner(
         "run",
         "--backend",
@@ -74,11 +76,16 @@ def _publish_run(runner, software: Path, modules: Path, state_root: Path, fake_e
         "--eb",
         str(fake_eb),
         "--run-id",
-        "r1",
+        run_id,
         "--skip-live-check",
         "--",
         "demo-1.eb",
+        env=env,
     )
+
+
+def _journal(state_root: Path, run_id: str) -> dict:
+    return json.loads((state_root / "runs" / run_id / "journal.json").read_text(encoding="utf-8"))
 
 
 class LinkUnlinkRecoveryParityTests(unittest.TestCase):
@@ -168,6 +175,57 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
                 "old\n",
             )
 
+    def _assert_rollback_to_retries_after_unlink_error(self, runner) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("permission checks are not meaningful as root")
+        with tempfile.TemporaryDirectory(prefix="rollback-to-link-unlink-") as tmp:
+            root = Path(tmp)
+            software, modules, state_root, fake_eb = _build_fixture(root)
+            for run_id, links in (("r1", ""), ("r2", "tools/demo/1.lua"), ("r3", "tools/demo/1.lua")):
+                published = _publish_run(
+                    runner, software, modules, state_root, fake_eb, run_id, {"FAKE_EB_LINKS": links}
+                )
+                if published is None:
+                    self.skipTest("TOOL_BIN is unset")
+                self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+
+            locked_link = modules / "tools" / "demo" / "1.lua"
+            self.assertIs(_journal(state_root, "r2")["links_plan"][0]["created"], True)
+            self.assertIs(_journal(state_root, "r3")["links_plan"][0]["created"], False)
+
+            locked_link.parent.chmod(0o555)
+            try:
+                refused = runner("rollback", "--state-root", str(state_root), "--to", "r1")
+            finally:
+                locked_link.parent.chmod(0o755)
+
+            self.assertEqual(refused.returncode, 2, refused.stdout + refused.stderr)
+            self.assertEqual(
+                refused.stderr,
+                f"eb-staged-rebuild: [Errno 13] Permission denied: '{locked_link}'\n",
+            )
+            self.assertTrue(locked_link.is_symlink())
+            self.assertEqual(_journal(state_root, "r3")["state"], "rolled_back")
+            r2 = _journal(state_root, "r2")
+            self.assertEqual(r2["state"], "rolling_back")
+            self.assertEqual(r2["rollback_to"], "r1")
+            self.assertEqual(
+                [(link["created"], link["status"]) for link in r2["links_plan"]], [(True, "created")]
+            )
+
+            done = runner("rollback", "--state-root", str(state_root), "--to", "r1")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertFalse(os.path.lexists(locked_link))
+            r2 = _journal(state_root, "r2")
+            self.assertEqual(r2["state"], "rolled_back")
+            self.assertEqual(
+                [(link["created"], link["status"]) for link in r2["links_plan"]], [(False, "removed")]
+            )
+            self.assertIn(
+                "run r1 is already live",
+                runner("rollback", "--state-root", str(state_root), "--to", "r1").stdout,
+            )
+
     def test_rollback_restores_published_tree_when_link_unlink_fails_python(self) -> None:
         self._assert_rollback_restores_on_unlink_error(run_cli)
 
@@ -179,6 +237,12 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
 
     def test_resume_refuses_when_created_link_unlink_fails_zig(self) -> None:
         self._assert_resume_refuses_on_unlink_error(run_cli_optional_binary)
+
+    def test_rollback_to_keeps_the_run_rolling_back_when_link_unlink_fails_python(self) -> None:
+        self._assert_rollback_to_retries_after_unlink_error(run_cli)
+
+    def test_rollback_to_keeps_the_run_rolling_back_when_link_unlink_fails_zig(self) -> None:
+        self._assert_rollback_to_retries_after_unlink_error(run_cli_optional_binary)
 
 
 if __name__ == "__main__":

@@ -188,6 +188,23 @@ def list_journals(state_root):
 
     An entry without a regular ``journal.json`` is left out.
     """
+    return [data for _name, data in _journals(state_root)]
+
+
+def run_journals(state_root):
+    """Return the journals ``list_journals`` returns, each checked as ``load_run_journal`` checks one.
+
+    A command that chooses among the runs refuses them all if one names
+    another run or state root or lacks a field, before it chooses.
+    """
+    found = []
+    for name, data in _journals(state_root):
+        check_run_journal(state_root, name, data)
+        found.append(data)
+    return found
+
+
+def _journals(state_root):
     runs = os.path.join(os.fspath(state_root), "runs")
     found = []
     if not os.path.isdir(runs):
@@ -195,5 +212,5 @@ def list_journals(state_root):
     for name in sorted(os.listdir(runs)):
         path = os.path.join(runs, name, "journal.json")
         if os.path.isfile(path) and not os.path.islink(path):
-            found.append(load_journal(path))
+            found.append((name, load_journal(path)))
     return found

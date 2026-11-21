@@ -3,12 +3,13 @@
 import contextlib
 import json
 import os
+import select
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import NamedTuple
 
 from eb_staged_rebuild.atomicio import atomic_write
@@ -219,15 +220,43 @@ def hold_state_root_lock(state_root: str, timeout: float | None = 0):
         lock.release()
 
 
+def pause_fifo(directory):
+    """A FIFO to name in EB_STAGED_REBUILD_PAUSE_READY, made in DIRECTORY, and its read end.
+
+    The pause hook opens that path for writing and closes it when the command
+    reaches its pause step. With the read end opened before the command starts,
+    the close is an event ``wait_for_pause`` can wait for.
+    """
+    path = os.path.join(tempfile.mkdtemp(dir=directory, prefix="pause-"), "ready")
+    os.mkfifo(path)
+    return path, os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+
+def wait_for_pause(proc, fifo, timeout=60):
+    """Whether PROC reached its pause step: its hook opened and closed FIFO before PROC exited or TIMEOUT seconds.
+
+    FIFO is the read end ``pause_fifo`` returned; it is closed here.
+    """
+    exited = os.pidfd_open(proc.pid)
+    try:
+        poller = select.poll()
+        poller.register(fifo, select.POLLIN | select.POLLHUP)
+        poller.register(exited, select.POLLIN)
+        return fifo in dict(poller.poll(timeout * 1000))
+    finally:
+        os.close(exited)
+        os.close(fifo)
+
+
 def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-def _run(argv, env=None, cwd=None, clear=()):
+def _run(argv, env=None, cwd=None, clear=(), prefix=()):
     merged = {key: value for key, value in os.environ.items() if key not in clear}
     if env:
         merged.update(env)
-    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
+    completed = subprocess.run([*prefix, *argv], capture_output=True, text=False, check=False, env=merged, cwd=cwd)
     return subprocess.CompletedProcess(
         completed.args,
         completed.returncode,
@@ -237,26 +266,35 @@ def _run(argv, env=None, cwd=None, clear=()):
 
 
 def run_cli(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere.
 
     The variables named in CLEAR are left out of the inherited environment; ENV is added after.
+    PREFIX is a command, such as ``unshare``, that runs the CLI.
     """
     if cwd is not None:
         search = [_REPO, os.environ.get("PYTHONPATH", "")]
         env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([*PYTHON_CLI, *args], env, cwd, clear)
+    return _run([*PYTHON_CLI, *args], env, cwd, clear, prefix)
 
 
 def run_cli_optional_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None, clear: Collection[str] = ()
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
     tool = os.environ.get("TOOL_BIN")
     if not tool:
         return None
-    return _run([tool, *args], env, cwd, clear)
+    return _run([tool, *args], env, cwd, clear, prefix)
 
 
 def run_cli_or_binary(
@@ -278,9 +316,9 @@ class Implementation(NamedTuple):
     name: str
     command: tuple[str, ...]
 
-    def run(self, *args, env=None, cwd=None, clear=()):
+    def run(self, *args, env=None, cwd=None, clear=(), prefix=()):
         runner = run_cli if self.name == "python" else run_cli_optional_binary
-        return runner(*args, env=env, cwd=cwd, clear=clear)
+        return runner(*args, env=env, cwd=cwd, clear=clear, prefix=prefix)
 
 
 def implementations():
@@ -352,18 +390,26 @@ class Site:
         write(self.eb, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_EB}" "$@"\n', 0o755)
         self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
 
-    def cli(self, *args, **env):
-        clear = [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
-        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=clear)
+    def cli(self, *args, prefix=(), **env):
+        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared(), prefix=prefix)
 
-    def run(self, *options, extra=None, verify=True, **env):
+    def cleared(self):
+        return [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
+
+    def environ(self, **env):
+        """The environment ``cli`` gives a command, for a process the test starts itself."""
+        kept = {key: value for key, value in os.environ.items() if key not in self.cleared()}
+        return {**kept, **self.env, **env}
+
+    def run(self, *options, extra=None, verify=True, run_id="r1", modules=("demo/1",), **env):
         if extra is not None:
             env["FAKE_EB_EXTRA"] = json.dumps(extra)
         gate = ["--verify"] if verify else []
+        named = [arg for rel in modules for arg in ("--module", rel)]
         return self.cli(
             "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
-            "--backend", "installpath", "--eb", self.eb, "--run-id", "r1", "--skip-live-check",
-            "--module", "demo/1", *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
+            "--backend", "installpath", "--eb", self.eb, "--run-id", run_id, "--skip-live-check",
+            *named, *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
         )
 
     def journal_path(self, run_id="r1"):
