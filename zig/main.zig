@@ -279,11 +279,7 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
 /// Python's str() of an errno with a filename: "[Errno N] text: 'path'",
 /// the path as repr() gives it.
 pub fn errnoPath(a: Allocator, err: linux.E, path: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, common.sys.describeErrno(err)) catch oom();
-    out.appendSlice(a, ": ") catch oom();
-    pyfmt.reprStr(&out, a, path) catch oom();
-    return out.items;
+    return common.pytext.osErrorErrno(a, err, path) catch oom();
 }
 
 /// Python's str() of an OSError with a filename. Other errors are named.
@@ -697,7 +693,7 @@ fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u12
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, s) catch oom();
+    common.pytext.reprStr(&out, a, s) catch oom();
     return out.items;
 }
 

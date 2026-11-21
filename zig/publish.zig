@@ -516,7 +516,7 @@ fn append(a: Allocator, envp: common.proc.Envp, config: Py, record_path: []const
     const first = out[0 .. std.mem.findAny(u8, out, "\n\r") orelse out.len];
     const m = parseSummary(first) orelse {
         var rp: std.ArrayList(u8) = .empty;
-        try pyfmt.reprStr(&rp, a, lastChars(out, 500));
+        try common.pytext.reprStr(&rp, a, lastChars(out, 500));
         return publisherError(a, "eb-stack ledger append printed no receipt: {s}", .{rp.items});
     };
     const head_v = readJson(a, head) orelse return publisherError(a, "cannot read head {s}: not valid JSON", .{head});
