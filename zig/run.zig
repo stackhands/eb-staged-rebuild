@@ -1107,7 +1107,7 @@ fn createLinks(r: *R, faults: atomic.Faults) E!void {
     }
 }
 
-fn removeCreatedLinks(r: *R) void {
+fn removeCreatedLinks(r: *R) E!void {
     const links = r.list("links_plan");
     var i = links.len;
     while (i > 0) {
@@ -1116,7 +1116,7 @@ fn removeCreatedLinks(r: *R) void {
         if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
-            sys.unlinkat(fsx.cwd, path, 0) catch {};
+            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
             atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
         }
         r.setItem("links_plan", i, "created", .{ .bool = false });
@@ -1148,7 +1148,7 @@ fn normalizeBaseline(r: *R) E!void {
         r.setItem("modules_plan", i, "swap_method", .null);
         r.setItem("modules_plan", i, "published_at", .null);
     }
-    removeCreatedLinks(r);
+    try removeCreatedLinks(r);
 }
 
 fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
@@ -1202,7 +1202,9 @@ fn publish(r: *R) E!void {
     publishSteps(r) catch |err| {
         const first = r.why;
         const kind_err = err;
-        removeCreatedLinks(r);
+        removeCreatedLinks(r) catch {
+            return r.intervene("publish failed and the old live tree could not be restored: {s}", .{r.why});
+        };
         normalizeBaseline(r) catch {
             return r.intervene("publish failed and the old live tree could not be restored: {s}", .{r.why});
         };
@@ -1789,7 +1791,7 @@ fn rollbackSteps(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
             try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
-            sys.unlinkat(fsx.cwd, path, 0) catch {};
+            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
             atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
         }
         r.setItem("links_plan", k, "created", .{ .bool = false });
@@ -2237,4 +2239,48 @@ test "availableBytes falls back to block_size and multiplies in u128 without ove
     info.fragment_size = 1 << 30;
     info.blocks_available = 1 << 40;
     try std.testing.expectEqual(@as(u128, 1) << 70, availableBytes(info));
+}
+
+test "removeCreatedLinks surfaces unlink errors and keeps created true" {
+    if (linux.geteuid() == 0) return;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-link-unlink-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const dir = try std.fs.path.join(a, &.{ root, "tools", "demo" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ root, "all", "demo", "1.lua" });
+    const link = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    {
+        var zt: [sys.path_max:0]u8 = undefined;
+        var zl: [sys.path_max:0]u8 = undefined;
+        _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zl, link)).ptr });
+    }
+    chmod(dir, 0o555);
+    defer chmod(dir, 0o755);
+
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const link_item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("tools/demo/1.lua") },
+        .{ .key = "live_path", .value = Py.s(link) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var r: R = .{
+        .a = a,
+        .env = env,
+        .ctx = &ctx,
+        .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} },
+        .journal = .{ .dict = try a.dupe(Py.Entry, &.{
+            .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{link_item}) } },
+        }) },
+    };
+    try std.testing.expectError(error.Os, removeCreatedLinks(&r));
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "[Errno 13] Permission denied:") != null);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(r.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(link, "symlink"));
 }
