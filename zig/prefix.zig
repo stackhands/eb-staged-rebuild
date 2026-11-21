@@ -17,7 +17,6 @@ const admin = @import("admin.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
-const pyfmt = @import("pyfmt.zig");
 const oom = @import("oom.zig").oom;
 const Allocator = std.mem.Allocator;
 
@@ -189,7 +188,7 @@ fn refusePunch(a: Allocator, why: *[]const u8, partial: []const u8) Error {
     var out: std.ArrayList(u8) = .empty;
     const text = sys.errnoText(sys.last_errno) orelse "Unknown error";
     out.print(a, "[Errno {d}] fallocate(PUNCH_HOLE): {s}: ", .{ @backingInt(sys.last_errno), text }) catch return error.OutOfMemory;
-    pyfmt.reprStr(&out, a, partial) catch return error.OutOfMemory;
+    common.pytext.reprStr(&out, a, partial) catch return error.OutOfMemory;
     why.* = out.items;
     return error.Refused;
 }
