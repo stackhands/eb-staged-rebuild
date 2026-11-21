@@ -1010,7 +1010,8 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);
-        atomic.fsyncDir(std.fs.path.dirname(retired) orelse "/") catch {};
+        const flushed = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(flushed) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, flushed)});
     } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
@@ -1067,7 +1068,8 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
         try hit(r, faults, try a.print("restore.remove:{s}", .{rel}));
         sys.unlinkat(fsx.cwd, live, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, live)});
-        atomic.fsyncDir(std.fs.path.dirname(live) orelse "/") catch {};
+        const flushed = std.fs.path.dirname(live) orelse "/";
+        atomic.fsyncDir(flushed) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, flushed)});
         return;
     }
     return r.intervene("{s} is not the module file this run created", .{live});
