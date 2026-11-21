@@ -21,6 +21,7 @@ const modulefile = @import("modulefile.zig");
 const builders = @import("builders.zig");
 const publish_mod = @import("publish.zig");
 const prefix_mod = @import("prefix.zig");
+const faultmount = if (@import("builtin").is_test) @import("faultmount.zig") else struct {};
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -1010,7 +1011,8 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);
-        atomic.fsyncDir(std.fs.path.dirname(retired) orelse "/") catch {};
+        const parent = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
     } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
@@ -1067,7 +1069,8 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
         try hit(r, faults, try a.print("restore.remove:{s}", .{rel}));
         sys.unlinkat(fsx.cwd, live, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, live)});
-        atomic.fsyncDir(std.fs.path.dirname(live) orelse "/") catch {};
+        const parent = std.fs.path.dirname(live) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, parent)});
         return;
     }
     return r.intervene("{s} is not the module file this run created", .{live});
@@ -1119,7 +1122,8 @@ fn removeCreatedLinks(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
             sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
-            atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            const parent = std.fs.path.dirname(path) orelse "/";
+            atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
         }
         r.setItem("links_plan", i, "created", .{ .bool = false });
         r.setItem("links_plan", i, "status", Py.s("pending"));
@@ -1794,7 +1798,8 @@ fn rollbackSteps(r: *R) E!void {
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
             try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
             sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
-            atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            const parent = std.fs.path.dirname(path) orelse "/";
+            atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
         }
         r.setItem("links_plan", k, "created", .{ .bool = false });
         r.setItem("links_plan", k, "status", Py.s("removed"));
@@ -2285,4 +2290,138 @@ test "removeCreatedLinks surfaces unlink errors and keeps created true" {
     try std.testing.expect(std.mem.indexOf(u8, r.why, "[Errno 13] Permission denied:") != null);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(r.list("links_plan")[0], "created")));
     try std.testing.expect(isKind(link, "symlink"));
+}
+
+fn writeBytes(path: []const u8, data: []const u8) !void {
+    const fd = try sys.openat(fsx.cwd, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    defer sys.close(fd);
+    try sys.writeAll(fd, data);
+}
+
+fn linkTo(target: []const u8, path: []const u8) !void {
+    var zt: [sys.path_max:0]u8 = undefined;
+    var zp: [sys.path_max:0]u8 = undefined;
+    _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zp, path)).ptr });
+}
+
+fn testRun(a: Allocator, ctx: *admin.Ctx, env: probe.Env, journal: Py) R {
+    return .{
+        .a = a,
+        .env = env,
+        .ctx = ctx,
+        .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} },
+        .journal = journal,
+    };
+}
+
+const empty_envp: common.proc.Envp = &[_:null]?[*:0]const u8{};
+
+fn testEnv() probe.Env {
+    return .{ .envp = empty_envp };
+}
+
+fn expectFlush(why: []const u8, dir: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, why, "Input/output error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, dir) != null);
+}
+
+test "a failed directory flush after a staged tree is renamed is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage", "/software");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, std.fs.path.dirname(retired).?);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a failed directory flush after a created module file is unlinked is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "module", "/modules");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "modules" });
+    try atomic.makedirs(dir);
+    const live = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    const body = "created-module\n";
+    try writeBytes(live, body);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1.lua") },
+        .{ .key = "live_module", .value = Py.s(live) },
+        .{ .key = "new_hash", .value = Py.s(sha(a, body)) },
+        .{ .key = "existed", .value = .{ .bool = false } },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try std.testing.expectError(error.Refused, restoreOldModule(&r, item, .{}));
+    try expectFlush(r.why, dir);
+    try std.testing.expect(isKind(live, "missing"));
+}
+
+test "a failed directory flush after a created link is unlinked is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "links", "/links");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "links" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ fused.mnt, "all/1.lua" });
+    const created = try std.fs.path.join(a, &.{ dir, "a.lua" });
+    const rolled = try std.fs.path.join(a, &.{ dir, "b.lua" });
+    try linkTo(target, created);
+    try linkTo(target, rolled);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const first = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/a.lua") },
+        .{ .key = "live_path", .value = Py.s(created) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var removing = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{first}) } },
+    }) });
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(created, "missing"));
+
+    const second = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/b.lua") },
+        .{ .key = "live_path", .value = Py.s(rolled) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var rolling = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{second}) } },
+    }) });
+    try std.testing.expectError(error.Os, rollbackSteps(&rolling));
+    try expectFlush(rolling.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(rolling.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(rolled, "missing"));
 }
