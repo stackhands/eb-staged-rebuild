@@ -196,6 +196,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
       - run: zig build test --summary all
       - run: zig build -Drelease=true
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
       - name: the release binary carries no test hooks
         run: |
           ! grep -aq EB_STAGED_REBUILD_ACL_MODEL zig-out/bin/eb-staged-rebuild
@@ -204,8 +206,14 @@ jobs:
           ! zig build -Dtest-ops -Drelease=true
       - name: the -Dtest-ops test artifact
         run: zig build -Dtest-ops
-      - name: filesystem faults against the release binary
-        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_prefix_punch_eio tests.test_sealed_dir_chmod tests.test_prefix_dir_fsync tests.test_retire_dir_fsync tests.test_gc_dir_fsync tests.test_stage_source_dir_fsync tests.test_now_clock tests.test_dir_fsync_retry
+      - name: user namespaces for the user attribute parity test
+        # Ubuntu's AppArmor refuses user namespaces to unconfined programs.
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Python unit discovery against the release and test-ops binaries
+        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest discover -s tests -v
       - name: build.zig.zon's version and -Dcommit reach --version
         run: bash tests/build_version.sh
       - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
@@ -229,14 +237,7 @@ jobs:
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
       - name: the bounded ledger call through run, both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_bounded_cli
-      - name: promtool 3.16.0
-        uses: ./.github/actions/pinned-promtool
       - name: metrics output and atomic failures against both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli
       - name: a user attribute the filesystem will not copy
-        # Ubuntu's AppArmor refuses user namespaces to unconfined programs.
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity
+        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity

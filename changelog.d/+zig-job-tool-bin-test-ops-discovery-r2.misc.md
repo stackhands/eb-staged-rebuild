@@ -1,0 +1,1 @@
+The Zig workflow installs `promtool` once, enables user namespaces before tests, builds release and test-ops artifacts, and runs required discovery with `TOOL_BIN` and `TOOL_BIN_TEST_OPS`, covering access control list and metrics parity tests in continuous integration.
