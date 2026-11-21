@@ -34,6 +34,32 @@ class ResolveEmptyTclRootParityTests(unittest.TestCase):
             zig_doc.pop("path", None)
             self.assertEqual(py_doc, zig_doc)
 
+    def test_empty_quoted_tcl_root_error_key_matches_on_both_front_ends(self) -> None:
+        if not os.environ.get("TOOL_BIN"):
+            if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
+                self.fail("TOOL_BIN is unset")
+            self.skipTest("TOOL_BIN is unset")
+        with tempfile.TemporaryDirectory() as root:
+            module = os.path.join(root, "empty.tcl")
+            with open(module, "w", encoding="utf-8") as handle:
+                handle.write('set root ""\n')
+
+            py = run_cli("resolve", module)
+            zig = run_cli_optional_binary("resolve", module)
+            self.assertIsNotNone(zig)
+            assert zig is not None
+            self.assertEqual(py.returncode, 1, py.stdout + py.stderr)
+            self.assertEqual(zig.returncode, 1, zig.stdout + zig.stderr)
+            self.assertEqual(py.stderr, "")
+            self.assertEqual(zig.stderr, "")
+            py_doc = json.loads(py.stdout)
+            zig_doc = json.loads(zig.stdout)
+            self.assertEqual(py_doc["syntax"], "tcl")
+            self.assertEqual(zig_doc["syntax"], "tcl")
+            self.assertEqual(py_doc["root"], "")
+            self.assertEqual(zig_doc["root"], "")
+            self.assertEqual(py_doc.get("error"), zig_doc.get("error"))
+
 
 if __name__ == "__main__":
     unittest.main()
