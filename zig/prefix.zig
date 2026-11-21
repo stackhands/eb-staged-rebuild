@@ -662,7 +662,7 @@ test "a read-only directory names that directory" {
     defer {
         var restore: [sys.path_max:0]u8 = undefined;
         if (sys.z(&restore, root)) |z| {
-            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755, 0);
+            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755);
         } else |_| {}
         fsx.deleteTree(a, fsx.cwd, root) catch {};
     }
@@ -674,7 +674,7 @@ test "a read-only directory names that directory" {
         try sys.writeAll(fd, body);
         sys.close(fd);
     }
-    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555, 0)) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555)) == .SUCCESS);
     defer atomic.ops.* = .{};
     atomic.ops.fchmod = readOnlyChmod;
     var why: []const u8 = "";
@@ -808,8 +808,10 @@ test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by r
     var stx: linux.Statx = undefined;
     try std.testing.expect(linux.errno(linux.statx(sfd, "", linux.AT.EMPTY_PATH, .{ .BLOCKS = true, .SIZE = true }, &stx)) == .SUCCESS);
     try std.testing.expect(stx.blocks < 128);
-    const head = try fsx.readAll(a, sfd, 64);
-    try std.testing.expect(std.mem.startsWith(u8, head, "/stable/lib\x00"));
+    var head: [64]u8 = undefined;
+    const n = linux.read(sfd, &head, head.len);
+    try std.testing.expect(linux.errno(n) == .SUCCESS);
+    try std.testing.expect(std.mem.startsWith(u8, head[0..n], "/stable/lib\x00"));
 }
 
 test "collect crosses a deep tree under a tight descriptor limit" {
@@ -860,7 +862,7 @@ test "collect crosses a deep tree under a tight descriptor limit" {
     };
     var found = false;
     for (groups.items) |g| {
-        for (g.names) |n| if (std.mem.endsWith(u8, n, "/keep.bin")) {
+        for (g.names.items) |n| if (std.mem.endsWith(u8, n, "/keep.bin")) {
             found = true;
         };
     }
