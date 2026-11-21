@@ -32,6 +32,8 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
+      - name: fuse3 before the zig tests that compile faultfs
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
       - run: zig build test --summary all
       - name: build
         run: |
