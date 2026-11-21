@@ -162,6 +162,16 @@ fn readBytes(r: *R, p: []const u8) E![]const u8 {
     return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| r.refuse("{s}", .{main_mod.osError(r.a, err, p)});
 }
 
+/// Bytes of `p` when a failure is an operating-system error. A refusal
+/// would be recorded as a failed run and the command would exit without
+/// a diagnostic. Python's read of the previous module file raises, so
+/// the journal stays as the last save left it and the command prints.
+fn readOs(r: *R, p: []const u8) E![]const u8 {
+    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, p)});
+    defer sys.close(f.fd);
+    return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| r.osFail("{s}", .{main_mod.osError(r.a, err, p)});
+}
+
 fn sha(a: Allocator, data: []const u8) []const u8 {
     var out: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(data, &out, .{});
@@ -835,7 +845,7 @@ fn plan(r: *R) E!void {
         var old_hash: Py = .null;
         var previous_root: Py = .null;
         if (existed) {
-            const old = try readBytes(r, d.live_module);
+            const old = try readOs(r, d.live_module);
             old_hash = Py.s(sha(a, old));
             if (!std.unicode.utf8ValidateSlice(old)) return r.refuse("{s} is not UTF-8 text", .{d.live_module});
             if (modulefile.parseRoot(old)) |pr| if (pr.path.len > 0) {
