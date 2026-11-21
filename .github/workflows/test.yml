@@ -197,7 +197,7 @@ jobs:
       - name: fuse3 for the filesystem fault tests
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
       - name: filesystem faults against the release binary
-        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_punch_eio tests.test_sealed_dir_chmod tests.test_prefix_dir_fsync tests.test_retire_dir_fsync tests.test_gc_dir_fsync
+        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_punch_eio tests.test_sealed_dir_chmod tests.test_prefix_dir_fsync tests.test_retire_dir_fsync tests.test_gc_dir_fsync tests.test_stage_source_dir_fsync
       - name: the release binary carries no test hooks
         run: |
           ! grep -aq EB_STAGED_REBUILD_ACL_MODEL zig-out/bin/eb-staged-rebuild

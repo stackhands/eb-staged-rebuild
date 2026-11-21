@@ -770,7 +770,11 @@ def _prepare_swap_source(mod, run_id, faults):
                     "place --state-root beside the software tree"
                 ) from error
             raise
+        # A cross-directory rename is durable only after both parents are
+        # flushed: the destination gained the retired name, and the source
+        # lost the staged name.
         fsync_dir(os.path.dirname(retired))
+        fsync_dir(os.path.dirname(staged))
     elif staged_kind == "missing" and retired_kind == "dir":
         pass
     else:

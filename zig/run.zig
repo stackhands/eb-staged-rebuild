@@ -1011,8 +1011,13 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);
+        // A cross-directory rename is durable only after both parents are
+        // flushed: the destination gained the retired name, and the source
+        // lost the staged name.
         const parent = std.fs.path.dirname(retired) orelse "/";
         atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        const source = std.fs.path.dirname(staged) orelse "/";
+        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
@@ -2349,6 +2354,36 @@ test "a failed directory flush after a staged tree is renamed is reported" {
     var r = testRun(a, &ctx, env, .{ .dict = &.{} });
     try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
     try expectFlush(r.why, std.fs.path.dirname(retired).?);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a failed flush of the source parent after a cross-directory rename is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage-source", "/generations/r1/software/demo");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const source = std.fs.path.dirname(staged).?;
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    try std.testing.expect(std.mem.indexOf(u8, r.why, std.fs.path.dirname(retired).?) == null);
     try std.testing.expect(isKind(staged, "missing"));
     try std.testing.expect(isKind(retired, "dir"));
 }
