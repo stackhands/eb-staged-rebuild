@@ -1134,21 +1134,32 @@ fn removeCreatedLinks(r: *R) E!void {
         i -= 1;
         const l = r.list("links_plan")[i];
         if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
-        const path = s(pyfmt.get(l, "live_path"));
-        if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
-            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
-        } else if (!isKind(path, "missing")) {
-            r.setItem("links_plan", i, "created", .{ .bool = false });
-            r.setItem("links_plan", i, "status", Py.s("pending"));
-            continue;
-        }
-        // The link is gone only once its parent has been flushed. A retry
-        // that finds it already absent still has to flush.
-        const parent = std.fs.path.dirname(path) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
+        try unlinkWithParentFsync(r, s(pyfmt.get(l, "live_path")), s(pyfmt.get(l, "target")), null);
         r.setItem("links_plan", i, "created", .{ .bool = false });
         r.setItem("links_plan", i, "status", Py.s("pending"));
     }
+}
+
+var unlink_parent_fsync_override: ?*const fn ([]const u8) anyerror!void = null;
+
+fn unlinkParentFsync(parent: []const u8) anyerror!void {
+    if (unlink_parent_fsync_override) |f| return f(parent);
+    return atomic.fsyncDir(parent);
+}
+
+// The one path by which a created link leaves the tree, for a failed publish
+// and for a rollback. The link is gone only once its parent has been flushed,
+// so a retry that finds it already absent still has to flush. A path that is
+// neither the link nor absent is not ours to remove or to flush.
+fn unlinkWithParentFsync(r: *R, path: []const u8, target: []const u8, fault: ?[]const u8) E!void {
+    if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), target)) {
+        if (fault) |step| try hit(r, r.faults(), step);
+        sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
+    } else if (!isKind(path, "missing")) {
+        return;
+    }
+    const parent = std.fs.path.dirname(path) orelse "/";
+    unlinkParentFsync(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
 }
 
 fn normalizeBaseline(r: *R) E!void {
@@ -1815,17 +1826,8 @@ fn rollbackSteps(r: *R) E!void {
     }
     for (r.list("links_plan"), 0..) |l, k| {
         if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
-        const path = s(pyfmt.get(l, "live_path"));
-        if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
-            try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
-            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
-        } else if (!isKind(path, "missing")) {
-            r.setItem("links_plan", k, "created", .{ .bool = false });
-            r.setItem("links_plan", k, "status", Py.s("removed"));
-            continue;
-        }
-        const parent = std.fs.path.dirname(path) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
+        const fault = try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))});
+        try unlinkWithParentFsync(r, s(pyfmt.get(l, "live_path")), s(pyfmt.get(l, "target")), fault);
         r.setItem("links_plan", k, "created", .{ .bool = false });
         r.setItem("links_plan", k, "status", Py.s("removed"));
     }
@@ -2545,4 +2547,84 @@ test "a retry flushes the parent of a created link that is already gone" {
     try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
     try expectFlush(removing.why, dir);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+}
+
+const FlushDenied = struct {
+    fn flush(_: []const u8) anyerror!void {
+        return error.AccessDenied;
+    }
+};
+
+fn createdLink(a: Allocator, rel: []const u8, path: []const u8, target: []const u8) !Py {
+    return Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s(rel) },
+        .{ .key = "live_path", .value = Py.s(path) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+}
+
+fn linksJournal(a: Allocator, link: Py) !Py {
+    return Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{link}) } },
+    }) };
+}
+
+test "publish recovery and rollback report a failed parent flush after unlinking a created link" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-link-flush-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const dir = try std.fs.path.join(a, &.{ root, "tools", "demo" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ root, "all", "demo", "1.lua" });
+    const published = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    const rolled = try std.fs.path.join(a, &.{ dir, "2.lua" });
+    try linkTo(target, published);
+    try linkTo(target, rolled);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var removing = testRun(a, &ctx, env, try linksJournal(a, try createdLink(a, "tools/demo/1.lua", published, target)));
+    var rolling = testRun(a, &ctx, env, try linksJournal(a, try createdLink(a, "tools/demo/2.lua", rolled, target)));
+
+    unlink_parent_fsync_override = FlushDenied.flush;
+    defer unlink_parent_fsync_override = null;
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try std.testing.expectError(error.Os, rollbackSteps(&rolling));
+    for ([_]*R{ &removing, &rolling }) |r| {
+        try std.testing.expect(std.mem.indexOf(u8, r.why, "[Errno 13] Permission denied:") != null);
+        try std.testing.expect(std.mem.indexOf(u8, r.why, dir) != null);
+        try std.testing.expect(pyfmt.truthy(pyfmt.get(r.list("links_plan")[0], "created")));
+    }
+    try std.testing.expect(isKind(published, "missing"));
+    try std.testing.expect(isKind(rolled, "missing"));
+}
+
+test "link cleanup leaves a path that is not the created link alone" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-link-foreign-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const dir = try std.fs.path.join(a, &.{ root, "tools", "demo" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ root, "all", "demo", "1.lua" });
+    const other = try std.fs.path.join(a, &.{ root, "all", "demo", "other.lua" });
+    const redirected = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    const regular = try std.fs.path.join(a, &.{ dir, "2.lua" });
+    try linkTo(other, redirected);
+    try writeBytes(regular, "not ours\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var removing = testRun(a, &ctx, env, try linksJournal(a, try createdLink(a, "tools/demo/1.lua", redirected, target)));
+
+    unlink_parent_fsync_override = FlushDenied.flush;
+    defer unlink_parent_fsync_override = null;
+    try removeCreatedLinks(&removing);
+    try std.testing.expect(!pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+    try unlinkWithParentFsync(&removing, regular, target, "rollback.unlink:tools/demo/2.lua");
+    try std.testing.expect(isKind(redirected, "symlink"));
+    try std.testing.expect(isKind(regular, "file"));
 }
