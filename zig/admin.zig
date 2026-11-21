@@ -144,7 +144,12 @@ fn recordedField(journal: Py, field: []const u8) []const u8 {
     return value;
 }
 
-/// os.path.abspath(os.path.normpath(p)).
+/// os.path.abspath(os.path.normpath(p)): `p` made absolute against the
+/// working directory, with empty and `.` segments dropped and each `..`
+/// removing the segment before it, without following symbolic links. As
+/// POSIX leaves a path that begins with exactly two slashes to the system,
+/// `//` is kept and names another path than `/`; three or more leading
+/// slashes are one.
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
     return fsx.absPath(a, p) catch oom();
 }

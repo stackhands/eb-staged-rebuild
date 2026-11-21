@@ -204,6 +204,14 @@ Example 1.0
 | =eb-staged-rebuild: journal module plan does not record FIELD=                            | An entry of the journal's module plan lacks one of the paths the command reads.                                        | Restore the journal from a known-good copy or roll back the staged tree by hand.                                                |
 | =eb-staged-rebuild: journal state root PATH is not STATE_ROOT=                            | The journal was written under another state root, PATH, and copied or edited into this one.                            | Give the command the state root the journal was written under, or restore the journal from a known-good copy.                   |
 
+The journal's state root and the one given to the command are compared as
+paths made absolute without following symbolic links: empty and =.=
+segments are dropped, and each =..= removes the segment before it. POSIX
+leaves the meaning of a path that begins with exactly two slashes to the
+system, so =//opt/site/.eb-staged-rebuild= is kept as written and is not
+the state root =/opt/site/.eb-staged-rebuild=; three or more leading
+slashes count as one.
+
 ** Related
 
 - [[file:rebuild.org][Rebuild an installed module]]

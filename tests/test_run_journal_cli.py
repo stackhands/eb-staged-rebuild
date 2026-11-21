@@ -110,6 +110,16 @@ class RunJournalCliTests(unittest.TestCase):
                 self.edit(site, lambda journal: journal.update(state_root=site.state))
                 self.assert_refused(site, f"journal state root {site.state} is not {doubled}", state_root=doubled)
 
+    def test_a_state_root_that_begins_with_two_slashes(self):
+        """The lock path keeps a leading ``//``, so a symbolic link is named as it was given."""
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                link = os.path.join(site.root, "link")
+                os.symlink(site.state, link)
+                self.assert_refused(
+                    site, f"state root is unsafe: /{link} is a symlink", commands=(["verify"],), state_root="/" + link
+                )
+
     def test_a_journal_without_a_field_the_commands_read(self):
         for site in self.built():
             with self.subTest(tool=site.name):
