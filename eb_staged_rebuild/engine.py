@@ -1260,7 +1260,8 @@ def _verify_trees(journal):
 
 def _verify_gate(spec, journal, faults):
     """Whether the stage may be published: it passes verify, or --force overrides a failure."""
-    record = verify_stage(journal, _verify_trees(journal), faults, _clock(spec))
+    directory = run_dir_for(spec.state_root, journal["run_id"])
+    record = verify_stage(directory, journal, _verify_trees(journal), faults, _clock(spec))
     failed = record["result"] != "pass"
     record["forced"] = failed and spec.force
     journal["verify"] = record
@@ -1458,11 +1459,12 @@ def run(spec):
         lock.release()
 
 
-def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
+def _spec_from_journal(state_root, run_id, journal, builder, faults, clock, lock_timeout):
+    """The spec JOURNAL records, under the caller's STATE_ROOT and RUN_ID."""
     return Spec(
         software=journal["software"],
         modules=journal["modules"],
-        state_root=journal["state_root"],
+        state_root=state_root,
         eb_args=list(journal.get("eb_args") or []),
         backend=journal["backend"],
         grace_hours=journal.get("grace_hours") or DEFAULT_GRACE_HOURS,
@@ -1470,7 +1472,7 @@ def _spec_from_journal(journal, builder, faults, clock, lock_timeout):
         eb_executable=journal.get("eb_executable") or "eb",
         builder=builder,
         faults=faults,
-        run_id=journal["run_id"],
+        run_id=run_id,
         skip_live_check=bool(journal.get("skip_live_check")),
         lock_timeout=lock_timeout,
         clock=clock,
@@ -1496,7 +1498,7 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
     if journal.get("kind") == "retire":
         raise Refused(f"run {run_id} is a retire record; rollback restores the module file")
     faults = faults or FaultInjector()
-    spec = _spec_from_journal(journal, builder, faults, clock, lock_timeout)
+    spec = _spec_from_journal(state_root, run_id, journal, builder, faults, clock, lock_timeout)
     spec.force = force
     _check_roots(spec)
     lock = FileLock(spec.state_root)
@@ -1554,7 +1556,7 @@ def verify(state_root, run_id, clock=None, lock_timeout=None):
             raise Refused(f"run {run_id} is {journal['state']}; only a built run has a stage to verify")
         require_stage_modules(journal)
         faults = FaultInjector()
-        record = verify_stage(journal, _verify_trees(journal), faults, clock or time.time)
+        record = verify_stage(run_dir_for(state_root, run_id), journal, _verify_trees(journal), faults, clock or time.time)
         journal["verify"] = record
         save_journal(path, journal, faults, "journal.verified")
         return Result(0 if record["result"] == "pass" else 1, run_id, journal["state"], record["result"])

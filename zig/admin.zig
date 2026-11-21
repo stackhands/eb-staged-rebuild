@@ -106,17 +106,20 @@ pub fn loadRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8) 
     const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
     if (!st.isReg()) refuse("no journal at {s}", .{path});
     const journal = main_mod.loadJournal(a, path);
-    checkRunJournal(run_id, journal);
+    checkRunJournal(a, state_root, run_id, journal);
     return .{ .path = path, .journal = journal };
 }
 
-/// check_run_journal: a journal read from runs/`run_id` has to name that
-/// run and record its state root. A rebuild journal also has to record, as
-/// non-empty text, each of run_fields and each of plan_fields in every
-/// module plan entry, so no command reads a field that is missing.
-pub fn checkRunJournal(run_id: []const u8, journal: Py) void {
+/// check_run_journal: a journal read from `state_root`/runs/`run_id` has
+/// to name that run and that state root. A rebuild journal also has to
+/// record, as non-empty text, each of run_fields and each of plan_fields in
+/// every module plan entry, so no command reads a field that is missing or
+/// acts on a journal that describes another state root.
+pub fn checkRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8, journal: Py) void {
     if (!matchingRunId(journal, run_id)) refuse("journal run id does not match its directory", .{});
-    _ = recordedField(journal, "state_root");
+    const recorded = recordedField(journal, "state_root");
+    const root = abspath(a, state_root);
+    if (!std.mem.eql(u8, abspath(a, recorded), root)) refuse("journal state root {s} is not {s}", .{ recorded, root });
     if (eqlStr(pyfmt.get(journal, "kind"), "retire")) return;
     for (run_fields) |field| _ = recordedField(journal, field);
     const mods = pyfmt.get(journal, "modules_plan") orelse refuse("journal does not record modules_plan", .{});

@@ -34,7 +34,6 @@ import subprocess
 
 from eb_staged_rebuild.atomicio import atomic_write, read_bytes
 from eb_staged_rebuild.errors import NeedsIntervention
-from eb_staged_rebuild.journal import run_dir
 from eb_staged_rebuild.paths import abspath
 
 CHECKS = ("elf", "references", "modules", "access")
@@ -609,8 +608,8 @@ def require_stage_modules(journal, environ=None):
         raise NeedsIntervention("journal does not record stage_modules")
 
 
-def verify_stage(journal, trees, faults, clock, environ=None):
-    """Check a built run's staged trees, write ``verify.json`` beside its journal, and return the record."""
+def verify_stage(directory, journal, trees, faults, clock, environ=None):
+    """Check a built run's staged trees, write ``verify.json`` in its run DIRECTORY, and return the record."""
     environ = os.environ if environ is None else environ
     lmod = environ.get("LMOD_CMD") or None
     stage = _Stage(journal, trees, environ)
@@ -623,7 +622,7 @@ def verify_stage(journal, trees, faults, clock, environ=None):
         skipped["modules"] = "LMOD_CMD is not set"
     result = "fail" if problems else "pass"
     at = clock()
-    path = os.path.join(run_dir(journal["state_root"], journal["run_id"]), REPORT)
+    path = os.path.join(directory, REPORT)
     report = {
         "run_id": journal["run_id"],
         "result": result,
