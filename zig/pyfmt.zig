@@ -45,7 +45,7 @@ pub fn reprStr(out: *std.ArrayList(u8), a: Allocator, s: []const u8) Allocator.E
                 } else if (cp < 0x20 or cp == 0x7f) {
                     var b: [8]u8 = undefined;
                     try out.appendSlice(a, std.mem.print(&b, "\\x{x:0>2}", .{cp}) catch unreachable);
-                } else if (cp >= 0x80 and cp < 0xa0) {
+                } else if ((cp >= 0x80 and cp < 0xa0) or cp == 0xa0 or cp == 0xad) {
                     var b: [8]u8 = undefined;
                     try out.appendSlice(a, std.mem.print(&b, "\\x{x:0>2}", .{cp}) catch unreachable);
                 } else try out.appendSlice(a, s[i .. i + ch.len]);

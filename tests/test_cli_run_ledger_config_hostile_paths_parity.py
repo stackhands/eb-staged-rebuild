@@ -24,6 +24,37 @@ def _deadline(seconds: float):
 
 
 class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
+    def test_dangling_config_escapes_nbsp_and_soft_hyphen_like_python(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            software = os.path.join(root, "software")
+            modules = os.path.join(root, "modules")
+            config = os.path.join(root, "ledger-\u00a0-\u00ad.json")
+            os.makedirs(software, exist_ok=True)
+            os.makedirs(modules, exist_ok=True)
+
+            args = (
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--dry-run",
+                "--ledger-config",
+                config,
+                "--",
+                "demo.eb",
+            )
+            py = run_cli(*args)
+            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
+            self.assertIn(r"\xa0", py.stderr)
+            self.assertIn(r"\xad", py.stderr)
+
+            zig = run_cli_optional_binary(*args)
+            if zig is not None:
+                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                self.assertEqual(zig.stdout, "")
+                self.assertEqual(zig.stderr, py.stderr)
+
     def test_run_dry_refuses_hostile_ledger_config_paths(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")
