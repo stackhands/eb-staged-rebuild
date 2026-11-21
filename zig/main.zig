@@ -279,26 +279,12 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
 /// Python's str() of an errno with a filename: "[Errno N] text: 'path'",
 /// the path as repr() gives it.
 pub fn errnoPath(a: Allocator, err: linux.E, path: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, common.sys.describeErrno(err)) catch oom();
-    out.appendSlice(a, ": ") catch oom();
-    pyfmt.reprStr(&out, a, path) catch oom();
-    return out.items;
+    return common.pytext.osErrorErrno(a, err, path) catch oom();
 }
 
 /// Python's str() of an OSError with a filename. Other errors are named.
 pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
-    if (common.sys.asError(err)) |e| {
-        const described = common.sys.describe(e);
-        const close = std.mem.indexOfScalar(u8, described, ']') orelse unreachable;
-        const number = std.fmt.parseInt(u16, described["[Errno ".len..close], 10) catch unreachable;
-        return errnoPath(a, @fromBackingInt(@intCast(number)), path);
-    }
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, @errorName(err)) catch oom();
-    out.appendSlice(a, ": ") catch oom();
-    pyfmt.reprStr(&out, a, path) catch oom();
-    return out.items;
+    return common.pytext.osError(a, err, path) catch oom();
 }
 
 fn cmdResolve(a: Allocator, args: []const []const u8, top_extra: []const []const u8) u8 {
@@ -707,7 +693,7 @@ fn bytesArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) u12
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, s) catch oom();
+    common.pytext.reprStr(&out, a, s) catch oom();
     return out.items;
 }
 
@@ -1234,4 +1220,10 @@ test "probe help includes --no-create" {
     try std.testing.expect(std.mem.indexOf(u8, probe_help, "--no-create") != null);
     try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--require-eb]") != null);
     try std.testing.expect(std.mem.indexOf(u8, probe_help, "--require-eb") != null);
+}
+
+test "osError names a non-regular file without an errno" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("not a regular file: '/x'", osError(arena.allocator(), error.NotRegularFile, "/x"));
 }

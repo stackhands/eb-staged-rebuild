@@ -1156,7 +1156,7 @@ fn normalizeBaseline(r: *R) E!void {
 fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
     const x = v orelse return "None";
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, x) catch return x;
+    common.pytext.reprStr(&out, a, x) catch return x;
     return out.items;
 }
 
@@ -2259,8 +2259,8 @@ test "removeCreatedLinks surfaces unlink errors and keeps created true" {
         var zl: [sys.path_max:0]u8 = undefined;
         _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zl, link)).ptr });
     }
-    chmod(dir, 0o555);
-    defer chmod(dir, 0o755);
+    try chmod(dir, 0o555);
+    defer chmod(dir, 0o755) catch {};
 
     const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
     const env: probe.Env = .{ .envp = parent };
