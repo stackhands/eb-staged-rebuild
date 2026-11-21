@@ -1021,7 +1021,14 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
         atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
         const source = std.fs.path.dirname(staged) orelse "/";
         atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
-    } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
+    } else if (std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir")) {
+        // The rename already happened. A failed flush left it uncommitted,
+        // so a retry flushes both parents again before publishing.
+        const parent = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        const source = std.fs.path.dirname(staged) orelse "/";
+        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    } else {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
     // After an exchange the journal did not record, the run's tree is live
@@ -1130,9 +1137,15 @@ fn removeCreatedLinks(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
             sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
-            const parent = std.fs.path.dirname(path) orelse "/";
-            atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
+        } else if (!isKind(path, "missing")) {
+            r.setItem("links_plan", i, "created", .{ .bool = false });
+            r.setItem("links_plan", i, "status", Py.s("pending"));
+            continue;
         }
+        // The link is gone only once its parent has been flushed. A retry
+        // that finds it already absent still has to flush.
+        const parent = std.fs.path.dirname(path) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
         r.setItem("links_plan", i, "created", .{ .bool = false });
         r.setItem("links_plan", i, "status", Py.s("pending"));
     }
@@ -1806,9 +1819,13 @@ fn rollbackSteps(r: *R) E!void {
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
             try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
             sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
-            const parent = std.fs.path.dirname(path) orelse "/";
-            atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
+        } else if (!isKind(path, "missing")) {
+            r.setItem("links_plan", k, "created", .{ .bool = false });
+            r.setItem("links_plan", k, "status", Py.s("removed"));
+            continue;
         }
+        const parent = std.fs.path.dirname(path) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
         r.setItem("links_plan", k, "created", .{ .bool = false });
         r.setItem("links_plan", k, "status", Py.s("removed"));
     }
@@ -2462,4 +2479,70 @@ test "a failed directory flush after a created link is unlinked is reported" {
     try expectFlush(rolling.why, dir);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(rolling.list("links_plan")[0], "created")));
     try std.testing.expect(isKind(rolled, "missing"));
+}
+
+test "a retry flushes the source parent again after the rename" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage-retry", "/generations/r1/software/demo");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const source = std.fs.path.dirname(staged).?;
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    r.why = "";
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a retry flushes the parent of a created link that is already gone" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "link-retry", "/links");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "links" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ fused.mnt, "all/1.lua" });
+    const created = try std.fs.path.join(a, &.{ dir, "a.lua" });
+    try linkTo(target, created);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/a.lua") },
+        .{ .key = "live_path", .value = Py.s(created) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var removing = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{item}) } },
+    }) });
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(created, "missing"));
+    removing.why = "";
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
 }

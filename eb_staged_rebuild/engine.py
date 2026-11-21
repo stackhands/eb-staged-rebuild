@@ -785,7 +785,10 @@ def _prepare_swap_source(mod, run_id, faults):
         fsync_dir(os.path.dirname(retired))
         fsync_dir(os.path.dirname(staged))
     elif staged_kind == "missing" and retired_kind == "dir":
-        pass
+        # The rename already happened. A failed flush left it uncommitted,
+        # so a retry flushes both parents again before publishing.
+        fsync_dir(os.path.dirname(retired))
+        fsync_dir(os.path.dirname(staged))
     else:
         raise NeedsIntervention(
             f"cannot prepare {mod['rel']}: staged={staged_kind}, retired={retired_kind}"
@@ -899,7 +902,13 @@ def _remove_created_links(journal):
         path = link["live_path"]
         if lstat_kind(path) == "symlink" and os.readlink(path) == link["target"]:
             os.unlink(path)
-            fsync_dir(os.path.dirname(path))
+        elif lstat_kind(path) != "missing":
+            link["created"] = False
+            link["status"] = "pending"
+            continue
+        # The link is gone only once its parent has been flushed. A retry
+        # that finds it already absent still has to flush.
+        fsync_dir(os.path.dirname(path))
         link["created"] = False
         link["status"] = "pending"
 
@@ -1625,7 +1634,11 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
                 if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
                     faults.reach(f"rollback.unlink:{link['rel']}")
                     os.unlink(link_path)
-                    fsync_dir(os.path.dirname(link_path))
+                elif lstat_kind(link_path) != "missing":
+                    link["created"] = False
+                    link["status"] = "removed"
+                    continue
+                fsync_dir(os.path.dirname(link_path))
                 link["created"] = False
                 link["status"] = "removed"
             journal["state"] = "rolled_back"

@@ -593,3 +593,10 @@ The journal is read with `read_bytes` and with `open(..., "rb")`. Those bytes ar
 |---|---|
 | StageSourceDirFsyncTests.test_failed_source_parent_flush_matches_across_frontends | `zig/run.zig` test "a failed flush of the source parent after a cross-directory rename is reported", and this test against the release binary |
 | StageSourceDirFsyncTests.test_journals_are_the_same_bytes_under_the_test_clock | this test reads both journals with `read_bytes` and `open(..., "rb")` under `EB_STAGED_REBUILD_NOW` |
+
+## tests/test_dir_fsync_retry.py
+
+| test | replacement |
+|---|---|
+| DirFsyncRetryTests.test_resume_flushes_the_source_parent_again | `zig/run.zig` test "a retry flushes the source parent again after the rename", and this test against the release binary |
+| DirFsyncRetryTests.test_a_missing_created_link_is_flushed_again | `zig/run.zig` test "a retry flushes the parent of a created link that is already gone" |

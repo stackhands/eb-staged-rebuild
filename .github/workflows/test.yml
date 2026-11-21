@@ -205,7 +205,7 @@ jobs:
       - name: the -Dtest-ops test artifact
         run: zig build -Dtest-ops
       - name: filesystem faults against the release binary
-        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_prefix_punch_eio tests.test_sealed_dir_chmod tests.test_prefix_dir_fsync tests.test_retire_dir_fsync tests.test_gc_dir_fsync tests.test_stage_source_dir_fsync tests.test_now_clock
+        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_prefix_punch_eio tests.test_sealed_dir_chmod tests.test_prefix_dir_fsync tests.test_retire_dir_fsync tests.test_gc_dir_fsync tests.test_stage_source_dir_fsync tests.test_now_clock tests.test_dir_fsync_retry
       - name: build.zig.zon's version and -Dcommit reach --version
         run: bash tests/build_version.sh
       - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
