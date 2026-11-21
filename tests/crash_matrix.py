@@ -503,13 +503,19 @@ def to_expected(fixture):
     return trees_after, states
 
 
-def published_over(impl, fixture, root, fallback):
-    """Publish r1, r2 and r3, each with its own module file; r1's module files."""
+def published_over(impl, fixture, root, fallback, relinked=False):
+    """Publish r1, r2 and r3, each with its own module file; r1's module files.
+
+    With relinked, r1's class links are removed before r2, which makes them.
+    """
     fixture.build(root)
     for run_id in OVER:
         assert finish(impl, fixture, fixture.run_args(root, run_id), root, FAKE_EB_MODULE_NOTE=run_id) == 0
         if run_id == "r1":
             modules = module_texts(fixture, root)
+            if relinked:
+                for rel in fixture.rels:
+                    os.unlink(os.path.join(root, "modules", "tools", f"{rel}.lua"))
     if fallback:
         without_exchange(root, OVER[-1])
     return modules

@@ -12,9 +12,9 @@ implementation then takes its own error path. A failed run must leave
 every live tree and module file as it was, or have published all of
 them; a resume must then publish. A failed rollback must leave the run
 published or rolled back; a second rollback must roll it back. A failed
-rollback --to r1 over r2 and r3 must be finished by running it again. Both
-implementations must leave the same trees, module files and journal
-states.
+rollback --to r1 over r2 and r3 must be finished by running it again, as
+must one that cannot unlink the class link r2 made. Both implementations
+must leave the same trees, module files and journal states.
 
     TOOL_BIN_TEST_OPS=zig-out/bin/eb-staged-rebuild-test-ops python3 tests/fail_matrix.py
 """
@@ -66,11 +66,17 @@ def failed_rollback(fixture, step):
     return body
 
 
-def failed_rollback_to(fixture, fallback, step):
+def failed_rollback_to(fixture, fallback, step, locked=None):
     def body(impl, root):
-        modules = cm.published_over(impl, fixture, root, fallback)
+        modules = cm.published_over(impl, fixture, root, fallback, relinked=locked is not None)
         args = ["rollback", "--state-root", f"{root}/state", "--to", "r1"]
-        rc = call(impl, fixture, root, args, fail_at=step)
+        if locked:
+            os.chmod(os.path.join(root, "modules", locked), 0o555)
+        try:
+            rc = call(impl, fixture, root, args, fail_at=step)
+        finally:
+            if locked:
+                os.chmod(os.path.join(root, "modules", locked), 0o755)
         after = cm.to_outcome(fixture, root)
         again = call(impl, fixture, root, args)
         return {"failed_rc": rc, "after": after, "again_rc": again, "published_modules": modules, "final": cm.to_outcome(fixture, root)}
@@ -157,6 +163,9 @@ def main():
             results = cm.each_impl("fail-to", failed_rollback_to(fixture, fallback, step))
             failures += check_to(f"{label}: rollback --to fails at {step}", fixture, results)
             total += 1
+    results = cm.each_impl("fail-to-unlink", failed_rollback_to(cm.ONE, False, None, locked="tools/demo"))
+    failures += check_to("one module: rollback --to cannot unlink tools/demo/1.lua", cm.ONE, results)
+    total += 1
     print(f"{total - failures} of {total} cases match")
     return 1 if failures else 0
 
