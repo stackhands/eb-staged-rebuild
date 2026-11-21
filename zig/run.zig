@@ -1704,15 +1704,9 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
 /// later resume checks it the same way. With `force` as well, a stage that
 /// fails is published anyway, and the journal records that it was forced.
 pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64, verify: bool, force: bool) E!Result {
-    if (!admin.plainRunId(run_id)) main_mod.refuse("run id is not a plain name: '{s}'", .{run_id});
-    const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
-    const st = fsx.statAt(fsx.cwd, path, false) catch {
-        main_mod.refuse("no journal at {s}", .{path});
-    };
-    if (!st.isReg()) main_mod.refuse("no journal at {s}", .{path});
-    var j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        main_mod.refuse("journal run id does not match its directory", .{});
+    const loaded = admin.loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    var j = loaded.journal;
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
     var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, j, lock_timeout), .path = path };
     r.spec.force = force;
@@ -1720,9 +1714,7 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
     engine.checkRoots(a, r.spec);
     const l = try lockRoot(&r);
     defer l.release();
-    j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        return r.intervene("journal run id does not match its directory", .{});
+    j = admin.loadRunJournal(a, state_root, run_id).journal;
     r.journal = j;
     const state_name = r.str("state");
     const gated = pyfmt.truthy(r.get("verify_before_swap"));

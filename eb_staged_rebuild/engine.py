@@ -42,6 +42,7 @@ from eb_staged_rebuild.journal import (
     generation_root as generation_root_for,
     journal_path,
     load_journal,
+    load_run_journal,
     require_matching_run_id,
     require_plain_run_id,
     run_dir as run_dir_for,
@@ -1491,10 +1492,7 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
     With ``force`` as well, a stage that fails is published anyway, and the
     journal records that it was forced.
     """
-    require_plain_run_id(run_id)
-    path = journal_path(state_root, run_id)
-    journal = load_journal(path)
-    require_matching_run_id(journal, run_id)
+    path, journal = load_run_journal(state_root, run_id)
     if journal.get("kind") == "retire":
         raise Refused(f"run {run_id} is a retire record; rollback restores the module file")
     faults = faults or FaultInjector()
@@ -1504,8 +1502,7 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
     lock = FileLock(spec.state_root)
     lock.acquire(lock_timeout)
     try:
-        journal = load_journal(path)
-        require_matching_run_id(journal, run_id)
+        _path, journal = load_run_journal(state_root, run_id)
         state = journal["state"]
         if force and not (verify or journal.get("verify_before_swap")):
             raise Refused(f"--force needs --verify; run {run_id} does not check its stage before the swap")
@@ -1546,11 +1543,11 @@ def resume(state_root, run_id, builder=None, faults=None, clock=None, lock_timeo
 
 def verify(state_root, run_id, clock=None, lock_timeout=None):
     """Check a built run's stage and record the result. Nothing is published."""
-    path = journal_path(state_root, run_id)
+    require_plain_run_id(run_id)
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
-        journal = load_journal(path)
+        path, journal = load_run_journal(state_root, run_id)
         if journal.get("kind") == "retire":
             raise Refused(f"run {run_id} is a retire record; it has no stage to verify")
         if journal["state"] != "built":

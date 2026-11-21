@@ -11,6 +11,7 @@ the program it names.
 
 import json
 import os
+import shutil
 import unittest
 
 from tests.support import FAKE_LMOD, Site, sites, write
@@ -70,6 +71,56 @@ class RunJournalCliTests(unittest.TestCase):
         journal = site.journal()
         change(journal)
         write(site.journal_path(), json.dumps(journal, indent=2, sort_keys=True) + "\n")
+
+    def test_a_run_id_that_is_not_a_plain_name(self):
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                for run_id in ("../state/runs/r1", ".", ".."):
+                    self.assert_refused(site, f"run id is not a plain name: '{run_id}'", run_id)
+
+    def test_a_journal_that_names_another_run(self):
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                shutil.copytree(os.path.join(site.state, "runs", "r1"), os.path.join(site.state, "runs", "r2"))
+                self.assert_refused(site, "journal run id does not match its directory", "r2")
+                self.edit(site, lambda journal: journal.pop("run_id"))
+                self.assert_refused(site, "journal run id does not match its directory")
+                self.edit(site, lambda journal: journal.update(run_id="../r1"))
+                self.assert_refused(site, "journal run id does not match its directory")
+
+    def test_a_journal_without_a_field_the_commands_read(self):
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                original = site.journal()
+                for field in ("state_root", "software", "modules", "generation_root", "state", "backend"):
+                    for value in (None, "", 7):
+                        with self.subTest(field=field, value=value):
+                            self.edit(site, lambda journal: journal.update({field: value}))
+                            self.assert_refused(site, f"journal does not record {field}")
+                    self.edit(site, lambda journal: journal.pop(field))
+                    self.assert_refused(site, f"journal does not record {field}")
+                    self.edit(site, lambda journal: journal.update(original))
+                self.edit(site, lambda journal: journal.pop("modules_plan"))
+                self.assert_refused(site, "journal does not record modules_plan")
+                self.edit(site, lambda journal: journal.update(modules_plan={}))
+                self.assert_refused(site, "journal does not record modules_plan")
+
+    def test_a_module_plan_entry_without_a_field_the_commands_read(self):
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                original = site.journal()
+                for field in ("rel", "live_module", "prepared", "staged", "live_software", "retired"):
+                    for value in (None, "", ["x"]):
+                        with self.subTest(field=field, value=value):
+                            self.edit(site, lambda journal: journal["modules_plan"][0].update({field: value}))
+                            self.assert_refused(site, f"journal module plan does not record {field}")
+                    self.edit(site, lambda journal: journal.update(original))
+                for field in ("rel", "live_module", "prepared", "staged"):
+                    with self.subTest(field=field, value="absent"):
+                        self.edit(site, lambda journal: journal["modules_plan"][0].pop(field))
+                        self.assert_refused(site, f"journal module plan does not record {field}")
+                        self.edit(site, lambda journal: journal.update(original))
+
 
     def test_with_lmod_a_journal_without_its_staged_module_tree(self):
         verifying = (["verify"], ["resume", "--verify"])
