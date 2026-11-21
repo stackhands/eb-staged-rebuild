@@ -289,8 +289,9 @@ fn restoreAccess(a: Allocator, fd: fsx.fd_t, meta: atomic.Metadata, why: *[]cons
 
 fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: *[]const u8) Error!void {
     if (names.len == 1) {
+        const parent = std.fs.path.dirname(names[0]) orelse "/";
         sys.renameat(fsx.cwd, ready, fsx.cwd, names[0]) catch |err| return fail(a, why, err, names[0]);
-        atomic.fsyncDir(std.fs.path.dirname(names[0]) orelse "/") catch {};
+        atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
         return;
     }
     for (names) |name| {
@@ -310,10 +311,11 @@ fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: 
             sys.unlinkat(fsx.cwd, temporary, 0) catch {};
             return fail(a, why, err, name);
         };
-        atomic.fsyncDir(parent) catch {};
+        atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
     }
+    const ready_parent = std.fs.path.dirname(ready) orelse "/";
     sys.unlinkat(fsx.cwd, ready, 0) catch |err| return fail(a, why, err, ready);
-    atomic.fsyncDir(std.fs.path.dirname(ready) orelse "/") catch {};
+    atomic.fsyncDir(ready_parent) catch |err| return fail(a, why, err, ready_parent);
 }
 
 fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]const u8) Error!void {
@@ -345,6 +347,12 @@ fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]c
     sys.close(fd);
     failed = false;
     sys.renameat(fsx.cwd, partial, fsx.cwd, ready) catch |err| return fail(a, why, err, ready);
+    // The directory entry for the finished file has to be durable before
+    // the published name starts pointing at it. Python flushes here.
+    atomic.fsyncDir(parent) catch |err| {
+        sys.unlinkat(fsx.cwd, ready, 0) catch {};
+        return fail(a, why, err, parent);
+    };
     try commitNames(a, names, ready, why);
 }
 
@@ -368,7 +376,7 @@ fn rewriteSymlink(a: Allocator, path: []const u8, old: []const u8, new: []const 
         sys.unlinkat(fsx.cwd, temporary, 0) catch {};
         return fail(a, why, err, path);
     };
-    atomic.fsyncDir(parent) catch {};
+    atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
 }
 
 const private_suffixes = [_][]const u8{
