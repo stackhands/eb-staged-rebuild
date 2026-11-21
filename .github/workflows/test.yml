@@ -232,3 +232,10 @@ jobs:
         uses: ./.github/actions/pinned-promtool
       - name: metrics output and atomic failures against both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli
+      - name: a user attribute the filesystem will not copy
+        # Ubuntu's AppArmor refuses user namespaces to unconfined programs.
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity
