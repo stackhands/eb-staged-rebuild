@@ -49,6 +49,17 @@ def _hours(text):
     return value
 
 
+def _lock_timeout(text):
+    """A finite lock timeout. nan and infinity are rejected."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid float value: {text!r}") from None
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError("--lock-timeout is not a finite number")
+    return value
+
+
 def _bytes(text):
     try:
         value = int(text)
@@ -175,7 +186,7 @@ def _parser():
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
     _add_state_root(resume_p)
-    resume_p.add_argument("--lock-timeout", type=float, default=None)
+    resume_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     resume_p.add_argument("run_id")
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")

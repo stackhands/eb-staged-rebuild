@@ -665,6 +665,21 @@ fn floatArg(a: Allocator, usage: []const u8, who: []const u8, name: []const u8, 
     return std.fmt.parseFloat(f64, t) catch usageError(usage, who, "argument --{s}: invalid float value: {s}", .{ name, repr(a, v) });
 }
 
+/// The shared lock-timeout check: a finite float, or the reason it is not.
+fn parseLockTimeout(v: []const u8) error{ InvalidFloat, NotFinite }!f64 {
+    const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
+    const value = std.fmt.parseFloat(f64, t) catch return error.InvalidFloat;
+    if (!std.math.isFinite(value)) return error.NotFinite;
+    return value;
+}
+
+fn lockTimeoutArg(a: Allocator, usage: []const u8, who: []const u8, v: []const u8) f64 {
+    return parseLockTimeout(v) catch |err| switch (err) {
+        error.InvalidFloat => usageError(usage, who, "argument --lock-timeout: invalid float value: {s}", .{repr(a, v)}),
+        error.NotFinite => usageError(usage, who, "argument --lock-timeout: --lock-timeout is not a finite number", .{}),
+    };
+}
+
 fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
     const t = std.mem.trim(u8, v, " \t\n\r\x0b\x0c");
     if (t.len > 0 and t[0] == '-') {
@@ -1015,7 +1030,7 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
     const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
@@ -1187,6 +1202,17 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
 test "run help includes --build-dir" {
     try std.testing.expect(std.mem.indexOf(u8, run_usage, "[--build-dir DIR]") != null);
     try std.testing.expect(std.mem.indexOf(u8, run_help, "--build-dir DIR") != null);
+}
+
+test "a lock timeout is a finite float" {
+    try std.testing.expectEqual(@as(f64, 0), try parseLockTimeout("0"));
+    try std.testing.expectEqual(@as(f64, 1.5), try parseLockTimeout(" 1.5 "));
+    try std.testing.expectEqual(@as(f64, -1), try parseLockTimeout("-1"));
+    try std.testing.expectError(error.NotFinite, parseLockTimeout("nan"));
+    try std.testing.expectError(error.NotFinite, parseLockTimeout("inf"));
+    try std.testing.expectError(error.NotFinite, parseLockTimeout("-inf"));
+    try std.testing.expectError(error.InvalidFloat, parseLockTimeout("nope"));
+    try std.testing.expectEqual(@as(f64, 2), lockTimeoutArg(std.testing.allocator, "usage", "eb-staged-rebuild", "2"));
 }
 
 test "parseBytes trims whitespace and accepts every u128 value" {
