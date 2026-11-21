@@ -160,10 +160,18 @@ fn isKind(p: []const u8, k: []const u8) bool {
     return std.mem.eql(u8, kind(p), k);
 }
 
-fn readBytes(r: *R, p: []const u8) E![]const u8 {
-    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, p)});
+const ReadFail = enum { refuse, os_fail };
+
+fn readBytes(r: *R, p: []const u8, fail: ReadFail) E![]const u8 {
+    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| switch (fail) {
+        .refuse => return r.refuse("{s}", .{main_mod.osError(r.a, err, p)}),
+        .os_fail => return r.osFail("{s}", .{main_mod.osError(r.a, err, p)}),
+    };
     defer sys.close(f.fd);
-    return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| r.refuse("{s}", .{main_mod.osError(r.a, err, p)});
+    return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| switch (fail) {
+        .refuse => r.refuse("{s}", .{main_mod.osError(r.a, err, p)}),
+        .os_fail => r.osFail("{s}", .{main_mod.osError(r.a, err, p)}),
+    };
 }
 
 fn sha(a: Allocator, data: []const u8) []const u8 {
@@ -728,7 +736,7 @@ fn stageRoots(r: *R, gen: []const u8) E!struct { software: []const u8, modules: 
         return .{ .software = try std.fs.path.join(a, &.{ gen, "software" }), .modules = try std.fs.path.join(a, &.{ gen, "modules" }), .how = "installpath" };
     const info_path = try std.fs.path.join(a, &.{ gen, "bwrap_info.json" });
     if (!isKind(info_path, "file")) return r.refuse("bwrap backend finished without {s}; nothing was published", .{info_path});
-    const raw = try readBytes(r, info_path);
+    const raw = try readBytes(r, info_path, .refuse);
     const parsed = json.parse(a, raw) catch return r.refuse("cannot read {s}: not valid JSON", .{info_path});
     const info = json.toPy(a, parsed) catch return r.refuse("cannot read {s}: not valid JSON", .{info_path});
     if (info != .dict) return r.refuse("bwrap_info.json is not an object", .{});
@@ -839,7 +847,7 @@ fn plan(r: *R) E!void {
         var old_hash: Py = .null;
         var previous_root: Py = .null;
         if (existed) {
-            const old = try readBytes(r, d.live_module);
+            const old = try readBytes(r, d.live_module, .os_fail);
             old_hash = Py.s(sha(a, old));
             if (!std.unicode.utf8ValidateSlice(old)) return r.refuse("{s} is not UTF-8 text", .{d.live_module});
             if (modulefile.parseRoot(old)) |pr| if (pr.path.len > 0) {
@@ -954,7 +962,7 @@ fn sameAccess(a: Allocator, left: []const u8, right: []const u8) bool {
 }
 
 fn fileHash(r: *R, p: []const u8) E![]const u8 {
-    return sha(r.a, try readBytes(r, p));
+    return sha(r.a, try readBytes(r, p, .refuse));
 }
 
 fn prepareBackup(r: *R, m: Py) E!void {
@@ -965,7 +973,7 @@ fn prepareBackup(r: *R, m: Py) E!void {
     if (std.mem.eql(u8, k, "symlink")) return r.refuse("refusing to replace module symlink {s}", .{live});
     if (pyfmt.truthy(pyfmt.get(m, "existed"))) {
         if (!std.mem.eql(u8, k, "file")) return r.intervene("{s} disappeared before publish", .{live});
-        const current = try readBytes(r, live);
+        const current = try readBytes(r, live, .refuse);
         const current_hash = sha(a, current);
         const backup = s(pyfmt.get(m, "backup"));
         if (std.mem.eql(u8, current_hash, s(pyfmt.get(m, "new_hash"))) and isKind(backup, "file")) {
@@ -1044,7 +1052,7 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
 fn writeNewModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     const a = r.a;
     const rel = s(pyfmt.get(m, "rel"));
-    const prepared = try readBytes(r, s(pyfmt.get(m, "prepared")));
+    const prepared = try readBytes(r, s(pyfmt.get(m, "prepared")), .refuse);
     if (!std.mem.eql(u8, sha(a, prepared), s(pyfmt.get(m, "new_hash")))) return r.intervene("prepared module bytes for {s} changed", .{rel});
     const live = s(pyfmt.get(m, "live_module"));
     const k = kind(live);
@@ -1068,7 +1076,7 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     if (pyfmt.truthy(pyfmt.get(m, "existed"))) {
         const backup = s(pyfmt.get(m, "backup"));
         if (!isKind(backup, "file")) return r.intervene("no backup to restore for {s}", .{rel});
-        const previous = try readBytes(r, backup);
+        const previous = try readBytes(r, backup, .refuse);
         if (!std.mem.eql(u8, sha(a, previous), s(pyfmt.get(m, "old_hash")))) return r.intervene("backup for {s} changed", .{rel});
         if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "old_hash")))) {
             // The backup carries the previous access policy; the same bytes
