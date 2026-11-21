@@ -23,7 +23,7 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from tests.support import classic_install  # noqa: E402
+from tests.support import classic_install, normalize_userns_helper  # noqa: E402
 
 TOOL = os.environ["TOOL_BIN"]
 POSIX = "system.posix_acl_access"
@@ -49,8 +49,7 @@ def norm(text, root):
     text = re.sub(r"[0-9]{8}T[0-9]{6}Z(-[0-9]+)?", "STAMP", text)
     text = re.sub(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", "ISO", text)
     text = re.sub(r"[0-9]{10}\.[0-9]+", "TIME", text)
-    text = re.sub(r"[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox", "SANDBOX", text)
-    return text.replace(f"{TOOL} __userns-sandbox", "SANDBOX")
+    return normalize_userns_helper(text, TOOL)
 
 
 def fixture(root, existing):
