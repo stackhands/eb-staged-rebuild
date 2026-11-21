@@ -13,12 +13,17 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 import unittest
 from types import SimpleNamespace
 
-from tests.support import run_cli, run_cli_optional_binary
+from eb_staged_rebuild.atomicio import read_bytes
+from tests.support import _run, run_cli, run_cli_optional_binary
 from tests.test_prefix_dir_fsync import _compile, _fuse_ready, _skip
+
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_NOW = "1700000000.25"
 
 
 def _wait_mount(mnt: str, mounted: subprocess.Popen[bytes]) -> None:
@@ -54,7 +59,27 @@ class StageSourceDirFsyncTests(unittest.TestCase):
         self.assertEqual(python.stdout, binary.stdout)
         self.assertEqual(python.stderr, binary.stderr)
 
-    def _run(self, which: str, work: str) -> SimpleNamespace:
+    def test_journals_are_the_same_bytes_under_the_test_clock(self) -> None:
+        if os.geteuid() == 0:
+            _skip(self, "the filesystem is mounted by an unprivileged user")
+        reason = _fuse_ready()
+        if reason:
+            _skip(self, reason)
+        if not os.environ.get("TOOL_BIN_TEST_OPS"):
+            _skip(self, "TOOL_BIN_TEST_OPS is unset")
+        work = f"/tmp/stage-source-fsync-bytes-{os.getpid()}"
+        python = self._run("python", work, clock=True)
+        binary = self._run("binary", work, clock=True)
+        self.assertEqual(python.returncode, 2, python.stdout + python.stderr)
+        self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+        self.assertEqual(python.stdout, binary.stdout)
+        self.assertEqual(python.stderr, binary.stderr)
+        self.assertIsInstance(python.journal, bytes)
+        self.assertEqual(python.journal, binary.journal)
+        self.assertIn(b'"created_at": 1700000000.25', python.journal)
+        self.assertIn(b'"updated_at": 1700000000.25', python.journal)
+
+    def _run(self, which: str, work: str, clock: bool = False) -> SimpleNamespace:
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -99,6 +124,7 @@ class StageSourceDirFsyncTests(unittest.TestCase):
             env=env,
         )
         done: subprocess.CompletedProcess[str] | None = None
+        journal = b""
         try:
             _wait_mount(mnt, mounted)
             with open(os.path.join(mnt, "modules", "all", "demo", "1.lua"), "w", encoding="utf-8") as handle:
@@ -122,12 +148,27 @@ class StageSourceDirFsyncTests(unittest.TestCase):
                 "--",
                 "demo-1.eb",
             )
-            if which == "python":
+            if clock:
+                cli_env = {"EB_STAGED_REBUILD_NOW": _NOW}
+                if which == "python":
+                    done = _run([sys.executable, os.path.join(_REPO, "tests", "now_cli.py"), *args], cli_env)
+                else:
+                    tool = os.environ.get("TOOL_BIN_TEST_OPS")
+                    if not tool:
+                        self.fail("TOOL_BIN_TEST_OPS is unset")
+                    done = _run([tool, *args], cli_env)
+            elif which == "python":
                 done = run_cli(*args)
             else:
                 done = run_cli_optional_binary(*args)
                 if done is None:
                     self.fail("TOOL_BIN is unset")
+            journal_path = os.path.join(mnt, "runs", "r1", "journal.json")
+            if os.path.isfile(journal_path):
+                journal = read_bytes(journal_path)
+                with open(journal_path, "rb") as handle:
+                    if handle.read() != journal:
+                        self.fail("read_bytes and an rb read disagree")
         finally:
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
             if mounted.stderr is not None and not mounted.stderr.closed:
@@ -147,4 +188,5 @@ class StageSourceDirFsyncTests(unittest.TestCase):
             stdout=done.stdout,
             stderr=done.stderr,
             payload=payload,
+            journal=journal,
         )

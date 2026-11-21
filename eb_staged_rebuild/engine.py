@@ -113,8 +113,17 @@ class Result:
     command: str = ""
 
 
+def current_time():
+    """Seconds since the epoch.
+
+    The installed tool uses the wall clock. ``tests/now_cli.py`` replaces
+    this for the test clock. ``gc`` does not call it.
+    """
+    return time.time()
+
+
 def _clock(spec):
-    return spec.clock if spec.clock is not None else time.time
+    return spec.clock if spec.clock is not None else current_time
 
 
 def _faults(spec):
@@ -1539,7 +1548,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     faults = faults or FaultInjector()
-    now = time.time if clock is None else clock
+    now = current_time if clock is None else clock
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:

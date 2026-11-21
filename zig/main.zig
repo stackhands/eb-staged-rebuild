@@ -1094,6 +1094,10 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const all = init.args.toSlice(a) catch return 2;
     const args: []const []const u8 = if (all.len > 1) @ptrCast(all[1..]) else &.{};
     const env: probe.Env = .{ .envp = init.environ.block.slice.ptr };
+    // Only a replaceable build reads the test clock. The release binary
+    // does not import that file, so a leaked value cannot move a run id
+    // or a journal timestamp.
+    if (comptime common.atomic.replaceable) @import("testnow.zig").bind(a, env);
     // Only the -Dtest-ops test artifact can emulate a file system's ACLs.
     if (comptime common.atomic.replaceable) @import("aclmodel.zig").installFromEnv(env);
 

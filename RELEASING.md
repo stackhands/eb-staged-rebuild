@@ -6,7 +6,7 @@ tag's commit and tests each on its own architecture: the Zig unit tests,
 the differential, the crash and fail matrices and the signal tests.
 
 It refuses a release binary that contains a test hook
-(`EB_STAGED_REBUILD_ACL_MODEL`, `EB_STAGED_REBUILD_FAIL_AT`), a build that
+(`EB_STAGED_REBUILD_ACL_MODEL`, `EB_STAGED_REBUILD_FAIL_AT`, `EB_STAGED_REBUILD_NOW`), a build that
 accepts `-Dtest-ops` with `-Drelease`, a binary whose `--version` names
 another version or commit, and a tag that disagrees with the Python
 `__version__`. It then opens a draft

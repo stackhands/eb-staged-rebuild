@@ -146,6 +146,9 @@ fn s(v: ?Py) []const u8 {
 }
 
 fn now() f64 {
+    // The release binary does not compile the test clock. A replaceable
+    // build (zig build test, the -Dtest-ops artifact) may replace it.
+    if (comptime common.atomic.replaceable) return @import("testnow.zig").now();
     return admin.nowSeconds();
 }
 

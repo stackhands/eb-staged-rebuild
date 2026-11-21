@@ -13,6 +13,7 @@ import subprocess
 import unittest
 from types import SimpleNamespace
 
+from eb_staged_rebuild.atomicio import read_bytes
 from tests.support import run_cli, run_cli_optional_binary
 from tests.test_prefix_dir_fsync import _compile, _fuse_ready, _skip
 
@@ -67,7 +68,8 @@ class GenerationDirFsyncTests(unittest.TestCase):
             python.stderr,
             f"eb-staged-rebuild: [Errno 5] Input/output error: '{generations}'\n",
         )
-        self.assertNotIn("generation_removed_at", python.journal)
+        self.assertIsInstance(python.journal, bytes)
+        self.assertNotIn(b"generation_removed_at", python.journal)
 
     def _run(self, which: str, work: str | None = None) -> SimpleNamespace:
         if work is None:
@@ -98,7 +100,7 @@ class GenerationDirFsyncTests(unittest.TestCase):
             env=env,
         )
         done: subprocess.CompletedProcess[str] | None = None
-        journal_text = ""
+        journal_bytes = b""
         try:
             _wait_mount(mnt, mounted)
             live = os.path.join(mnt, "software", "demo", "1")
@@ -130,8 +132,11 @@ class GenerationDirFsyncTests(unittest.TestCase):
                 done = run_cli_optional_binary(*args)
                 if done is None:
                     self.fail("TOOL_BIN is unset")
-            with open(os.path.join(mnt, "runs", "r1", "journal.json"), encoding="utf-8") as handle:
-                journal_text = handle.read()
+            journal_path = os.path.join(mnt, "runs", "r1", "journal.json")
+            journal_bytes = read_bytes(journal_path)
+            with open(journal_path, "rb") as handle:
+                if handle.read() != journal_bytes:
+                    self.fail("read_bytes and an rb read disagree")
         finally:
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
             if mounted.stderr is not None and not mounted.stderr.closed:
@@ -148,5 +153,5 @@ class GenerationDirFsyncTests(unittest.TestCase):
             returncode=done.returncode,
             stdout=done.stdout,
             stderr=done.stderr,
-            journal=journal_text,
+            journal=journal_bytes,
         )

@@ -38,6 +38,7 @@ jobs:
           zig build -Drelease=true -Dcommit="${GITHUB_SHA::7}" -Dtarget=${{ matrix.arch }}-linux-musl --prefix out
           ! grep -aq EB_STAGED_REBUILD_ACL_MODEL out/bin/eb-staged-rebuild
           ! grep -aq EB_STAGED_REBUILD_FAIL_AT out/bin/eb-staged-rebuild
+          ! grep -aq EB_STAGED_REBUILD_NOW out/bin/eb-staged-rebuild
           ! zig build -Dtest-ops -Drelease=true
           zon=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' build.zig.zon)
           if [ "${zon}" != "${GITHUB_REF_NAME#v}" ]; then
