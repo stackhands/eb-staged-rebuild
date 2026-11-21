@@ -143,7 +143,12 @@ fn recordedField(journal: Py, field: []const u8) []const u8 {
     return value;
 }
 
-/// os.path.abspath(os.path.normpath(p)).
+/// os.path.abspath(os.path.normpath(p)): `p` made absolute against the
+/// working directory, with empty and `.` segments dropped and each `..`
+/// removing the segment before it, without following symbolic links. As
+/// POSIX leaves a path that begins with exactly two slashes to the system,
+/// `//` is kept and names another path than `/`; three or more leading
+/// slashes are one.
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
     return fsx.absPath(a, p) catch oom();
 }
@@ -1131,6 +1136,18 @@ pub fn gc(
         for (actions.items) |act| cli.out("{s}: {s} ({s})\n", .{ act.action, act.path, act.reason });
     }
     return 0;
+}
+
+test "abspath keeps exactly two leading slashes, as os.path.normpath does" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const cases = [_][2][]const u8{
+        .{ "/", "/" },              .{ "//", "//" },         .{ "///", "/" },
+        .{ "////a", "/a" },         .{ "//a//b/", "//a/b" }, .{ "///a", "/a" },
+        .{ "/a/./b/../c", "/a/c" }, .{ "//..", "//" },       .{ "/..", "/" },
+        .{ "//a/../..", "//" },
+    };
+    for (cases) |case| try std.testing.expectEqualStrings(case[1], abspath(arena.allocator(), case[0]));
 }
 
 test "runGrace uses the hours a run recorded, when they are a number at least 0" {

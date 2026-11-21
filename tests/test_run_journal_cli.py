@@ -56,12 +56,14 @@ class RunJournalCliTests(unittest.TestCase):
             write(prepare, "#!/bin/sh\nexit 0\n", 0o755)
         return made
 
-    def assert_refused(self, site, message, run_id="r1", commands=(["verify"], ["resume", "--verify"], ["resume"]), **env):
-        """Each of COMMANDS on RUN_ID exits 2 with MESSAGE and writes nothing."""
+    def assert_refused(
+        self, site, message, run_id="r1", commands=(["verify"], ["resume", "--verify"], ["resume"]), state_root=None, **env
+    ):
+        """Each of COMMANDS on RUN_ID, given STATE_ROOT, exits 2 with MESSAGE and writes nothing."""
         for command in commands:
             with self.subTest(command=command[0], verify=command[1:]):
                 before = snapshot(site.root)
-                done = site.cli(*command, "--state-root", site.state, run_id, **env)
+                done = site.cli(*command, "--state-root", state_root or site.state, run_id, **env)
                 self.assertEqual(
                     (done.returncode, done.stdout, done.stderr), (2, "", f"eb-staged-rebuild: {message}\n")
                 )
@@ -97,6 +99,21 @@ class RunJournalCliTests(unittest.TestCase):
                     with self.subTest(recorded=recorded):
                         self.edit(site, lambda journal: journal.update(state_root=recorded))
                         self.assert_refused(site, f"journal state root {recorded} is not {site.state}")
+
+    def test_a_state_root_that_begins_with_two_slashes(self):
+        """POSIX leaves a leading ``//`` to the system, so it is another state root, either way round."""
+        for site in self.built():
+            with self.subTest(tool=site.name):
+                doubled = "/" + site.state
+                self.edit(site, lambda journal: journal.update(state_root=doubled))
+                self.assert_refused(site, f"journal state root {doubled} is not {site.state}")
+                self.edit(site, lambda journal: journal.update(state_root=site.state))
+                self.assert_refused(site, f"journal state root {site.state} is not {doubled}", state_root=doubled)
+                link = os.path.join(site.root, "link")
+                os.symlink(site.state, link)
+                self.assert_refused(
+                    site, f"state root is unsafe: /{link} is a symlink", commands=(["verify"],), state_root="/" + link
+                )
 
     def test_a_journal_without_a_field_the_commands_read(self):
         for site in self.built():
