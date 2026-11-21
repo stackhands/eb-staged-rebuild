@@ -391,8 +391,8 @@ fn rename(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8
         error.CrossDevice => refuse("{s} and {s} are on different filesystems", .{ source, destination }),
         else => refuse("{s}", .{main_mod.osError(c.a, err, source)}),
     };
-    atomic.fsyncDir(dirname(destination)) catch {};
-    atomic.fsyncDir(dirname(source)) catch {};
+    atomic.fsyncDir(dirname(destination)) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(destination))});
+    atomic.fsyncDir(dirname(source)) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(source))});
 }
 
 /// retire: move a module file aside under a retire journal, and leave its
