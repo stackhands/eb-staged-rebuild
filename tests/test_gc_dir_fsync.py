@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import unittest
+from types import SimpleNamespace
 
 from tests.support import run_cli, run_cli_optional_binary
 from tests.test_prefix_dir_fsync import _compile, _fuse_ready, _skip
@@ -43,8 +44,34 @@ class GenerationDirFsyncTests(unittest.TestCase):
             self.assertEqual(done.returncode, 2, detail)
             self.assertIn("Input/output error", detail)
 
-    def _run(self, which: str) -> subprocess.CompletedProcess[str]:
-        work = f"/tmp/gc-dir-fsync-{os.getpid()}-{which}"
+    def test_generation_flush_error_matches_across_frontends(self) -> None:
+        """stdout, stderr, status and the journal are the same from either frontend."""
+        if os.geteuid() == 0:
+            _skip(self, "the filesystem is mounted by an unprivileged user")
+        reason = _fuse_ready()
+        if reason:
+            _skip(self, reason)
+        if not os.environ.get("TOOL_BIN"):
+            _skip(self, "TOOL_BIN is unset")
+        work = f"/tmp/gc-dir-fsync-parity-{os.getpid()}"
+        python = self._run("python", work)
+        binary = self._run("binary", work)
+        self.assertEqual(python.returncode, binary.returncode)
+        self.assertEqual(python.stdout, binary.stdout)
+        self.assertEqual(python.stderr, binary.stderr)
+        self.assertEqual(python.journal, binary.journal)
+        generations = os.path.join(work, "mnt", "generations")
+        self.assertEqual(python.returncode, 2)
+        self.assertEqual(python.stdout, "")
+        self.assertEqual(
+            python.stderr,
+            f"eb-staged-rebuild: [Errno 5] Input/output error: '{generations}'\n",
+        )
+        self.assertNotIn("generation_removed_at", python.journal)
+
+    def _run(self, which: str, work: str | None = None) -> SimpleNamespace:
+        if work is None:
+            work = f"/tmp/gc-dir-fsync-{os.getpid()}-{which}"
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -71,6 +98,7 @@ class GenerationDirFsyncTests(unittest.TestCase):
             env=env,
         )
         done: subprocess.CompletedProcess[str] | None = None
+        journal_text = ""
         try:
             _wait_mount(mnt, mounted)
             live = os.path.join(mnt, "software", "demo", "1")
@@ -102,6 +130,8 @@ class GenerationDirFsyncTests(unittest.TestCase):
                 done = run_cli_optional_binary(*args)
                 if done is None:
                     self.fail("TOOL_BIN is unset")
+            with open(os.path.join(mnt, "runs", "r1", "journal.json"), encoding="utf-8") as handle:
+                journal_text = handle.read()
         finally:
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
             if mounted.stderr is not None and not mounted.stderr.closed:
@@ -114,4 +144,9 @@ class GenerationDirFsyncTests(unittest.TestCase):
                 mounted.wait()
         if done is None:
             self.fail("gc did not run")
-        return done
+        return SimpleNamespace(
+            returncode=done.returncode,
+            stdout=done.stdout,
+            stderr=done.stderr,
+            journal=journal_text,
+        )
