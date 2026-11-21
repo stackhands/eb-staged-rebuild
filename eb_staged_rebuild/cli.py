@@ -8,7 +8,7 @@ import sys
 
 from eb_staged_rebuild import __version__
 from eb_staged_rebuild.constants import DEFAULT_GRACE_HOURS
-from eb_staged_rebuild.engine import Spec, describe_module, resume, rollback, run
+from eb_staged_rebuild.engine import Spec, describe_module, resume, rollback, run, verify
 from eb_staged_rebuild.errors import NeedsIntervention, Refused, StagedRebuildError
 from eb_staged_rebuild.gc import collect
 from eb_staged_rebuild.journal import list_journals
@@ -182,12 +182,27 @@ def _parser():
         action="store_true",
         help="refuse unless publication can use RENAME_EXCHANGE",
     )
+    run_p.add_argument(
+        "--verify", action="store_true", help="check the stage before the swap, and do not publish one that fails"
+    )
+    run_p.add_argument(
+        "--force", action="store_true", help="with --verify, publish a stage that fails; the journal records it"
+    )
     run_p.add_argument("eb_args", nargs=argparse.REMAINDER, help="easyconfig and eb options, after --")
 
     resume_p = sub.add_parser("resume", help="continue a run after a crash")
     _add_state_root(resume_p)
     resume_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
+    resume_p.add_argument("--verify", action="store_true", help="check the stage before the swap, as run --verify does")
+    resume_p.add_argument(
+        "--force", action="store_true", help="with --verify, publish a stage that fails; the journal records it"
+    )
     resume_p.add_argument("run_id")
+
+    verify_p = sub.add_parser("verify", help="check a built run's stage before it is published")
+    _add_state_root(verify_p)
+    verify_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
+    verify_p.add_argument("run_id", metavar="STAGE", help="the run id that names the stage")
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
     _add_state_root(back_p)
@@ -311,16 +326,24 @@ def _dispatch(args):
             build_dir=args.build_dir,
             min_free_bytes=_min_free_bytes(args.min_free_bytes),
             require_exchange=args.require_exchange,
+            verify=args.verify,
+            force=args.force,
         )
         if args.prepare is not None and not args.prepare:
             raise Refused("--prepare must name a program; it is empty")
         if args.build_dir is not None and not args.build_dir:
             raise Refused("--build-dir must name a directory; it is empty")
+        if args.force and not args.verify:
+            raise Refused("--force needs --verify; without it, nothing checks the stage before the swap")
         result = run(spec)
         return result.returncode
     if args.command == "resume":
-        result = resume(args.state_root, args.run_id, lock_timeout=args.lock_timeout)
+        result = resume(
+            args.state_root, args.run_id, lock_timeout=args.lock_timeout, verify=args.verify, force=args.force
+        )
         return result.returncode
+    if args.command == "verify":
+        return verify(args.state_root, args.run_id, lock_timeout=args.lock_timeout).returncode
     if args.command == "rollback":
         result = rollback(args.state_root, args.run_id, lock_timeout=args.lock_timeout)
         return result.returncode

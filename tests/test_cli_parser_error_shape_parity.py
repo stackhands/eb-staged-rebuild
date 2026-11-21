@@ -7,6 +7,8 @@ import unittest
 
 from tests.support import run_cli, run_cli_binary
 
+COMMANDS = "{probe,run,resume,verify,rollback,gc,retire,status,resolve}"
+
 
 class CliParserErrorShapeParityTests(unittest.TestCase):
     def test_parser_error_shapes_match_python(self) -> None:
@@ -19,6 +21,8 @@ class CliParserErrorShapeParityTests(unittest.TestCase):
             with open(module_file, "w", encoding="utf-8") as handle:
                 handle.write('local root = "/tmp/demo"\n')
             env = {"LANG": "en_US.UTF-8", "COLUMNS": "80"}
+            self.assertIn(COMMANDS, run_cli("probe", "--", "extra", env=env).stderr)
+            self.assertIn(COMMANDS, run_cli_binary("probe", "--", "extra", env=env).stderr)
             cases = (
                 ("--wat", "gc", "--state-root", state_root, "extra"),
                 ("--wat", "gc", "--state-root", state_root, "--bogus"),

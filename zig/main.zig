@@ -2,8 +2,8 @@
 //! exchange the complete tree with the stable live directory.
 //!
 //! The commands of the Python tool in one static binary: probe, run,
-//! resume, rollback, gc, retire, status and resolve. COMPAT.md lists where
-//! the two builds differ.
+//! resume, verify, rollback, gc, retire, status and resolve. COMPAT.md lists
+//! where the two builds differ.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -26,11 +26,11 @@ const Py = json.Py;
 pub const version = build_options.version;
 const prog = "eb-staged-rebuild";
 
-const commands = [_][]const u8{ "probe", "run", "resume", "rollback", "gc", "retire", "status", "resolve" };
+const commands = [_][]const u8{ "probe", "run", "resume", "verify", "rollback", "gc", "retire", "status", "resolve" };
 
 const top_usage =
     \\usage: eb-staged-rebuild [-h] [--version]
-    \\                         {probe,run,resume,rollback,gc,retire,status,resolve} ...
+    \\                         {probe,run,resume,verify,rollback,gc,retire,status,resolve} ...
     \\
 ;
 
@@ -40,11 +40,12 @@ const top_help = top_usage ++
     \\with the stable live directory.
     \\
     \\positional arguments:
-    \\  {probe,run,resume,rollback,gc,retire,status,resolve}
+    \\  {probe,run,resume,verify,rollback,gc,retire,status,resolve}
     \\    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
     \\                        EasyBuild
     \\    run                 build and atomically swap a staged tree
     \\    resume              continue a run after a crash
+    \\    verify              check a built run's stage before it is published
     \\    rollback            restore the previous module files, or put a retired
     \\                        module file back
     \\    gc                  remove hidden retired siblings after the grace period
@@ -855,8 +856,8 @@ const backends = [_][]const u8{ "auto", "bwrap", "userns", "installpath" };
 fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
     const who = prog ++ " run";
     unrecognizedMerged(a, top_extra, &.{}, &.{}, 0, false);
-    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes", "require-exchange" };
-    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true, false };
+    const names = [_][]const u8{ "software", "modules", "state-root", "eb", "backend", "grace-hours", "dry-run", "module", "run-id", "lock-timeout", "skip-live-check", "prepare", "ledger-config", "build-dir", "min-free-bytes", "require-exchange", "verify", "force" };
+    const takes = [_]bool{ true, true, true, true, true, true, false, true, true, true, false, true, true, true, true, false, false, false };
     var vals: [names.len]?[]const u8 = @splat(null);
     var seen: [names.len]bool = @splat(false);
     var modules_list: std.ArrayList([]const u8) = .empty;
@@ -935,6 +936,7 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []c
     const min_free_bytes: ?u128 = if (min_free_cli) |v| v else if (envMinFreeBytes(a, env)) |v| v else null;
     if (vals[11]) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     if (vals[13]) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
+    if (seen[17] and !seen[16]) refuse("--force needs --verify; without it, nothing checks the stage before the swap", .{});
     return engine.run(a, env, .{
         .software = software.?,
         .modules = modules.?,
@@ -953,6 +955,8 @@ fn cmdRun(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []c
         .build_dir = vals[13],
         .min_free_bytes = min_free_bytes,
         .require_exchange = seen[15],
+        .verify = seen[16],
+        .force = seen[17],
     });
 }
 
@@ -998,7 +1002,8 @@ const StateRoot = struct {
 
 const resume_usage =
     \\usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
-    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+    \\                                [--force]
     \\                                run_id
     \\
 ;
@@ -1011,6 +1016,9 @@ const resume_help = resume_usage ++
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --verify              check the stage before the swap, as run --verify does
+    \\  --force               with --verify, publish a stage that fails; the journal
+    \\                        records it
     \\
 ;
 
@@ -1018,6 +1026,8 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     var opts = [_]Opt{
         .{ .name = "state-root", .takes_value = true },
         .{ .name = "lock-timeout", .takes_value = true },
+        .{ .name = "verify", .takes_value = false },
+        .{ .name = "force", .takes_value = false },
     };
     const who = prog ++ " resume";
     const sr = StateRoot.of(env, resume_usage, resume_help);
@@ -1033,11 +1043,50 @@ fn cmdResume(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
-    const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout) catch |err| switch (err) {
+    const res = run_mod.resumeRun(a, env, &ctx, state_root.?, pos[0], timeout, opts[2].seen, opts[3].seen) catch |err| switch (err) {
         error.OutOfMemory => refuse("out of memory", .{}),
         else => refuse("{s}", .{last_why}),
     };
     return res.code;
+}
+
+const verify_usage =
+    \\usage: eb-staged-rebuild verify [-h] --state-root STATE_ROOT
+    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                STAGE
+    \\
+;
+const verify_help = verify_usage ++
+    \\
+    \\positional arguments:
+    \\  STAGE                 the run id that names the stage
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\  --lock-timeout LOCK_TIMEOUT
+    \\
+;
+
+fn cmdVerify(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []const []const u8) u8 {
+    var opts = [_]Opt{
+        .{ .name = "state-root", .takes_value = true },
+        .{ .name = "lock-timeout", .takes_value = true },
+    };
+    const who = prog ++ " verify";
+    const sr = StateRoot.of(env, verify_usage, verify_help);
+    var extra: std.ArrayList([]const u8) = .empty;
+    var leftovers: std.ArrayList([]const u8) = .empty;
+    const pos = parseOpts(a, args, &opts, sr.help, sr.usage, who, &extra, &leftovers);
+    const state_root = opts[0].value orelse sr.default;
+    var need: std.ArrayList([]const u8) = .empty;
+    if (state_root == null) need.append(a, "--state-root") catch oom();
+    if (pos.len == 0) need.append(a, "STAGE") catch oom();
+    missing(a, sr.usage, who, need.items);
+    unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
+    const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
+    var ctx = adminCtx(a, env);
+    return admin.verify(&ctx, state_root.?, pos[0], timeout);
 }
 
 // ---- probe -------------------------------------------------------------
@@ -1140,8 +1189,9 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     if (std.mem.eql(u8, cmd, "gc")) return cmdGc(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "run")) return cmdRun(a, rest, env, top_extra.items);
     if (std.mem.eql(u8, cmd, "resume")) return cmdResume(a, rest, env, top_extra.items);
+    if (std.mem.eql(u8, cmd, "verify")) return cmdVerify(a, rest, env, top_extra.items);
     for (commands) |c| if (std.mem.eql(u8, c, cmd)) refuse("{s} is not in this build yet; use the Python eb-staged-rebuild", .{cmd});
-    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
+    usageError(top_usage, prog, "argument command: invalid choice: {s} (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'resolve')", .{repr(a, cmd)});
 }
 
 /// The message of the last refusal the engine returned as an error.
@@ -1154,6 +1204,7 @@ test {
     _ = @import("livecheck.zig");
     _ = @import("discover.zig");
     _ = @import("builders.zig");
+    _ = @import("verify.zig");
     _ = admin;
     _ = engine;
     _ = modulefile;
@@ -1173,10 +1224,17 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
     try expect(status_usage_default, status_help_default[0..status_usage_default.len]);
     try expect(
         \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
-        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+        \\                                [--force]
         \\                                run_id
         \\
     , StateRoot.bracketed(resume_usage));
+    try expect(
+        \\usage: eb-staged-rebuild verify [-h] [--state-root STATE_ROOT]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                STAGE
+        \\
+    , StateRoot.bracketed(verify_usage));
     try expect(
         \\usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]
         \\                                  [--lock-timeout LOCK_TIMEOUT]
