@@ -5,7 +5,13 @@ import stat
 
 
 def abspath(path):
-    """Return ``path`` made absolute and normalized, without resolving symbolic links."""
+    """Return ``path`` made absolute and normalized, without resolving symbolic links.
+
+    Empty and ``.`` segments are dropped and each ``..`` removes the segment
+    before it. As POSIX leaves a path that begins with exactly two slashes to
+    the system, ``//`` is kept and names another path than ``/``; three or
+    more leading slashes are one. Zig's ``admin.abspath`` follows the same rules.
+    """
     return os.path.abspath(os.path.normpath(os.fspath(path)))
 
 

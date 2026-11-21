@@ -1,10 +1,10 @@
-//! run, resume and rollback of a run journal: build into a generation
-//! under the state root, check the live tree did not change, plan each
-//! module, optionally run a publication-preparation program, then exchange
-//! each staged tree with its live directory and write the module files;
-//! with a ledger configuration, publish.zig records each stage. Every step
-//! is journaled before it happens; a failure while publishing puts the old
-//! live trees back.
+//! run, resume, verify and rollback of a run journal: build into a
+//! generation under the state root, check the live tree did not change,
+//! plan each module, optionally run a publication-preparation program,
+//! verify the stage (verify.zig), then exchange each staged tree with its
+//! live directory and write the module files; with a ledger configuration,
+//! publish.zig records each stage. Every step is journaled before it
+//! happens; a failure while publishing puts the old live trees back.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -21,6 +21,7 @@ const modulefile = @import("modulefile.zig");
 const builders = @import("builders.zig");
 const publish_mod = @import("publish.zig");
 const prefix_mod = @import("prefix.zig");
+const verify_mod = @import("verify.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -1373,10 +1374,73 @@ fn recordFinished(r: *R, config: ?Py, message: []const u8) E!Result {
 
 /// _publish_recorded: swap only after a required ledger acknowledged every
 /// started record.
+/// Each module's staged tree: at its stage name, or at its hidden name
+/// after a restored publish.
+fn verifyTrees(r: *R) E![]const []const u8 {
+    var trees: std.ArrayList([]const u8) = .empty;
+    for (r.list("modules_plan")) |m| {
+        const staged = s(pyfmt.get(m, "staged"));
+        const retired = s(pyfmt.get(m, "retired"));
+        const owner = if (isKind(retired, "dir")) treeRunId(r.a, retired) else null;
+        if (isKind(staged, "dir")) {
+            try trees.append(r.a, admin.abspath(r.a, staged));
+        } else if (owner != null and std.mem.eql(u8, owner.?, r.str("run_id"))) {
+            try trees.append(r.a, admin.abspath(r.a, retired));
+        } else {
+            return r.refuse("the staged tree of {s} is missing: {s}", .{ s(pyfmt.get(m, "rel")), staged });
+        }
+    }
+    return trees.items;
+}
+
+/// Check the stage, write verify.json beside the journal, and return the
+/// record the journal keeps.
+fn verifyStage(r: *R, faults: atomic.Faults) E!Py {
+    const a = r.a;
+    const trees = try verifyTrees(r);
+    const outcome = verify_mod.check(a, r.env, r.journal, trees);
+    const at = now();
+    const path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, r.str("run_id")), verify_mod.report_name });
+    const rep = verify_mod.report(a, r.str("run_id"), outcome, at, path);
+    try write(r, path, rep.text, "verify.report", null, faults);
+    verify_mod.logReport(a, r.str("run_id"), outcome, path);
+    return rep.record;
+}
+
+/// Whether the stage may be published: it passes verify, or --force
+/// overrides a failure.
+fn verifyGate(r: *R) E!bool {
+    const verified = try verifyStage(r, r.faults());
+    const failed = !std.mem.eql(u8, s(pyfmt.get(verified, "result")), "pass");
+    r.set("verify", dictSet(r.a, verified, "forced", .{ .bool = failed and r.spec.force }));
+    r.set("updated_at", pyfmt.get(verified, "at").?);
+    const message = if (failed and !r.spec.force)
+        try r.a.print("verify failed; the live directory was not swapped. Fix the stage and resume {s}, or resume it with --force to publish it anyway", .{r.str("run_id")})
+    else
+        "";
+    r.set("message", Py.s(message));
+    try r.save("journal.verified");
+    if (failed) {
+        if (r.spec.force) log("verify failed; publishing run {s} anyway (--force)", .{r.str("run_id")}) else log("{s}", .{message});
+    }
+    return !failed or r.spec.force;
+}
+
+/// verify: check a built run's stage and record the result; nothing is
+/// published. 0 when it passes, 1 when it fails.
+pub fn verifyCommand(r: *R) E!u8 {
+    const verified = try verifyStage(r, r.faults());
+    r.set("verify", verified);
+    try r.save("journal.verified");
+    return if (std.mem.eql(u8, s(pyfmt.get(verified, "result")), "pass")) 0 else 1;
+}
+
 fn publishRecorded(r: *R) E!Result {
     try requirePublicationFields(r);
     const rc = try preparePublication(r);
     if (rc != 0) return .{ .code = rc, .message = r.str("message") };
+    const gated = std.mem.eql(u8, r.str("state"), "built") and pyfmt.truthy(r.get("verify_before_swap"));
+    if (gated and !try verifyGate(r)) return .{ .code = 2, .message = r.str("message") };
     const config = try publisher(r);
     if (config) |c| {
         try validatePublicationSet(r);
@@ -1555,6 +1619,11 @@ pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     });
     if (r.spec.build_dir) |bd| try j_entries.append(a, .{ .key = "build_dir", .value = Py.s(admin.abspath(a, bd)) });
     r.journal = .{ .dict = j_entries.items };
+    if (r.spec.verify) {
+        r.set("verify_before_swap", .{ .bool = true });
+        r.set("verify_context", verify_mod.context(a, r.spec.eb_args, r.env));
+        r.set("verify", .null);
+    }
     try r.save("journal.created");
     log("run {s} backend {s} generation {s}", .{ run_id, r.spec.backend, gen });
     return runLocked(r, true);
@@ -1565,8 +1634,9 @@ fn usable(probes: Py, key: []const u8) bool {
     return pyfmt.truthy(pyfmt.get(x, "usable"));
 }
 
-/// The spec a journal records, for resume and rollback.
-fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
+/// The spec a journal records, for resume, under the caller's state root
+/// and run id.
+fn specFromJournal(a: Allocator, state_root: []const u8, run_id: []const u8, j: Py, lock_timeout: ?f64) engine.Spec {
     var rels: std.ArrayList([]const u8) = .empty;
     if (pyfmt.get(j, "module_rels")) |v| if (v == .list) for (v.list) |x| if (x == .str) rels.append(a, x.str) catch oom();
     var args: std.ArrayList([]const u8) = .empty;
@@ -1575,7 +1645,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
     return .{
         .software = s(pyfmt.get(j, "software")),
         .modules = s(pyfmt.get(j, "modules")),
-        .state_root = s(pyfmt.get(j, "state_root")),
+        .state_root = state_root,
         .eb_args = args.items,
         .backend = s(pyfmt.get(j, "backend")),
         .grace_hours = if (grace) |g| switch (g) {
@@ -1585,7 +1655,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
         } else admin.default_grace_hours,
         .module_rels = rels.items,
         .eb_executable = if (s(pyfmt.get(j, "eb_executable")).len > 0) s(pyfmt.get(j, "eb_executable")) else "eb",
-        .run_id = s(pyfmt.get(j, "run_id")),
+        .run_id = run_id,
         .skip_live_check = pyfmt.truthy(pyfmt.get(j, "skip_live_check")),
         .require_exchange = pyfmt.truthy(pyfmt.get(j, "require_exchange")),
         .lock_timeout = lock_timeout,
@@ -1596,28 +1666,36 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
 }
 
 /// resume: finish or undo the run the journal names, as its state says,
-/// under the state root's lock.
-pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) E!Result {
-    if (!admin.plainRunId(run_id)) main_mod.refuse("run id is not a plain name: '{s}'", .{run_id});
-    const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
-    const st = fsx.statAt(fsx.cwd, path, false) catch {
-        main_mod.refuse("no journal at {s}", .{path});
-    };
-    if (!st.isReg()) main_mod.refuse("no journal at {s}", .{path});
-    var j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        main_mod.refuse("journal run id does not match its directory", .{});
+/// under the state root's lock. A run started with --verify, or resumed
+/// with `verify`, has its stage checked before the swap; the journal keeps
+/// that, with the directories the checks judge the stage against, so a
+/// later resume checks it the same way. With `force` as well, a stage that
+/// fails is published anyway, and the journal records that it was forced.
+pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64, verify: bool, force: bool) E!Result {
+    const loaded = admin.loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    var j = loaded.journal;
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
-    var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, j, lock_timeout), .path = path };
+    var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, state_root, run_id, j, lock_timeout), .path = path };
+    r.spec.force = force;
     defer main_mod.last_why = r.why;
     engine.checkRoots(a, r.spec);
     const l = try lockRoot(&r);
     defer l.release();
-    j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        return r.intervene("journal run id does not match its directory", .{});
+    j = admin.loadRunJournal(a, state_root, run_id).journal;
     r.journal = j;
     const state_name = r.str("state");
+    const gated = pyfmt.truthy(r.get("verify_before_swap"));
+    if (force and !(verify or gated)) return r.refuse("--force needs --verify; run {s} does not check its stage before the swap", .{run_id});
+    if ((verify or gated) and (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing"))) admin.requireStageModules(env, j);
+    if (verify and !gated) for ([_][]const u8{ "created", "building", "failed", "built" }) |unpublished| {
+        if (!std.mem.eql(u8, state_name, unpublished)) continue;
+        r.set("verify_before_swap", .{ .bool = true });
+        r.set("verify_context", verify_mod.context(a, r.spec.eb_args, r.env));
+        try r.save("journal.verify_before_swap");
+        break;
+    };
+    r.spec.verify = pyfmt.truthy(r.get("verify_before_swap"));
     var published = false;
     for (r.list("modules_plan")) |m| if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "published")) {
         published = true;
@@ -2259,8 +2337,8 @@ test "removeCreatedLinks surfaces unlink errors and keeps created true" {
         var zl: [sys.path_max:0]u8 = undefined;
         _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zl, link)).ptr });
     }
-    chmod(dir, 0o555);
-    defer chmod(dir, 0o755);
+    try chmod(dir, 0o555);
+    defer chmod(dir, 0o755) catch {};
 
     const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
     const env: probe.Env = .{ .envp = parent };

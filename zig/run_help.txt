@@ -7,6 +7,7 @@ usage: eb-staged-rebuild run [-h] [--software SOFTWARE] [--modules MODULES]
                              [--prepare PREPARE]
                              [--ledger-config LEDGER_CONFIG] [--build-dir DIR]
                              [--min-free-bytes BYTES] [--require-exchange]
+                             [--verify] [--force]
                              ...
 
 positional arguments:
@@ -40,3 +41,7 @@ options:
                         refuse before the build unless the generation
                         filesystem has at least BYTES available
   --require-exchange    refuse unless publication can use RENAME_EXCHANGE
+  --verify              check the stage before the swap, and do not publish
+                        one that fails
+  --force               with --verify, publish a stage that fails; the journal
+                        records it

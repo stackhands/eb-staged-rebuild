@@ -1,0 +1,1 @@
+The docs job removes the access control list that the runner's `/opt` passes on to the example site. With the list gone, `EASYBUILD_UMASK=077` leaves the verify case's tree readable by its owner only. `run --verify` then refuses it, as the guide shows.

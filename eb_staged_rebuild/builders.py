@@ -266,6 +266,38 @@ def _kill_group(child):
         time.sleep(0.01)
 
 
+def _parse_easybuild_umask(text):
+    value = text.strip()
+    if not value:
+        return None
+    if value.lower().startswith("0o"):
+        digits = value[2:]
+        base = 8
+    elif all(ch in "01234567" for ch in value):
+        digits = value
+        base = 8
+    else:
+        digits = value
+        base = 10
+    try:
+        parsed = int(digits, base)
+    except ValueError:
+        return None
+    return parsed if 0 <= parsed <= 0o777 else None
+
+
+def _child_preexec(env):
+    text = env.get("EASYBUILD_UMASK")
+    mode = _parse_easybuild_umask(text) if text is not None else None
+    if mode is None:
+        return None
+
+    def _set_umask():
+        os.umask(mode)
+
+    return _set_umask
+
+
 def run_command(cmd, env, faults, step):
     """Keep the caller's lock held until the command process group has stopped.
 
@@ -291,7 +323,7 @@ def run_command(cmd, env, faults, step):
     try:
         for signum in signals:
             signal.signal(signum, request_stop)
-        child = subprocess.Popen(cmd, env=env, start_new_session=True)
+        child = subprocess.Popen(cmd, env=env, start_new_session=True, preexec_fn=_child_preexec(env))
         while interrupted[0] is None:
             exited = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
             if exited is not None:
