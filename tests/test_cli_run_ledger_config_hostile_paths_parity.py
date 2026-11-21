@@ -37,12 +37,22 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
             os.makedirs(directory_path, exist_ok=True)
             fifo_path = os.path.join(root, "ledger-fifo")
             os.mkfifo(fifo_path)
+            symlink_dir_path = os.path.join(root, "ledger-dir-link")
+            os.symlink(directory_path, symlink_dir_path)
+            symlink_loop_path = os.path.join(root, "ledger-loop")
+            os.symlink(symlink_loop_path, symlink_loop_path)
             dangling_path = os.path.join(root, "ledger-dangling.json")
             os.symlink(os.path.join(root, "absent-ledger.json"), dangling_path)
 
             for label, path, needle in (
                 ("directory", directory_path, "Invalid argument"),
                 ("fifo", fifo_path, "Invalid argument"),
+                ("symlink-directory", symlink_dir_path, "Invalid argument"),
+                (
+                    "symlink-loop",
+                    symlink_loop_path,
+                    "Too many levels of symbolic links",
+                ),
                 ("dangling", dangling_path, "No such file or directory"),
             ):
                 with self.subTest(path_kind=label):
