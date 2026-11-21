@@ -91,24 +91,7 @@ pub fn matchingRunId(journal: Py, run_id: []const u8) bool {
 
 /// os.path.abspath(os.path.normpath(p)).
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
-    var full = p;
-    if (p.len == 0 or p[0] != '/') {
-        var rb: [sys.path_max]u8 = undefined;
-        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch ".";
-        full = std.fs.path.join(a, &.{ cwd, p }) catch p;
-    }
-    var parts: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, full, '/');
-    while (it.next()) |seg| {
-        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
-        if (std.mem.eql(u8, seg, "..")) {
-            _ = parts.pop();
-            continue;
-        }
-        parts.append(a, seg) catch oom();
-    }
-    const joined = std.mem.join(a, "/", parts.items) catch return full;
-    return a.print("/{s}", .{joined}) catch full;
+    return fsx.absPath(a, p) catch oom();
 }
 
 /// Whether `child` is `parent` or a path under it, both made absolute as
@@ -1182,6 +1165,17 @@ test "gc records its completion time after its starting time" {
     try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false));
     try std.testing.expectEqual(@as(usize, 2), Clock.calls);
     try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
+}
+
+test "abspath delegates to fsx.absPath for relative and normalized paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("/opt/bin", abspath(a, "/opt/./x/../bin/"));
+    var rb: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &rb);
+    const expected = try std.fs.path.join(a, &.{ here, "sub/file" });
+    try std.testing.expectEqualStrings(expected, abspath(a, "sub/./file"));
 }
 
 test "linksTo finds the links that resolve to a module file beside it and in each class directory" {
