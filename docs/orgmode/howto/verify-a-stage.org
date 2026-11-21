@@ -1,0 +1,235 @@
+#+TITLE: Check a rebuild before it goes live
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* Check a rebuild before it goes live
+
+Have a run check its new tree before it goes live, find out why a tree did not pass, correct it, and publish it.
+With =--verify=, =run= checks the generation after the build, and after the =--prepare= program when there is one, before it exchanges anything: the shared libraries of each program, the paths of the build and temporary directories, the module files under Lmod, and who may read the new tree.
+A generation that fails a check is not published; [[file:../reference/verify.org][The checks before publication]] lists them.
+Without =--verify=, a run publishes its tree once the build is complete, as in [[file:rebuild.org][Rebuild an installed module]].
+
+** Before you start
+
+- For the check of the module files, Lmod's =lmod= command in =LMOD_CMD=, as Lmod's own setup leaves it in a login shell.
+  Without it that check is skipped, and the report says so.
+- For a build on top of EESSI, EESSI's environment, as its =init/bash= sets it, when the run started: the run records =EESSI_CVMFS_REPO= and =EESSI_EPREFIX=, and a library outside the generation, the software tree and EESSI is then a problem.
+
+For a run that already stopped with =verify failed; the live directory was not swapped=, start at step 2.
+
+Here the EasyBuild configuration of the builder has =umask= 077, which makes the new tree of the run =example-6= readable by its owner only:
+
+#+begin_src bash
+export EASYBUILD_UMASK=077
+#+end_src
+
+** Steps
+
+1. Run the rebuild with =--verify=. It builds, and stops before the exchange:
+
+   #+begin_src bash
+   eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules --run-id example-6 \
+     --verify -- Example-1.0-GCCcore-15.2.0.eb
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: module preflight: eb --dry-run Example-1.0-GCCcore-15.2.0.eb --rebuild
+   eb-staged-rebuild: run example-6 backend bwrap generation /opt/site/.eb-staged-rebuild/generations/example-6
+   eb-staged-rebuild: running eb --experimental --bwrap --bwrap-installpath=/opt/site/.eb-staged-rebuild/generations/example-6 --bwrap-options=--die-with-parent Example-1.0-GCCcore-15.2.0.eb --rebuild
+   == Temporary log file in case of crash /tmp/eb-rc1dwvmu/easybuild-i_mproqq.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == Temporary log file(s) /tmp/eb-rc1dwvmu/easybuild-i_mproqq.log* have been removed.
+   == Temporary directory /tmp/eb-rc1dwvmu has been removed.
+   == Building/installing in bwrap namespace
+     >> bwrap command (to prefix eb command): bwrap --dev-bind / / --die-with-parent --bind /opt/site/.eb-staged-rebuild/generations/example-6/software/Example/1.0-GCCcore-15.2.0 /opt/site/software/Example/1.0-GCCcore-15.2.0
+     >> bwrap info file: /opt/site/.eb-staged-rebuild/generations/example-6/bwrap_info.json
+     >> bwrap EasyBuild options: ['--disable-bwrap', '--installpath-modules=/opt/site/.eb-staged-rebuild/generations/example-6/modules']
+   == Temporary log file in case of crash /tmp/eb-axf12hfh/easybuild-vpeki6gp.log
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == found valid index for /opt/easybuild/easybuild/easyconfigs, so using it...
+   == processing EasyBuild easyconfig /home/alice/easyconfigs/Example-1.0-GCCcore-15.2.0.eb
+   == building and installing Example/1.0-GCCcore-15.2.0...
+     >> installation prefix: /opt/site/software/Example/1.0-GCCcore-15.2.0
+   == fetching files and verifying checksums...
+     >> sources:
+     >> /opt/site/sources/e/Example/example-1.0.sh [SHA256: 8c481aa2e282dd2ccb138cea448dfbd0d44845cb1c8a78f6c4e15c437839f1f4]
+   == ... (took < 1 sec)
+   == creating build dir, resetting environment...
+     >> build dir: /home/alice/.local/easybuild/build/Example/1.0/GCCcore-15.2.0
+   == ... (took < 1 sec)
+   == unpacking...
+   == ... (took < 1 sec)
+   == patching...
+   == ... (took < 1 sec)
+   == preparing...
+     >> loading toolchain module: GCCcore/15.2.0
+     >> defining build environment for GCCcore/15.2.0 toolchain
+   == ... (took < 1 sec)
+   == configuring...
+   == ... (took < 1 sec)
+   == building...
+   == ... (took < 1 sec)
+   == testing...
+   == ... (took < 1 sec)
+   == installing...
+   == ... (took 12 secs)
+   == taking care of extensions...
+   == ... (took < 1 sec)
+   == restore after iterating...
+   == ... (took < 1 sec)
+   == postprocessing...
+   == ... (took < 1 sec)
+   == sanity checking...
+     >> file 'example-1.0.sh' found: OK
+     >> loading modules: Example/1.0-GCCcore-15.2.0...
+   == ... (took < 1 sec)
+   == cleaning up...
+   == ... (took < 1 sec)
+   == creating module...
+     >> generating module file @ /opt/site/.eb-staged-rebuild/generations/example-6/modules/all/Example/1.0-GCCcore-15.2.0.lua
+   == ... (took < 1 sec)
+   == permissions...
+   == ... (took < 1 sec)
+   == packaging...
+   == ... (took < 1 sec)
+   == COMPLETED: Installation ended successfully (took 12 secs)
+   == Results of the build can be found in the log file(s) /opt/site/software/Example/1.0-GCCcore-15.2.0/easybuild/easybuild-Example-1.0-20261117.120035.log
+   == Build succeeded for 1 out of 1 (total: 12 secs)
+   == Summary:
+      * [SUCCESS] Example/1.0-GCCcore-15.2.0
+   == Temporary log file(s) /tmp/eb-axf12hfh/easybuild-vpeki6gp.log* have been removed.
+   == Temporary directory /tmp/eb-axf12hfh has been removed.
+   eb-staged-rebuild: verify: access: Example/1.0-GCCcore-15.2.0: the staged tree has mode 0700 and the live tree 0755; publishing would change what group and others may do
+   eb-staged-rebuild: verify example-6: fail (elf 0, references 0, modules 0, access 1); 0 ELF object(s); report /opt/site/.eb-staged-rebuild/runs/example-6/verify.json
+   eb-staged-rebuild: verify failed; the live directory was not swapped. Fix the stage and resume example-6, or resume it with --force to publish it anyway
+   #+end_example
+
+   The last three lines are the problem that the checks found, the problems of each check, and why nothing was published.
+   The command exits 2, and the live tree and its module file are as they were.
+2. The run is =built=, and its module =pending=:
+
+   #+begin_src bash
+   eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-6
+   #+end_src
+
+   #+begin_example
+   example-6  built  backend=bwrap  modules=0/1
+     verify failed; the live directory was not swapped. Fix the stage and resume example-6, or resume it with --force to publish it anyway
+     pending    all/Example/1.0-GCCcore-15.2.0.lua  live=/opt/site/software/Example/1.0-GCCcore-15.2.0 retired=/opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+   #+end_example
+
+3. Check the generation again, without publishing it; =verify= exits 1 while it fails:
+
+   #+begin_src bash
+   eb-staged-rebuild verify --state-root /opt/site/.eb-staged-rebuild example-6
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: verify: access: Example/1.0-GCCcore-15.2.0: the staged tree has mode 0700 and the live tree 0755; publishing would change what group and others may do
+   eb-staged-rebuild: verify example-6: fail (elf 0, references 0, modules 0, access 1); 0 ELF object(s); report /opt/site/.eb-staged-rebuild/runs/example-6/verify.json
+   #+end_example
+
+   The output shows the first 50 problems; the report beside the journal has every one:
+
+   #+begin_src bash
+   cat /opt/site/.eb-staged-rebuild/runs/example-6/verify.json
+   #+end_src
+
+   #+begin_example
+   {
+     "at": 1794916835.2604952,
+     "checks": {
+       "access": 1,
+       "elf": 0,
+       "modules": 0,
+       "references": 0
+     },
+     "elf_objects": 0,
+     "problems": [
+       {
+         "check": "access",
+         "message": "Example/1.0-GCCcore-15.2.0: the staged tree has mode 0700 and the live tree 0755; publishing would change what group and others may do"
+       }
+     ],
+     "result": "fail",
+     "run_id": "example-6",
+     "skipped": {}
+   }
+   #+end_example
+
+4. Correct the new tree where it is, in the generation, and check it again:
+
+   #+begin_src bash
+   chmod -R go+rX /opt/site/.eb-staged-rebuild/generations/example-6/software/Example/1.0-GCCcore-15.2.0
+   eb-staged-rebuild verify --state-root /opt/site/.eb-staged-rebuild example-6
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: verify example-6: pass (elf 0, references 0, modules 0, access 0); 0 ELF object(s); report /opt/site/.eb-staged-rebuild/runs/example-6/verify.json
+   #+end_example
+
+   A mode, a link or a missing file can be corrected in the generation; a tree that was built wrong, such as against a library that is not there, is better built again by a new run.
+5. Publish it:
+
+   #+begin_src bash
+   eb-staged-rebuild resume --state-root /opt/site/.eb-staged-rebuild example-6
+   #+end_src
+
+   #+begin_example
+   eb-staged-rebuild: resume example-6 from built: publishing
+   eb-staged-rebuild: verify example-6: pass (elf 0, references 0, modules 0, access 0); 0 ELF object(s); report /opt/site/.eb-staged-rebuild/runs/example-6/verify.json
+   eb-staged-rebuild: swapped all/Example/1.0-GCCcore-15.2.0.lua (renameat2-exchange)
+   eb-staged-rebuild: published module all/Example/1.0-GCCcore-15.2.0.lua
+   eb-staged-rebuild: run example-6 published 1 module(s)
+   #+end_example
+
+   The journal records that the run checks its generation, so =resume= checks it once more before the exchange, without =--verify=.
+
+** Check that it worked
+
+The installed program can be read and run by every user, as before the rebuild:
+
+#+begin_src bash
+ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_src
+
+#+begin_example
+-rwxr-xr-x 1 alice alice 29 Nov 17 11:59 /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
+#+end_example
+
+=docs/examples/site.sh= in the repository runs these steps as its case =verify=.
+
+** Publish a tree that fails
+
+=--force=, on =run --verify= or on =resume=, publishes a generation that fails the checks, for a problem that the checks report but that does not matter at this site.
+The checks still run and the report is still written; the journal's =verify= then has ="forced": true=, and the output says =verify failed; publishing run RUN_ID anyway (--force)=.
+Without the checks there is nothing for =--force= to override, so =run --force= without =--verify=, and =resume --force= of a run that does not check, are refused.
+
+** Check a run that was started without =--verify=
+
+A run without =--verify= that stopped before its exchange, such as at a =--prepare= program that failed, is =built= with its generation unpublished.
+=verify --state-root DIR RUN_ID= checks that generation without publishing it, and =resume --state-root DIR --verify RUN_ID= checks it before it publishes it.
+As the run recorded no build or temporary directories and no EESSI roots for the checks, both take them from the environment they run in.
+=resume --verify= records them in the journal, with that the run checks its generation, so a later =resume= checks it the same way.
+
+** If it fails
+
+| Message                                                                                                 | Cause                                                                                                                              | What to do                                                                                          |
+|---------------------------------------------------------------------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------|
+| =eb-staged-rebuild: verify: elf: FILE: LIBRARY not found (no RPATH or RUNPATH)=                         | The loader would not find a library that the program or library =FILE= needs.                                                      | Build again with the dependency loaded, or with an RPATH; =(no RPATH or RUNPATH)= says it had none. |
+| =eb-staged-rebuild: verify: elf: FILE: LIBRARY resolves to PATH, outside the stage, ...=                | The library comes from somewhere a job on another node may not have, such as the build host's =/usr/lib64=, while EESSI is in use. | Build against the library of the stack.                                                             |
+| =eb-staged-rebuild: verify: references: FILE: names PATH, in the build directory DIR=                   | A file outside =easybuild/= names a path in EasyBuild's build directory, which EasyBuild removes.                                  | Correct the file, or the easyconfig that wrote it, and build again.                                 |
+| =eb-staged-rebuild: verify: modules: module file REL: Lmod did not load NAME: ...=                      | Lmod refused the new module file, with its own message.                                                                            | Correct the easyconfig, and build again with a new run.                                             |
+| =eb-staged-rebuild: verify: access: INSTALL: the staged tree has mode MODE and the live tree MODE; ...= | Without =--prepare=, the new tree would change what group and other users may do with the installation.                            | Correct the modes in the generation, or let a =--prepare= program set them.                         |
+| =eb-staged-rebuild: run RUN_ID is STATE; only a built run has a stage to verify=, exit 2                | =verify= checks the generation of a =built= run only: a =complete= run has published it, and a =failed= one has none.              | Check the state with =status=.                                                                      |
+| =eb-staged-rebuild: --force needs --verify; ...=, exit 2                                                | =--force= publishes a generation that fails the checks, and without =--verify= nothing checks it.                                  | Give =--verify= as well, or leave out =--force=.                                                    |
+| =modules skipped (LMOD_CMD is not set)=, in the line of each check's problems                           | No Lmod to load the module files with.                                                                                             | Set =LMOD_CMD=, and check again.                                                                    |
+
+** Related
+
+- [[file:rebuild.org][Rebuild an installed module]]
+- [[file:set-permissions.org][Set the permissions of a rebuild before it goes live]]
+- [[file:recover.org][Finish a run that failed or stopped]]
+- [[file:../reference/verify.org][The checks before publication]]
+- [[file:../reference/cli.org][The eb-staged-rebuild command]]

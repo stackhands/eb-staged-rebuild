@@ -20,17 +20,19 @@ After the build and its checks, the run goes through these steps under the state
 
 1. A /preparation program/, if =--prepare= names one, gets the path of a JSON file that describes the publication, and may set permissions on the new tree and on the new module file; [[file:../howto/set-permissions.org][Set the permissions of a rebuild before it goes live]] has an example.
    It has to exit 0 and leave the tree complete.
-2. A =started= record for each module goes to the ledger, if =--ledger-config= names one; [[file:ledger.org][What the ledger records]] has the rest.
-3. For each module, the live module file is copied to =runs/RUN_ID/backups/=, the paths the build wrote are changed to the stable path, and the new tree moves to its hidden name, =software/NAME/.VERSION.RUN_ID=.
-4. For each module, the hidden tree and the live one are exchanged.
-5. For each module, the new module file replaces the live one.
+2. With =--verify=, the checks of =verify=: that the libraries each program needs are found, that no file names the build directory or a temporary directory of EasyBuild, that Lmod loads the new module files, and that publishing would not change who may use the installation; [[file:../reference/verify.org][The checks before publication]] lists them.
+   A generation that fails stays =built=, with nothing recorded in the ledger, unless =--force= publishes it all the same.
+3. A =started= record for each module goes to the ledger, if =--ledger-config= names one; [[file:ledger.org][What the ledger records]] has the rest.
+4. For each module, the live module file is copied to =runs/RUN_ID/backups/=, the paths the build wrote are changed to the stable path, and the new tree moves to its hidden name, =software/NAME/.VERSION.RUN_ID=.
+5. For each module, the hidden tree and the live one are exchanged.
+6. For each module, the new module file replaces the live one.
    It keeps the owner, the mode and the access-control list of the module file it replaces, unless the preparation program set others on the new one.
-6. Links that EasyBuild made in the generation's module tree, such as the module files of a module class, are made in the live tree where nothing is at their path.
-7. The run is =complete=, and the ledger gets a =finished= record for each module.
+7. Links that EasyBuild made in the generation's module tree, such as the module files of a module class, are made in the live tree where nothing is at their path.
+8. The run is =complete=, and the ledger gets a =finished= record for each module.
 
 Every directory is exchanged before any module file is replaced, so a module file never names a tree of another run.
-Step 3 changes nothing live.
-When a step from 4 to 6 fails, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
+Steps 2 and 4 change nothing live.
+When a step from 5 to 7 fails, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
 
 *** The exchange
 

@@ -13,6 +13,7 @@ The status each command exits with, and what it means for the state root and the
 |      0 | every command               | Done: the run published, the rollback put the old trees back or was done already, =resume= found the run complete, =gc= or =retire= ended, or a =--dry-run= printed its plan.                                                                              |
 |      1 | =probe=                     | =--no-create= found that =--path= does not exist, or =--require-eb= did not find the =--eb= command after printing the probe report.                                                                                                                       |
 |      1 | =resolve=                   | =MODULE_FILE= is not a regular file, or its =root= names no complete installation. The JSON is printed all the same.                                                                                                                                       |
+|      1 | =verify=                    | The generation fails a check; =runs/RUN_ID/verify.json= lists the problems, and nothing was published.                                                                                                                                                     |
 |      1 | every command               | The binary ran out of memory, and printed =eb-staged-rebuild: out of memory=; or the Python package stopped with a traceback, which is a bug.                                                                                                              |
 |      2 | every command               | A usage error, with the usage on stderr; or a refusal or an operating-system error, with =eb-staged-rebuild: REASON= on stderr. A run refused before its build changed nothing; one refused later says in its journal how far it got.                      |
 |      N | =run=, =resume=             | EasyBuild exited N during the build: the journal is =failed=, and nothing live changed. =128+N= is a build stopped by signal N, or a run that got =SIGTERM=, =SIGINT= or =SIGHUP= and stopped its build.                                                   |
@@ -20,6 +21,7 @@ The status each command exits with, and what it means for the state root and the
 |     75 | =run=, =resume=, =rollback= | A ledger record was not acknowledged, and the message says whether the directories were exchanged. It ends with the command that delivers the record once the ledger answers: =run resume= after =run= or =resume=, =run rollback again= after =rollback=. |
 
 A run that the tree check or the live check stopped after the build exits 2, with its journal =failed=; one whose publication failed in the middle exits 2, with its journal =built= and the old trees back.
+A run with =--verify= whose generation fails the checks before publication exits 2 as well, with its journal =built= and nothing live changed; =resume= checks it again, and =--force= publishes it.
 =status= says which.
 
 Pre-build refusals that exit 2 before touching the live tree include:
