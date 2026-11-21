@@ -19,11 +19,11 @@ import unittest
 from types import SimpleNamespace
 
 from eb_staged_rebuild.atomicio import read_bytes
-from tests.support import _run, run_cli, run_cli_optional_binary
-from tests.test_prefix_dir_fsync import _compile, _fuse_ready, _skip
+from tests.support import _compile_fuse_faultfs, _fuse_ready, _run, _skip, run_cli, run_cli_optional_binary
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _NOW = "1700000000.25"
+_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 
 
 def _wait_mount(mnt: str, mounted: subprocess.Popen[bytes]) -> None:
@@ -109,7 +109,7 @@ class StageSourceDirFsyncTests(unittest.TestCase):
             )
         os.chmod(eb, 0o755)
         binary = os.path.join(work, "faultfs")
-        _compile(binary)
+        _compile_fuse_faultfs(_SRC, binary)
         os.makedirs(mnt)
         env = dict(os.environ)
         env["FAULTFS_FSYNC_DIR"] = "/generations/r1/software/demo"

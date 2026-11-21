@@ -6,18 +6,15 @@ be the parent of the interpreter and of that program, so this file does
 not go through ``tests.support.run_cli``.
 """
 
-import ctypes
 import errno
 import json
 import os
 import shutil
-import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 
-from tests.support import classic_install
+from tests.support import _program, _python314, classic_install
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FAKE = os.path.join(_REPO, "tests", "fake_eb.py")
@@ -39,74 +36,12 @@ except Refused as exc:
 sys.stdout.write("%s\\n" % len(files))
 """
 
-
-def _python314():
-    if sys.version_info[:2] == (3, 14):
-        return sys.executable
-    found = shutil.which("python3.14")
-    if not found:
-        return None
-    completed = subprocess.run(
-        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
-        check=False,
-    )
-    return found if completed.returncode == 0 else None
-
-
-def _ptrace_problem():
-    libc = ctypes.CDLL(None, use_errno=True)
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        os.close(read_fd)
-        if libc.ptrace(0, 0, None, None) != 0:
-            os.write(write_fd, os.strerror(ctypes.get_errno()).encode())
-            os._exit(1)
-        os._exit(0)
-    os.close(write_fd)
-    _pid, status = os.waitpid(pid, 0)
-    detail = os.read(read_fd, 200).decode()
-    os.close(read_fd)
-    if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-        return None
-    if detail:
-        return detail
-    return f"ptrace(PTRACE_TRACEME) failed with wait status {status}"
-
-
-def _tracer():
-    """Build tests/fs_fail.c. Return ``(path, None)`` or ``(None, reason)``."""
-    if shutil.which("gcc") is None:
-        return None, "gcc is not on PATH, so tests/fs_fail.c cannot be built"
-    src = os.path.join(_REPO, "tests", "fs_fail.c")
-    out = os.path.join(tempfile.gettempdir(), "eb-fs-fail-walk")
-    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
-        built = subprocess.run(
-            ["gcc", "-O2", "-o", out, src],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if built.returncode != 0:
-            detail = (built.stderr or built.stdout or "gcc failed").strip()
-            return None, f"gcc could not build tests/fs_fail.c: {detail}"
-    problem = _ptrace_problem()
-    if problem:
-        return None, f"ptrace is unavailable: {problem}"
-    return out, None
-
-
 class ModuleWalkEintrTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.python = _python314()
-        cls.program, cls.reason = _tracer()
-
     def setUp(self):
+        self.python = _python314()
         if self.python is None:
             self.skipTest("python3.14 is not installed")
-        if self.program is None:
-            self.skipTest(self.reason)
+        self.program = _program(self, "eb-fs-fail-walk")
 
     def _layout(self):
         root = tempfile.mkdtemp(prefix="walk-eintr-")
@@ -120,7 +55,7 @@ class ModuleWalkEintrTest(unittest.TestCase):
         eb = os.path.join(root, "eb")
         with open(eb, "w", encoding="utf-8") as handle:
             handle.write(f"#!/bin/sh\nexec {self.python} {_FAKE} \"$@\"\n")
-        os.chmod(eb, stat.S_IRWXU)
+        os.chmod(eb, 0o700)
         args = [
             "run",
             "--software", software,
