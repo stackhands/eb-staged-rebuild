@@ -1,0 +1,1 @@
+`generation_complete` treats an unreadable `easybuild` metadata directory as incomplete instead of raising `OSError`, so `resolve` emits its JSON document with exit 1 and `run` marks the journal failed in line with the Zig binary.
