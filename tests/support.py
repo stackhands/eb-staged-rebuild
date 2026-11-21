@@ -256,6 +256,21 @@ def run_cli_optional_binary(
     return _run([tool, *args], env, cwd)
 
 
+def require_tool_bin() -> str:
+    """Return TOOL_BIN or raise, for tests that require both front ends."""
+    tool = os.environ.get("TOOL_BIN")
+    if not tool:
+        raise AssertionError("TOOL_BIN is required for this test")
+    return tool
+
+
+def run_cli_binary(
+    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the binary front end named by TOOL_BIN, which this test requires."""
+    return _run([require_tool_bin(), *args], env, cwd)
+
+
 def run_cli_or_binary(
     *args: str, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess[str]:

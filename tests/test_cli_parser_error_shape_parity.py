@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli, run_cli_binary
 
 
 class CliParserErrorShapeParityTests(unittest.TestCase):
@@ -33,9 +33,7 @@ class CliParserErrorShapeParityTests(unittest.TestCase):
             for args in cases:
                 with self.subTest(args=args):
                     python = run_cli(*args, env=env)
-                    binary = run_cli_optional_binary(*args, env=env)
-                    if binary is None:
-                        self.skipTest("TOOL_BIN is required for parser parity assertions")
+                    binary = run_cli_binary(*args, env=env)
                     self.assertEqual(binary.returncode, python.returncode, binary.stdout + binary.stderr)
                     self.assertEqual(binary.stdout, python.stdout)
                     self.assertEqual(binary.stderr, python.stderr)
