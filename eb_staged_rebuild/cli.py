@@ -191,14 +191,14 @@ def _parser():
 
     back_p = sub.add_parser("rollback", help="restore the previous module files, or put a retired module file back")
     _add_state_root(back_p)
-    back_p.add_argument("--lock-timeout", type=float, default=None)
+    back_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     back_p.add_argument("run_id")
 
     gc_p = sub.add_parser("gc", help="remove hidden retired siblings after the grace period")
     _add_state_root(gc_p)
     gc_p.add_argument("--grace-hours", type=_hours, default=None)
     gc_p.add_argument("--dry-run", action="store_true")
-    gc_p.add_argument("--lock-timeout", type=float, default=None)
+    gc_p.add_argument("--lock-timeout", type=_lock_timeout, default=None)
     gc_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
     gc_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
     gc_p.add_argument(
@@ -223,7 +223,7 @@ def _parser():
     retire_p.add_argument("--dry-run", action="store_true")
     retire_p.add_argument("--usage-log", default=None, help="usage log checked with eb-keep-logs used --require-none")
     retire_p.add_argument("--eb-keep-logs", default="eb-keep-logs", help="eb-keep-logs executable")
-    retire_p.add_argument("--lock-timeout", type=float, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
+    retire_p.add_argument("--lock-timeout", type=_lock_timeout, default=0.0, help="seconds to wait for the lock (default: refuse at once)")
 
     status_p = sub.add_parser("status", help="show run journals")
     _add_state_root(status_p)

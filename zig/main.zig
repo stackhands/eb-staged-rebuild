@@ -781,7 +781,7 @@ fn cmdRetire(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: 
     if (opts[1].value == null) need.append(a, "--module-file") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
-    const timeout: f64 = if (opts[6].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else 0;
+    const timeout: f64 = if (opts[6].value) |v| lockTimeoutArg(a, sr.usage, who, v) else 0;
     var ctx = adminCtx(a, env);
     return admin.retire(&ctx, state_root.?, opts[1].value.?, opts[2].value, opts[3].seen, timeout, opts[4].value, opts[5].value orelse "eb-keep-logs");
 }
@@ -802,7 +802,7 @@ fn cmdRollback(a: Allocator, args: []const []const u8, env: probe.Env, top_extra
     if (pos.len == 0) need.append(a, "run_id") catch oom();
     missing(a, sr.usage, who, need.items);
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 1, false);
-    const timeout: ?f64 = if (opts[1].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[1].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     var ctx = adminCtx(a, env);
     return admin.rollback(&ctx, state_root.?, pos[0], timeout);
 }
@@ -828,7 +828,7 @@ fn cmdGc(a: Allocator, args: []const []const u8, env: probe.Env, top_extra: []co
     if (state_root == null) missing(a, sr.usage, who, &.{"--state-root"});
     unrecognizedMerged(a, top_extra, extra.items, leftovers.items, 0, true);
     const grace_cli: ?f64 = if (opts[1].value) |v| graceArg(a, sr.usage, who, v) else null;
-    const timeout: ?f64 = if (opts[5].value) |v| floatArg(a, sr.usage, who, "lock-timeout", v) else null;
+    const timeout: ?f64 = if (opts[5].value) |v| lockTimeoutArg(a, sr.usage, who, v) else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(
