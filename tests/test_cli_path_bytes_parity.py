@@ -23,6 +23,8 @@ class CliPathBytesParityTests(unittest.TestCase):
                 modules,
                 "--state-root",
                 bad_state_root,
+                "--backend",
+                "installpath",
                 "--dry-run",
                 "--",
                 "Demo-1.0.eb",
