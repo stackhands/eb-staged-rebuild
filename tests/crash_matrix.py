@@ -7,13 +7,14 @@ resumed. Both must leave the same live tree, the same module file and the
 same journal state; a run must end either with the old tree untouched or
 fully published. The same is done for rollback of a complete run.
 
-Five fixtures: one module; two modules (lib/1 and app/1); one module
+Six fixtures: one module; two modules (lib/1 and app/1); one module
 whose build leaves the installation and module tree read-only, which is
 published with its modes and is not built again once the build was
 journalled; one module with
 a --prepare policy that counts its invocations, which must run once,
 or twice when the kill falls after it exited and before the journal
-recorded it; and one module forced onto the
+recorded it; one module run with --verify, whose stage is checked
+before the swap, also by the resume; and one module forced onto the
 ordinary-rename fallback. Run and rollback take the swap method from the
 journal's recorded rename_exchange probe, so the fallback fixture stops a
 run at build.start, records the probe as failed, and kills the resumed
@@ -45,11 +46,12 @@ FALLBACK = ("live-to-hold", "staged-to-live", "hold-to-staged")
 
 
 class Fixture:
-    def __init__(self, name, rels, prepare=False, seal=False):
+    def __init__(self, name, rels, prepare=False, seal=False, verify=False):
         self.name = name
         self.rels = rels
         self.prepare = prepare
         self.seal = seal
+        self.verify = verify
 
     def build(self, root):
         for rel in self.rels:
@@ -87,6 +89,8 @@ class Fixture:
         ]
         if self.prepare:
             args += ["--prepare", f"{root}/prepare"]
+        if self.verify:
+            args.append("--verify")
         for rel in self.rels:
             args += ["--module", rel]
         return args + ["--", "demo-1.eb"]
@@ -96,7 +100,7 @@ class Fixture:
             software=f"{root}/software", modules=f"{root}/modules", state_root=f"{root}/state",
             eb_args=["demo-1.eb"], backend="installpath", eb_executable=f"{root}/eb",
             module_rels=list(self.rels), run_id="r1", faults=faults,
-            prepare_executable=f"{root}/prepare" if self.prepare else None,
+            prepare_executable=f"{root}/prepare" if self.prepare else None, verify=self.verify,
         )
 
 
@@ -104,6 +108,7 @@ ONE = Fixture("one module", ["demo/1"])
 TWO = Fixture("two modules", ["lib/1", "app/1"])
 PREPARE = Fixture("prepare", ["demo/1"], prepare=True)
 SEALED = Fixture("sealed", ["demo/1"], seal=True)
+VERIFY = Fixture("verify", ["demo/1"], verify=True)
 
 
 def unseal(root):
@@ -534,7 +539,7 @@ def main():
         print("set TOOL_BIN", file=sys.stderr)
         return 2
     failures = total = 0
-    for fixture in (ONE, TWO, PREPARE, SEALED):
+    for fixture in (ONE, TWO, PREPARE, SEALED, VERIFY):
         f, t = run_matrix(fixture)
         failures, total = failures + f, total + t
     f, t = fallback_matrix()
