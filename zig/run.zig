@@ -799,7 +799,7 @@ fn plan(r: *R) E!void {
     for (ordered.order) |path| {
         const rel = modulefile.relpath(a, path, roots.modules);
         const inst = discover.swapInstallFor(a, ordered.texts.get(path).?, roots.software, r.spec.software, &why) catch |err| return if (err == error.Refused) r.refuse("{s}", .{why}) else error.OutOfMemory;
-        if (!generationComplete(a, inst.staged)) return r.refuse("{s} is not a complete staged installation", .{inst.staged});
+        if (!(try generationComplete(r, inst.staged))) return r.refuse("{s} is not a complete staged installation", .{inst.staged});
         if (isKind(inst.staged, "symlink")) return r.refuse("staged installation {s} is a symlink", .{inst.staged});
         if (isKind(inst.live, "symlink")) return r.refuse("{s} is a symlink. Name/version must stay a real directory", .{inst.live});
         if (!isKind(inst.live, "dir")) return r.refuse("staged rebuild target must already be a real directory: {s}", .{inst.live});
@@ -875,10 +875,24 @@ fn plan(r: *R) E!void {
     r.set("links_plan", .{ .list = link_items.items });
 }
 
-fn generationComplete(a: Allocator, path: []const u8) bool {
+fn generationComplete(r: *R, path: []const u8) E!bool {
+    const a = r.a;
     if (!isKind(path, "dir")) return false;
-    for ([_][]const u8{ "PAYLOAD", ".eb-staged-rebuild-complete" }) |n| if (isKind(std.fs.path.join(a, &.{ path, n }) catch return false, "file")) return true;
-    return installCompleteMeta(a, path);
+    for ([_][]const u8{ "PAYLOAD", ".eb-staged-rebuild-complete" }) |n| {
+        const marker = std.fs.path.join(a, &.{ path, n }) catch return error.OutOfMemory;
+        if (isKind(marker, "file")) return true;
+    }
+    const meta = std.fs.path.join(a, &.{ path, "easybuild" }) catch return error.OutOfMemory;
+    if (!isKind(meta, "dir")) return false;
+    const fd = fsx.openDir(fsx.cwd, meta, false) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, meta)});
+    defer sys.close(fd);
+    var it = fsx.DirIter.init(a, fd) catch return error.OutOfMemory;
+    while (it.next() catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, meta)})) |e| {
+        if (!std.mem.endsWith(u8, e.name, ".eb")) continue;
+        const child = std.fs.path.join(a, &.{ meta, e.name }) catch return error.OutOfMemory;
+        if (isKind(child, "file")) return true;
+    }
+    return false;
 }
 
 fn installCompleteMeta(a: Allocator, path: []const u8) bool {
