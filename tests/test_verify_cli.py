@@ -297,6 +297,14 @@ class VerifyCliTests(unittest.TestCase):
                     self.problems(site),
                     ["access: demo/1: the staged tree has mode 0755 and the live tree 0700; publishing would change what group and others may do"],
                 )
+        for site in self.sites():
+            with self.subTest(tool=site.name):
+                done = site.run(EASYBUILD_UMASK="077")
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertEqual(
+                    self.problems(site),
+                    ["access: demo/1: the staged tree has mode 0700 and the live tree 0755; publishing would change what group and others may do"],
+                )
         extra = {"text": {"share/secret": "x\n"}, "modes": {"share/secret": 0o600}}
         for site in self.sites():
             with self.subTest(tool=site.name):
