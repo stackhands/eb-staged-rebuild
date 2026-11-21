@@ -17,14 +17,10 @@ import sys
 import textwrap
 import unittest
 
+from tests.support import _skip
+
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TIMEOUT = 60
-
-
-def _skip(case: unittest.TestCase, reason: str) -> None:
-    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
-        case.fail(reason)
-    case.skipTest(reason)
 
 _PROBE = """
 import os, subprocess, sys, tempfile
@@ -204,6 +200,7 @@ class PrefixUserXattrParityTests(unittest.TestCase):
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
+        env["PYTHONPATH"] = _REPO
         env["PYTHONIOENCODING"] = "utf-8:strict"
         try:
             done = subprocess.run(
