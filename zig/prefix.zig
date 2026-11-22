@@ -295,6 +295,32 @@ fn restoreAccess(a: Allocator, fd: fsx.fd_t, meta: atomic.Metadata, why: *[]cons
     }
 }
 
+/// The test artifact fails this unlink when EB_STAGED_REBUILD_FAIL_AT names
+/// `prefix.ready.unlink`. A release build drops the check, so the env var
+/// is not in that binary.
+fn injectedReadyUnlink() bool {
+    if (comptime !atomic.replaceable) return false;
+    const fd = sys.openat(fsx.cwd, "/proc/self/environ", .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    defer sys.close(fd);
+    var buf: [1 << 16]u8 = undefined;
+    var got: usize = 0;
+    while (got < buf.len) {
+        const n = sys.read(fd, buf[got..]) catch break;
+        if (n == 0) break;
+        got += n;
+    }
+    const key = "EB_STAGED_REBUILD_FAIL_AT=";
+    var it = std.mem.splitScalar(u8, buf[0..got], 0);
+    while (it.next()) |entry| {
+        if (!std.mem.startsWith(u8, entry, key)) continue;
+        var names = std.mem.splitScalar(u8, entry[key.len..], ',');
+        while (names.next()) |name| {
+            if (std.mem.eql(u8, name, "prefix.ready.unlink")) return true;
+        }
+    }
+    return false;
+}
+
 fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: *[]const u8) Error!void {
     if (names.len == 1) {
         const parent = std.fs.path.dirname(names[0]) orelse "/";
@@ -322,6 +348,7 @@ fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: 
         atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
     }
     const ready_parent = std.fs.path.dirname(ready) orelse "/";
+    if (injectedReadyUnlink()) return fail(a, why, error.AccessDenied, ready);
     sys.unlinkat(fsx.cwd, ready, 0) catch |err| return fail(a, why, err, ready);
     atomic.fsyncDir(ready_parent) catch |err| return fail(a, why, err, ready_parent);
 }
