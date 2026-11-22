@@ -11,8 +11,7 @@ import os
 import sys
 import unittest
 
-from tests.support import _run
-from tests.test_prefix_dir_fsync import _skip
+from tests.support import _run, _skip
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

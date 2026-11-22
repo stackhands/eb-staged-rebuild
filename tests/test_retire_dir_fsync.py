@@ -12,53 +12,11 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 import unittest
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
-
-
-def _skip(case: unittest.TestCase, reason: str) -> None:
-    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
-        case.fail(reason)
-    case.skipTest(reason)
-
-
-def _fuse_ready() -> str | None:
-    if not os.path.exists("/dev/fuse"):
-        return "FUSE is not available"
-    if shutil.which("fusermount3") is None or shutil.which("cc") is None:
-        return "FUSE is not available"
-    flags = subprocess.run(
-        ["pkg-config", "--cflags", "--libs", "fuse3"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if flags.returncode != 0:
-        return "FUSE is not available"
-    return None
-
-
-def _compile(binary: str) -> None:
-    flags = subprocess.run(
-        ["pkg-config", "--cflags", "--libs", "fuse3"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    done = subprocess.run(
-        ["cc", "-O2", "-Wall", "-Wextra", "-o", binary, _SRC, *flags.stdout.split()],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if done.returncode != 0:
-        raise AssertionError(done.stderr)
+from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
 
 class RetireDirFsyncTests(unittest.TestCase):
@@ -98,7 +56,7 @@ class RetireDirFsyncTests(unittest.TestCase):
         os.makedirs(os.path.join(back, "modules", "all", "demo"))
         os.makedirs(os.path.join(back, "state"))
         binary = os.path.join(work, "faultfs")
-        _compile(binary)
+        _compile_fuse_faultfs(_SRC, binary)
         os.makedirs(mnt)
         env = dict(os.environ)
         env["FAULTFS_FSYNC_DIR"] = "/modules/all/demo"
@@ -112,7 +70,7 @@ class RetireDirFsyncTests(unittest.TestCase):
             env=env,
         )
         try:
-            self._wait_mount(mnt, mounted)
+            _wait_mount(self, mnt, mounted)
             install = os.path.join(mnt, "software", "demo", "1")
             module = os.path.join(mnt, "modules", "all", "demo", "1.lua")
             with open(module, "w", encoding="utf-8") as handle:
@@ -151,18 +109,6 @@ class RetireDirFsyncTests(unittest.TestCase):
         stdout = done.stdout.decode("utf-8", "surrogateescape") + f"\nJOURNAL {journal_state}\nLIVE {live}\n"
         stderr = done.stderr.decode("utf-8", "surrogateescape")
         return subprocess.CompletedProcess(done.args, done.returncode, stdout, stderr)
-
-    def _wait_mount(self, mnt: str, mounted: subprocess.Popen[bytes]) -> None:
-        for _ in range(50):
-            with open("/proc/self/mountinfo", encoding="utf-8") as handle:
-                if f" {mnt} " in handle.read():
-                    return
-            if mounted.poll() is not None:
-                err = mounted.stderr.read().decode() if mounted.stderr else ""
-                self.fail(f"FUSE exited: {err}")
-            time.sleep(0.05)
-        self.fail("FUSE mount did not appear")
-
 
 if __name__ == "__main__":
     unittest.main()

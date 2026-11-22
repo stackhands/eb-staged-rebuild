@@ -1,10 +1,15 @@
 """Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
 import contextlib
+import ctypes
 import os
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import time
+import unittest
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -259,3 +264,113 @@ def run_cli_or_binary(
     if binary is not None:
         return binary
     return run_cli(*args, env=env, cwd=cwd)
+
+
+def _skip(case: unittest.TestCase, reason: str) -> None:
+    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
+        case.fail(reason)
+    case.skipTest(reason)
+
+
+def _python314() -> str | None:
+    if sys.version_info[:2] == (3, 14):
+        return sys.executable
+    found = shutil.which("python3.14")
+    if not found:
+        return None
+    completed = subprocess.run(
+        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
+        check=False,
+    )
+    return found if completed.returncode == 0 else None
+
+
+def _ptrace_problem() -> str | None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        if libc.ptrace(0, 0, None, None) != 0:
+            os.write(write_fd, os.strerror(ctypes.get_errno()).encode())
+            os._exit(1)
+        os._exit(0)
+    os.close(write_fd)
+    _pid, status = os.waitpid(pid, 0)
+    detail = os.read(read_fd, 200).decode()
+    os.close(read_fd)
+    if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+        return None
+    if detail:
+        return detail
+    return f"ptrace(PTRACE_TRACEME) failed with wait status {status}"
+
+
+def _program(case: unittest.TestCase, binary_name: str) -> str:
+    if shutil.which("gcc") is None:
+        case.skipTest("gcc is not on PATH, so tests/fs_fail.c cannot be built")
+    problem = _ptrace_problem()
+    if problem:
+        case.skipTest(f"ptrace is unavailable: {problem}")
+    src = os.path.join(_REPO, "tests", "fs_fail.c")
+    build_root = tempfile.TemporaryDirectory(prefix=f"{binary_name}-")
+    case.addCleanup(build_root.cleanup)
+    out = os.path.join(build_root.name, binary_name)
+    built = subprocess.run(
+        ["gcc", "-O2", "-o", out, src],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        detail = (built.stderr or built.stdout or "gcc failed").strip()
+        case.skipTest(f"gcc could not build tests/fs_fail.c: {detail}")
+    return out
+
+
+def _fuse_ready() -> str | None:
+    if not os.path.exists("/dev/fuse"):
+        return "FUSE is not available"
+    if shutil.which("fusermount3") is None or shutil.which("cc") is None:
+        return "FUSE is not available"
+    flags = subprocess.run(
+        ["pkg-config", "--cflags", "--libs", "fuse3"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if flags.returncode != 0:
+        return "FUSE is not available"
+    return None
+
+
+def _compile_fuse_faultfs(src: str, binary: str) -> None:
+    flags = subprocess.run(
+        ["pkg-config", "--cflags", "--libs", "fuse3"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    done = subprocess.run(
+        ["cc", "-O2", "-Wall", "-Wextra", "-o", binary, src, *flags.stdout.split()],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if done.returncode != 0:
+        raise AssertionError(done.stderr)
+
+
+def _wait_mount(case: unittest.TestCase, mnt: str, mounted: subprocess.Popen[bytes]) -> None:
+    for _ in range(50):
+        with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+            if f" {mnt} " in handle.read():
+                return
+        if mounted.poll() is not None:
+            err = mounted.stderr.read().decode() if mounted.stderr else ""
+            case.fail(f"FUSE exited: {err}")
+        time.sleep(0.05)
+    case.fail("FUSE mount did not appear")
