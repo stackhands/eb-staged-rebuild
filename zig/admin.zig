@@ -17,6 +17,7 @@ const atomic = common.atomic;
 const state = common.state;
 const proc = common.proc;
 const rootlock = @import("rootlock.zig");
+const faultmount = if (@import("builtin").is_test) @import("faultmount.zig") else struct {};
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -746,7 +747,8 @@ pub fn removeTree(c: *Ctx, path_in: []const u8, boundary_in: []const u8) void {
     );
     sys.close(fd);
     sys.unlinkat(parent, name, linux.AT.REMOVEDIR) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
-    sys.fsync(parent) catch {};
+    const flushed = dirname(path);
+    sys.fsync(parent) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, flushed)});
 }
 
 fn openOwned(c: *Ctx, parent: sys.fd_t, name: []const u8, dev: u64) sys.fd_t {
@@ -1261,4 +1263,74 @@ test "emptyDir refuses a tree nested past its depth bound" {
         full.shrinkRetainingCapacity(full.items.len - 2);
     }
     _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, base), linux.AT.REMOVEDIR);
+}
+
+fn threadCount() !usize {
+    const fd = try sys.openat(fsx.cwd, "/proc/self/status", .{ .ACCMODE = .RDONLY }, 0);
+    defer sys.close(fd);
+    var buf: [4096]u8 = undefined;
+    const n = linux.read(fd, &buf, buf.len);
+    if (linux.errno(n) != .SUCCESS or n == 0) return error.Status;
+    const text = buf[0..n];
+    const at = std.mem.indexOf(u8, text, "Threads:") orelse return error.Status;
+    var rest = text[at + "Threads:".len ..];
+    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t')) rest = rest[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+    return std.fmt.parseInt(usize, rest[0..end], 10);
+}
+
+test "a failed directory flush after a generation directory is removed is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    try std.testing.expectEqual(@as(usize, 1), try threadCount());
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "generation", "/generations");
+    defer fused.stop();
+    const boundary = try std.fs.path.join(a, &.{ fused.mnt, "generations" });
+    const path = try std.fs.path.join(a, &.{ boundary, "r1" });
+    try atomic.makedirs(path);
+    const note = try std.fs.path.join(a, &.{ path, "note" });
+    const fd = try sys.openat(fsx.cwd, note, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    sys.close(fd);
+
+    var pipe: [2]linux.fd_t = undefined;
+    if (linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) != .SUCCESS) return error.Pipe;
+    defer sys.close(pipe[0]);
+    const pid_rc = linux.fork();
+    if (linux.errno(pid_rc) != .SUCCESS) return error.Fork;
+    if (pid_rc == 0) {
+        _ = linux.dup2(pipe[1], 1);
+        _ = linux.dup2(pipe[1], 2);
+        _ = linux.close(pipe[0]);
+        _ = linux.close(pipe[1]);
+        _ = linux.close_range(3, std.math.maxInt(linux.fd_t), .{ .UNSHARE = false, .CLOEXEC = false });
+        const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+        const env: probe.Env = .{ .envp = parent };
+        var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+        removeTree(&c, path, boundary);
+        linux.exit_group(0);
+    }
+    _ = linux.close(pipe[1]);
+    var status: i32 = 0;
+    var spins: usize = 0;
+    const child: linux.pid_t = @intCast(pid_rc);
+    while (spins < 5_000_000) : (spins += 1) {
+        const wr = linux.waitpid(child, &status, linux.W.NOHANG);
+        if (wr == child) break;
+        if (wr != 0) return error.Wait;
+    } else {
+        _ = linux.kill(child, linux.SIG.KILL);
+        _ = linux.waitpid(child, &status, 0);
+        return error.ChildHung;
+    }
+    var msg_buf: [4096]u8 = undefined;
+    const n = linux.read(pipe[0], &msg_buf, msg_buf.len);
+    const msg = if (linux.errno(n) == .SUCCESS) msg_buf[0..n] else "";
+    const bits: u32 = @bitCast(status);
+    try std.testing.expect(bits & 0x7f == 0);
+    try std.testing.expectEqual(@as(u8, 2), @as(u8, @intCast((bits >> 8) & 0xff)));
+    try std.testing.expect(std.mem.indexOf(u8, msg, "Input/output error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, boundary) != null);
+    try std.testing.expect(!std.mem.eql(u8, main_mod.lstatKind(path), "dir"));
 }

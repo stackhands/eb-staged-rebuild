@@ -577,3 +577,26 @@ it writes, with ids, times and the state root's scope normalized.
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
 | LedgerConfigValidationTests.test_load_config_rejects_non_finite_timeout | `zig/publish.zig` test "isPositiveTimeout rejects non-finite and non-positive values" |
+
+## tests/test_gc_dir_fsync.py
+
+The journal is read with `read_bytes` and with `open(..., "rb")`. Those bytes are what the two frontends are compared on.
+
+| test | replacement |
+|---|---|
+| GenerationDirFsyncTests.test_failed_directory_flush_after_generation_removal_is_reported | `zig/admin.zig` test "a failed directory flush after a generation directory is removed is reported", and this test against the release binary |
+| GenerationDirFsyncTests.test_generation_flush_error_matches_across_frontends | this test: stdout, stderr, exit status, and the raw journal bytes |
+
+## tests/test_stage_source_dir_fsync.py
+
+| test | replacement |
+|---|---|
+| StageSourceDirFsyncTests.test_failed_source_parent_flush_matches_across_frontends | `zig/run.zig` test "a failed flush of the source parent after a cross-directory rename is reported", and this test against the release binary |
+| StageSourceDirFsyncTests.test_journals_are_the_same_bytes_under_the_test_clock | this test reads both journals with `read_bytes` and `open(..., "rb")` under `EB_STAGED_REBUILD_NOW` |
+
+## tests/test_dir_fsync_retry.py
+
+| test | replacement |
+|---|---|
+| DirFsyncRetryTests.test_resume_flushes_the_source_parent_again | `zig/run.zig` test "a retry flushes the source parent again after the rename", and this test against the release binary |
+| DirFsyncRetryTests.test_a_missing_created_link_is_flushed_again | `zig/run.zig` test "a retry flushes the parent of a created link that is already gone" |

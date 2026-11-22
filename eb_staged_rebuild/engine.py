@@ -113,8 +113,17 @@ class Result:
     command: str = ""
 
 
+def current_time():
+    """Seconds since the epoch.
+
+    The installed tool uses the wall clock. ``tests/now_cli.py`` replaces
+    this for the test clock. ``gc`` does not call it.
+    """
+    return time.time()
+
+
 def _clock(spec):
-    return spec.clock if spec.clock is not None else time.time
+    return spec.clock if spec.clock is not None else current_time
 
 
 def _faults(spec):
@@ -770,9 +779,16 @@ def _prepare_swap_source(mod, run_id, faults):
                     "place --state-root beside the software tree"
                 ) from error
             raise
+        # A cross-directory rename is durable only after both parents are
+        # flushed: the destination gained the retired name, and the source
+        # lost the staged name.
         fsync_dir(os.path.dirname(retired))
+        fsync_dir(os.path.dirname(staged))
     elif staged_kind == "missing" and retired_kind == "dir":
-        pass
+        # The rename already happened. A failed flush left it uncommitted,
+        # so a retry flushes both parents again before publishing.
+        fsync_dir(os.path.dirname(retired))
+        fsync_dir(os.path.dirname(staged))
     else:
         raise NeedsIntervention(
             f"cannot prepare {mod['rel']}: staged={staged_kind}, retired={retired_kind}"
@@ -886,7 +902,13 @@ def _remove_created_links(journal):
         path = link["live_path"]
         if lstat_kind(path) == "symlink" and os.readlink(path) == link["target"]:
             os.unlink(path)
-            fsync_dir(os.path.dirname(path))
+        elif lstat_kind(path) != "missing":
+            link["created"] = False
+            link["status"] = "pending"
+            continue
+        # The link is gone only once its parent has been flushed. A retry
+        # that finds it already absent still has to flush.
+        fsync_dir(os.path.dirname(path))
         link["created"] = False
         link["status"] = "pending"
 
@@ -1535,7 +1557,7 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
     require_plain_run_id(run_id)
     path = journal_path(state_root, run_id)
     faults = faults or FaultInjector()
-    now = time.time if clock is None else clock
+    now = current_time if clock is None else clock
     lock = FileLock(state_root)
     lock.acquire(lock_timeout)
     try:
@@ -1612,7 +1634,11 @@ def rollback(state_root, run_id, faults=None, clock=None, lock_timeout=None):
                 if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
                     faults.reach(f"rollback.unlink:{link['rel']}")
                     os.unlink(link_path)
-                    fsync_dir(os.path.dirname(link_path))
+                elif lstat_kind(link_path) != "missing":
+                    link["created"] = False
+                    link["status"] = "removed"
+                    continue
+                fsync_dir(os.path.dirname(link_path))
                 link["created"] = False
                 link["status"] = "removed"
             journal["state"] = "rolled_back"
