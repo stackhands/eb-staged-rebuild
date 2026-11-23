@@ -61,7 +61,7 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-1
 ```
 
-`probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover failed runs, rollback and `gc`.
+`probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. With `--verify`, it first checks the new tree as `verify` does, and leaves a tree that fails unpublished unless `--force` is given. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover the checks, failed runs, rollback and `gc`.
 Sites that keep a filesystem reserve can add `--min-free-bytes BYTES` to `run`; without it, the command does not check free space.
 
 ## Changelog

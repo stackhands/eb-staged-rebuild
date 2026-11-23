@@ -1,5 +1,5 @@
-//! retire, rollback of a retire journal, and gc: the commands that change a
-//! module tree or a state root without building anything.
+//! retire, rollback of a retire journal, gc and verify: the commands that
+//! change a module tree or a state root without building anything.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -90,7 +90,66 @@ pub fn matchingRunId(journal: Py, run_id: []const u8) bool {
         std.mem.eql(u8, recorded.str, run_id);
 }
 
-/// os.path.abspath(os.path.normpath(p)).
+/// What a rebuild journal has to record before a command reads it.
+const run_fields = [_][]const u8{ "software", "modules", "generation_root", "state", "backend" };
+const plan_fields = [_][]const u8{ "rel", "live_module", "prepared", "staged", "live_software", "retired" };
+
+pub const RunJournal = struct { path: []const u8, journal: Py };
+
+/// load_run_journal: the path and journal of run `run_id` under the
+/// caller's `state_root`, checked. The path is made from `state_root` and
+/// the plain name `run_id` alone; see checkRunJournal for what the journal
+/// has to record.
+pub fn loadRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8) RunJournal {
+    if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
+    const path = journalPath(a, state_root, run_id);
+    const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
+    if (!st.isReg()) refuse("no journal at {s}", .{path});
+    const journal = main_mod.loadJournal(a, path);
+    checkRunJournal(a, state_root, run_id, journal);
+    return .{ .path = path, .journal = journal };
+}
+
+/// check_run_journal: a journal read from `state_root`/runs/`run_id` has
+/// to name that run and that state root. A rebuild journal also has to
+/// record, as non-empty text, each of run_fields and each of plan_fields in
+/// every module plan entry, so no command reads a field that is missing or
+/// acts on a journal that describes another state root.
+pub fn checkRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8, journal: Py) void {
+    if (!matchingRunId(journal, run_id)) refuse("journal run id does not match its directory", .{});
+    const recorded = recordedField(journal, "state_root");
+    const root = abspath(a, state_root);
+    if (!std.mem.eql(u8, abspath(a, recorded), root)) refuse("journal state root {s} is not {s}", .{ recorded, root });
+    if (eqlStr(pyfmt.get(journal, "kind"), "retire")) return;
+    for (run_fields) |field| _ = recordedField(journal, field);
+    const mods = pyfmt.get(journal, "modules_plan") orelse refuse("journal does not record modules_plan", .{});
+    if (mods != .list) refuse("journal does not record modules_plan", .{});
+    for (mods.list) |mod| for (plan_fields) |field| {
+        const value = str(pyfmt.get(mod, field)) orelse "";
+        if (value.len == 0) refuse("journal module plan does not record {s}", .{field});
+    };
+}
+
+/// require_stage_modules: with LMOD_CMD set, verify loads each module from
+/// the journal's stage_modules, so a journal without it is refused.
+pub fn requireStageModules(env: probe.Env, journal: Py) void {
+    const lmod = env.get("LMOD_CMD") orelse "";
+    const stage = str(pyfmt.get(journal, "stage_modules")) orelse "";
+    if (lmod.len > 0 and stage.len == 0) refuse("journal does not record stage_modules", .{});
+}
+
+fn recordedField(journal: Py, field: []const u8) []const u8 {
+    const value = str(pyfmt.get(journal, field)) orelse "";
+    if (value.len == 0) refuse("journal does not record {s}", .{field});
+    return value;
+}
+
+/// os.path.abspath(os.path.normpath(p)): `p` made absolute against the
+/// working directory, with empty and `.` segments dropped and each `..`
+/// removing the segment before it, without following symbolic links. As
+/// POSIX leaves a path that begins with exactly two slashes to the system,
+/// `//` is kept and names another path than `/`; three or more leading
+/// slashes are one.
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
     return fsx.absPath(a, p) catch oom();
 }
@@ -517,6 +576,31 @@ pub fn retire(
     _ = saveJournal(c, path, journal, "journal.retired");
     log("retired {s} -> {s}; software directory {s} left in place", .{ p.module, destination, p.software_dir });
     return 0;
+}
+
+// ---- verify ---------------------------------------------------------------
+
+/// verify: check the stage of a built run under the state root's lock, and
+/// write and print the result with run.zig's verifyCommand. Returns the exit
+/// status: 0 when the stage passes, 1 when it fails.
+pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
+    const a = c.a;
+    if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
+    const l = lock(c, state_root, lock_timeout);
+    defer l.release();
+    const loaded = loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    const journal = loaded.journal;
+    if (eqlStr(pyfmt.get(journal, "kind"), "retire")) refuse("run {s} is a retire record; it has no stage to verify", .{run_id});
+    const state_name = str(pyfmt.get(journal, "state")) orelse "";
+    if (!std.mem.eql(u8, state_name, "built")) refuse("run {s} is {s}; only a built run has a stage to verify", .{ run_id, state_name });
+    requireStageModules(c.env, journal);
+    const run_mod = @import("run.zig");
+    var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
+    return run_mod.verifyCommand(&r) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
 }
 
 // ---- rollback -------------------------------------------------------------
