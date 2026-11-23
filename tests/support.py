@@ -169,11 +169,12 @@ def restore_os(originals):
 
 
 
-def _lock_and_sleep(state_root: str) -> None:
+def _lock_and_sleep(state_root: str, acquired) -> None:
     from eb_staged_rebuild.lockfile import FileLock
 
     lock = FileLock(state_root)
     lock.acquire(0)
+    acquired.set()
     try:
         import time
 
@@ -184,23 +185,12 @@ def _lock_and_sleep(state_root: str) -> None:
 
 def start_lock_holder_process(state_root: str):
     import multiprocessing as mp
-    import time
 
-    from eb_staged_rebuild.errors import Refused
-    from eb_staged_rebuild.lockfile import FileLock
-
-    proc = mp.Process(target=_lock_and_sleep, args=(state_root,))
+    acquired = mp.Event()
+    proc = mp.Process(target=_lock_and_sleep, args=(state_root, acquired))
     proc.start()
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        contender = FileLock(state_root)
-        try:
-            contender.acquire(0)
-        except Refused:
-            return proc
-        else:
-            contender.release()
-            time.sleep(0.01)
+    if acquired.wait(5):
+        return proc
     proc.terminate()
     proc.join(5)
     raise RuntimeError("lock holder did not acquire the state-root lock")
