@@ -1,10 +1,12 @@
-"""verify and resume check a run's journal once, where they load it, for both implementations.
+"""verify, resume and rollback check each run journal once, where they load it, for both implementations.
 
-Each test changes the journal of a built run in one way the commands must
-not act on, then runs ``verify``, ``resume --verify`` and ``resume`` on it.
-Both front ends refuse it with exit 2 and the same message, before anything
-under the site is written. Runs the Python tool and, when TOOL_BIN is set,
-the program it names.
+Each test changes a journal in one way the commands must not act on. Then
+``verify``, ``resume --verify`` and ``resume`` run on a built run, or
+``rollback RUN_ID``, ``rollback --latest`` and ``rollback --to GEN`` on
+published ones; ``--latest`` and ``--to`` check every journal under
+``runs/`` before they choose. Both front ends refuse with exit 2 and the
+same message, before anything under the site is written. Runs the Python
+tool and the program TOOL_BIN names.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 -m unittest -v tests.test_run_journal_cli
 """
@@ -163,6 +165,91 @@ class RunJournalCliTests(unittest.TestCase):
                     self.edit(site, change)
                     self.assert_refused(site, "journal does not record stage_modules", commands=verifying, LMOD_CMD=FAKE_LMOD)
                     self.edit(site, lambda journal: journal.update(original))
+
+
+
+class RollbackJournalCliTests(unittest.TestCase):
+    def setUp(self):
+        self.previous_umask = os.umask(0o022)
+
+    def tearDown(self):
+        os.umask(self.previous_umask)
+
+    def published(self):
+        """One site per front end where runs r1, r2 and r3 published demo/1 in turn."""
+        made = sites(self, Site, "rollback-journal-cli-")
+        for site in made:
+            for run_id in ("r1", "r2", "r3"):
+                done = site.run(run_id=run_id, verify=False, FAKE_EB_PAYLOAD=f"{run_id}\n")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return made
+
+    def edit(self, site, run_id, change):
+        journal = site.journal(run_id)
+        change(journal)
+        write(site.journal_path(run_id), json.dumps(journal, indent=2, sort_keys=True) + "\n")
+
+    def assert_refused(self, site, message, *forms):
+        """``rollback`` with each of FORMS exits 2 with MESSAGE and writes nothing."""
+        for form in forms or (["--latest"], ["--to", "r1"], ["r3"]):
+            with self.subTest(rollback=form):
+                before = snapshot(site.root)
+                done = site.cli("rollback", "--state-root", site.state, *form)
+                self.assertEqual(
+                    (done.returncode, done.stdout, done.stderr), (2, "", f"eb-staged-rebuild: {message}\n")
+                )
+                self.assertEqual(snapshot(site.root), before)
+
+    def test_to_a_generation_that_is_not_a_plain_name(self):
+        for site in self.published():
+            with self.subTest(tool=site.name):
+                for gen in ("../state/runs/r1", ".", ".."):
+                    self.assert_refused(site, f"run id is not a plain name: '{gen}'", ["--to", gen])
+
+    def test_any_journal_that_names_another_run(self):
+        for site in self.published():
+            with self.subTest(tool=site.name):
+                copy = os.path.join(site.state, "runs", "r9")
+                shutil.copytree(os.path.join(site.state, "runs", "r3"), copy)
+                self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
+                for change in (lambda journal: journal.pop("run_id"), lambda journal: journal.update(run_id="../r3")):
+                    self.edit(site, "r9", change)
+                    self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
+                shutil.rmtree(copy)
+                self.edit(site, "r3", lambda journal: journal.update(run_id="r9"))
+                self.assert_refused(site, "journal run id does not match its directory")
+
+    def test_to_looks_the_generation_up_by_its_directory(self):
+        for site in self.published():
+            with self.subTest(tool=site.name):
+                self.edit(site, "r1", lambda journal: journal.update(run_id="g1"))
+                self.assert_refused(site, "journal run id does not match its directory", ["--to", "g1"], ["--to", "r1"])
+
+    def test_any_journal_that_describes_another_state_root(self):
+        for site in self.published():
+            with self.subTest(tool=site.name):
+                elsewhere = os.path.join(site.root, "elsewhere")
+                for run_id in ("r1", "r3"):
+                    with self.subTest(journal=run_id):
+                        self.edit(site, run_id, lambda journal: journal.update(state_root=elsewhere))
+                        forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
+                        self.assert_refused(site, f"journal state root {elsewhere} is not {site.state}", *forms)
+                        self.edit(site, run_id, lambda journal: journal.update(state_root=site.state))
+
+    def test_any_journal_without_a_field_the_commands_read(self):
+        for site in self.published():
+            with self.subTest(tool=site.name):
+                for run_id in ("r1", "r3"):
+                    forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
+                    original = site.journal(run_id)
+                    with self.subTest(journal=run_id, field="backend"):
+                        self.edit(site, run_id, lambda journal: journal.pop("backend"))
+                        self.assert_refused(site, "journal does not record backend", *forms)
+                        self.edit(site, run_id, lambda journal: journal.update(original))
+                    with self.subTest(journal=run_id, field="live_software"):
+                        self.edit(site, run_id, lambda journal: journal["modules_plan"][0].update(live_software=""))
+                        self.assert_refused(site, "journal module plan does not record live_software", *forms)
+                        self.edit(site, run_id, lambda journal: journal.update(original))
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ Each page states facts in the order the thing itself has them.
    exit-status
    files
    verify
+   generations
    compatibility
    api
 #+end_export

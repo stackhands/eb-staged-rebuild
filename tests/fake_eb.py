@@ -133,12 +133,14 @@ def _extra(generation, root):
 
 
 def _lua(root):
+    # FAKE_EB_MODULE_NOTE: a comment line, so that runs write different module files.
+    note = os.environ.get("FAKE_EB_MODULE_NOTE")
     return (
         f'local root = "{root}"\n'
         'conflict("demo")\n'
         'setenv("EBROOTDEMO", root)\n'
         'setenv("EBVERSIONDEMO", "1")\n'
-    )
+    ) + (f"-- {note}\n" if note else "")
 
 
 def _unseal(top):

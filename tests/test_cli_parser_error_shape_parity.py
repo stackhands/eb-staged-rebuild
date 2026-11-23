@@ -7,7 +7,7 @@ import unittest
 
 from tests.support import run_cli, run_cli_binary
 
-COMMANDS = "{probe,run,resume,verify,rollback,gc,retire,status,resolve}"
+COMMANDS = "{probe,run,resume,verify,rollback,gc,retire,status,list,resolve}"
 
 
 class CliParserErrorShapeParityTests(unittest.TestCase):

@@ -204,6 +204,7 @@ ls -l /opt/site/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh
 
 =--force=, on =run --verify= or on =resume=, publishes a generation that fails the checks, for a problem that the checks report but that does not matter at this site.
 The checks still run and the report is still written; the journal's =verify= then has ="forced": true=, and the output says =verify failed; publishing run RUN_ID anyway (--force)=.
+With =--ledger-config=, the run's ledger records carry =build.verify= as well, so the ledger shows which publications were forced.
 Without the checks there is nothing for =--force= to override, so =run --force= without =--verify=, and =resume --force= of a run that does not check, are refused.
 
 ** Check a run that was started without =--verify=

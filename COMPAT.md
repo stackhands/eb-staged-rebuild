@@ -1,7 +1,7 @@
 # The Zig build and the Python tool
 
 The Zig build in `zig/` carries every command of the Python tool: `probe`,
-`status`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
+`status`, `list`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
 with or without `--ledger-config`. Either build can be used: releases carry the
 binary, and CI runs the command-line and real-EasyBuild tests against it
 through `TOOL_BIN`.
