@@ -38,7 +38,6 @@ class ResolveBlackBoxTests(unittest.TestCase):
             self.assertTrue(data["complete"])
             self.assertEqual(data["root"], software)
 
-    @unittest.expectedFailure
     def test_resolve_malformed_module_should_report_parse_reason(self) -> None:
         """Reproducer: eb-staged-rebuild resolve /tmp/bad.lua"""
         with tempfile.TemporaryDirectory() as tmp:

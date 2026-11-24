@@ -249,12 +249,56 @@ def retire(
         lock.release()
 
 
-def _discard_empty(top):
-    for current, _dirs, _files in os.walk(top, topdown=False):
+def _list_dirs(top):
+    """Names of real subdirectories of ``top``.
+
+    An interrupted read is tried again. Any other error is raised. A symlink
+    is not a subdirectory. An entry whose type cannot be read is not one either.
+    """
+    while True:
         try:
-            os.rmdir(current)
+            with os.scandir(top) as scan:
+                names = []
+                for entry in scan:
+                    while True:
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                            break
+                        except OSError as exc:
+                            if exc.errno == errno.EINTR:
+                                continue
+                            is_dir = False
+                            break
+                    if is_dir:
+                        names.append(entry.name)
+            return names
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                continue
+            raise
+
+
+def _discard_empty(top):
+    """Remove ``top`` and empty directories under it.
+
+    An interrupted listing is tried again, so one signal does not leave the
+    directory behind. When the listing fails for another reason the directory
+    is removed if it is empty, and the walk does not descend.
+    """
+    try:
+        names = _list_dirs(top)
+    except OSError:
+        try:
+            os.rmdir(top)
         except OSError:
             pass
+        return
+    for name in names:
+        _discard_empty(os.path.join(top, name))
+    try:
+        os.rmdir(top)
+    except OSError:
+        pass
 
 
 def _move(source, destination, faults, step):

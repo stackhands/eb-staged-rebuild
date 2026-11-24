@@ -196,10 +196,10 @@ rebuild command implemented by the Zig binary.
 | GarbageCollectionTests.test_run_refuses_a_grace_period_below_0_or_not_finite | differential "run, --grace-hours below 0", "run, a grace period below 0 in the environment" |
 | GarbageCollectionTests.test_gc_refuses_an_environment_grace_period_that_is_not_a_number | differential "gc, a grace period in the environment that is not a number", "gc, an empty grace period in the environment", "gc, a grace period in the environment that needs quoting" |
 | GarbageCollectionTests.test_run_refuses_an_environment_grace_period_that_is_not_a_number | differential "run, a grace period in the environment that is not a number" |
-| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
+| StateRootVariableTests.test_every_command_takes_the_state_root_from_the_environment | differential "status, the state root from the environment", "resume, the state root from the environment", "verify, the state root from the environment", "list, the state root from the environment", "gc, the state root from the environment", "retire --dry-run, the state root from the environment", "rollback, the state root from the environment" |
 | StateRootVariableTests.test_the_option_wins_over_the_environment | differential "status, --state-root instead of the environment" |
 | StateRootVariableTests.test_without_the_variable_the_option_is_required | differential "status, no option", "status, an empty state root in the environment" |
-| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
+| StateRootVariableTests.test_with_the_variable_the_usage_shows_the_option_as_optional | differential "rollback, no run id with the state root from the environment", "status --help, the state root from the environment", "resume --help, the state root from the environment", "verify --help, the state root from the environment", "list --help, the state root from the environment"; `zig/main.zig` test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" |
 | RunIdBoundaryTests.test_run_id_cannot_escape_the_state_root | differential "run, a run id with path components" |
 | RunIdBoundaryTests.test_resume_and_rollback_reject_path_components | differential "resume, a run id with path components", "rollback, a run id with path components" |
 | RunIdBoundaryTests.test_journal_run_id_must_match_its_directory | `zig/run.zig` enforces the same check before resume and `zig/admin.zig` before rollback |
@@ -245,6 +245,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 | SwapTests.test_exchange_failure_after_success_restores_live | `zig/swap.zig` test "an exchange whose sync fails is exchanged back"; fail_matrix "one module: run fails at swap:all/demo/1.lua.exchange.after" |
 | SwapTests.test_non_fallback_exchange_error_leaves_live_unchanged | `zig/swap.zig` test "an exchange error other than unsupported leaves live unchanged" |
 | SwapTests.test_a_full_or_read_only_exchange_names_the_live_directory | `zig/swap.zig` test "a full or read-only exchange names the live directory" |
+| SwapTests.test_a_failed_parent_flush_names_the_parent_directory | `zig/swap.zig` test "a failed parent flush names the parent directory" |
 | SwapTests.test_unsupported_exchange_uses_fallback | `zig/swap.zig` test "an unsupported exchange uses the fallback" |
 | SwapTests.test_unsupported_exchange_is_refused_when_fallback_is_disabled | `zig/swap.zig` test "an unsupported exchange is refused when fallback is disabled" |
 | SwapTests.test_every_injected_fallback_failure_restores_live | `zig/swap.zig` test "every failed fallback rename or sync restores live" (the injected step precedes the rename that fails) |
@@ -285,6 +286,16 @@ The Python test also passes the generated text to `promtool check metrics` when 
 | MetricsTests.test_metrics_are_an_atomic_prometheus_file | zig-common `src/atomic_test.zig` atomic replacement tests; `zig/admin.zig` test "metrics exclude a retired publication whose live module is missing" |
 | MetricsTests.test_gc_timestamp_is_taken_after_locked_work | `zig/admin.zig` test "gc records its completion time after its starting time" |
 | MetricsTests.test_dry_run_refuses_to_write_metrics | `zig/main.zig` dispatches the same refusal in `admin.gc` |
+
+### tests/test_inuse.py
+
+The scan itself runs against both builds in `tests/test_generations_cli.py` (`GcCliTests`) and in
+differential "gc --check-in-use keeps a tree and a generation in use".
+
+| test | replacement |
+|---|---|
+| ParsingTests.test_mountinfo_fields_are_unescaped_and_a_trees_path_follows_the_mount_that_holds_it | `zig/inuse.zig` test "mountinfo fields are unescaped and a tree's path on its device follows the mount that holds it" |
+| ParsingTests.test_a_maps_line_names_the_file_after_its_first_five_fields | `zig/inuse.zig` test "a maps line names the file after its first five fields" |
 
 ### tests/test_prefix.py
 
@@ -576,3 +587,26 @@ it writes, with ids, times and the state root's scope normalized.
 |---|---|
 | RealEbStackLedgerTests.test_append_recovery_and_idempotence | `tests/test_ledger_eb_stack_cli.py` CliEbStackLedgerTests.test_append_recovery_and_idempotence (a real eb-stack; the run is killed with SIGKILL at `ledger.acked:*`, resumed twice, rolled back twice; Python and the binary) |
 | LedgerConfigValidationTests.test_load_config_rejects_non_finite_timeout | `zig/publish.zig` test "isPositiveTimeout rejects non-finite and non-positive values" |
+
+## tests/test_gc_dir_fsync.py
+
+The journal is read with `read_bytes` and with `open(..., "rb")`. Those bytes are what the two frontends are compared on.
+
+| test | replacement |
+|---|---|
+| GenerationDirFsyncTests.test_failed_directory_flush_after_generation_removal_is_reported | `zig/admin.zig` test "a failed directory flush after a generation directory is removed is reported", and this test against the release binary |
+| GenerationDirFsyncTests.test_generation_flush_error_matches_across_frontends | this test: stdout, stderr, exit status, and the raw journal bytes |
+
+## tests/test_stage_source_dir_fsync.py
+
+| test | replacement |
+|---|---|
+| StageSourceDirFsyncTests.test_failed_source_parent_flush_matches_across_frontends | `zig/run.zig` test "a failed flush of the source parent after a cross-directory rename is reported", and this test against the release binary |
+| StageSourceDirFsyncTests.test_journals_are_the_same_bytes_under_the_test_clock | this test reads both journals with `read_bytes` and `open(..., "rb")` under `EB_STAGED_REBUILD_NOW` |
+
+## tests/test_dir_fsync_retry.py
+
+| test | replacement |
+|---|---|
+| DirFsyncRetryTests.test_resume_flushes_the_source_parent_again | `zig/run.zig` test "a retry flushes the source parent again after the rename", and this test against the release binary |
+| DirFsyncRetryTests.test_a_missing_created_link_is_flushed_again | `zig/run.zig` test "a retry flushes the parent of a created link that is already gone" |

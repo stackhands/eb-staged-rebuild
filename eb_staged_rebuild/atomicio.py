@@ -27,10 +27,19 @@ Metadata = namedtuple("Metadata", "info acls")
 
 
 def fsync_dir(path):
-    """Flush a directory's entries to disk, so that a rename in it is durable."""
+    """Flush a directory's entries to disk, so that a rename in it is durable.
+
+    ``os.fsync`` records no filename. The error is re-raised on ``path``,
+    the directory that was flushed, so the message names that directory.
+    """
     fd = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(fd)
+        try:
+            os.fsync(fd)
+        except OSError as error:
+            if error.filename is not None:
+                raise
+            raise OSError(error.errno, error.strerror, path) from error
     finally:
         os.close(fd)
 

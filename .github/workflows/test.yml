@@ -30,7 +30,14 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - name: zig binary for the tests that run both front ends
+        run: zig build -Drelease=true
       - name: unit tests
+        env:
+          TOOL_BIN: ${{ github.workspace }}/zig-out/bin/eb-staged-rebuild
         run: |
           python -m pip install jsonschema
           python -m unittest discover -s tests -v
@@ -147,7 +154,7 @@ jobs:
       - name: ledger CLI
         uses: ./.github/actions/pinned-ledger
       - name: bubblewrap and Lmod
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl acl
       - name: EasyBuild 5.4.2
         run: python -m pip install easybuild-framework==5.4.2 easybuild-easyblocks==5.4.2 easybuild-easyconfigs==5.4.2
       - name: user namespaces for the userns backend
@@ -165,6 +172,9 @@ jobs:
           LMOD_CMD: /usr/share/lmod/lmod/libexec/lmod
         run: |
           sudo install -d -o "$(id -u)" -g "$(id -g)" /opt/site
+          # The runner's /opt hands a default ACL on to /opt/site, and that ACL,
+          # not EASYBUILD_UMASK, would set the modes of the verify case's tree.
+          sudo setfacl -b /opt/site
           export PATH="$PWD/zig-out/bin:/usr/share/lmod/lmod/libexec:${PATH}"
           bash docs/examples/site.sh all
 
@@ -192,15 +202,30 @@ jobs:
         with:
           version: 0.17.1
       - run: zig fmt --check build.zig build.zig.zon zig
+      - name: fuse3 before the zig tests that compile faultfs
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
       - run: zig build test --summary all
       - run: zig build -Drelease=true
+      - name: promtool 3.16.0
+        uses: ./.github/actions/pinned-promtool
       - name: the release binary carries no test hooks
         run: |
           ! grep -aq EB_STAGED_REBUILD_ACL_MODEL zig-out/bin/eb-staged-rebuild
           ! grep -aq EB_STAGED_REBUILD_FAIL_AT zig-out/bin/eb-staged-rebuild
+          ! grep -aq EB_STAGED_REBUILD_NOW zig-out/bin/eb-staged-rebuild
           ! zig build -Dtest-ops -Drelease=true
       - name: the -Dtest-ops test artifact
         run: zig build -Dtest-ops
+      - name: user namespaces for the user attribute parity test
+        # Ubuntu's AppArmor refuses user namespaces to unconfined programs.
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Python unit discovery against the release and test-ops binaries
+        run: |
+          python -m pip install jsonschema
+          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest discover -s tests -v
       - name: build.zig.zon's version and -Dcommit reach --version
         run: bash tests/build_version.sh
       - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
@@ -216,15 +241,17 @@ jobs:
         uses: ./.github/actions/pinned-ledger
       - name: publication access metadata against the Python tool
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_metadata.py
-      - name: ACL publication tests against the test artifact
-        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli
+      - name: ACL publication and ready-unlink parity tests against the test artifact
+        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli tests.test_prefix_ready_unlink_parity
+      - name: generations, both implementations
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_generations_cli
       - name: a run and a rollback failed at every step, against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
       - name: ledger append, recovery and idempotence against eb-stack, both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
       - name: the bounded ledger call through run, both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_bounded_cli
-      - name: promtool 3.16.0
-        uses: ./.github/actions/pinned-promtool
       - name: metrics output and atomic failures against both implementations
         run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli
+      - name: a user attribute the filesystem will not copy
+        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity

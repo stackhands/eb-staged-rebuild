@@ -78,7 +78,19 @@ def _validate_pair(live, staged):
 
 
 def _sync_parent(live):
-    fsync_dir(os.path.dirname(live))
+    """Flush the directory that holds ``live``.
+
+    ``os.fsync`` records no filename. The error is re-raised on the parent
+    directory, so the exchange handler does not report it on the install
+    directory.
+    """
+    parent = os.path.dirname(live)
+    try:
+        fsync_dir(parent)
+    except OSError as error:
+        if error.filename is not None:
+            raise
+        raise OSError(error.errno, error.strerror, parent) from error
 
 
 def _restore_fallback(live, staged, hold, rename):

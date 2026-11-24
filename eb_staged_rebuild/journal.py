@@ -5,6 +5,7 @@ import os
 
 from eb_staged_rebuild.atomicio import atomic_write, read_bytes
 from eb_staged_rebuild.errors import NeedsIntervention, Refused
+from eb_staged_rebuild.paths import abspath
 
 # Schema 2 records a directory swap: stable live path, staged path, retired sibling.
 # Schema 1 is the generation-pointer journal this line refuses to interpret.
@@ -131,11 +132,79 @@ def load_journal(path):
     return data
 
 
+# What a rebuild journal has to record before a command reads it.
+RUN_FIELDS = ("software", "modules", "generation_root", "state", "backend")
+PLAN_FIELDS = ("rel", "live_module", "prepared", "staged", "live_software", "retired")
+
+
+def load_run_journal(state_root, run_id):
+    """Return the path and journal of run RUN_ID under the caller's STATE_ROOT, checked.
+
+    The path is made from STATE_ROOT and the plain name RUN_ID alone; see
+    ``check_run_journal`` for what the journal has to record.
+    """
+    require_plain_run_id(run_id)
+    path = journal_path(state_root, run_id)
+    data = load_journal(path)
+    check_run_journal(state_root, run_id, data)
+    return path, data
+
+
+def check_run_journal(state_root, run_id, data):
+    """Require a journal read from ``STATE_ROOT/runs/RUN_ID`` to be one a command may act on.
+
+    It has to name that run and that state root. A rebuild journal also has to
+    record, as non-empty text, each field of RUN_FIELDS and each field of
+    PLAN_FIELDS in every module plan entry, so no command reads a field that is
+    missing or acts on a journal that describes another state root.
+    """
+    require_matching_run_id(data, run_id)
+    recorded = _recorded(data, "state_root")
+    if abspath(recorded) != abspath(state_root):
+        raise NeedsIntervention(f"journal state root {recorded} is not {abspath(state_root)}")
+    if data.get("kind") == "retire":
+        return
+    for field in RUN_FIELDS:
+        _recorded(data, field)
+    plan = data.get("modules_plan")
+    if not isinstance(plan, list):
+        raise NeedsIntervention("journal does not record modules_plan")
+    for mod in plan:
+        for field in PLAN_FIELDS:
+            value = mod.get(field)
+            if not isinstance(value, str) or not value:
+                raise NeedsIntervention(f"journal module plan does not record {field}")
+
+
+def _recorded(data, field):
+    value = data.get(field)
+    if not isinstance(value, str) or not value:
+        raise NeedsIntervention(f"journal does not record {field}")
+    return value
+
+
 def list_journals(state_root):
     """Return the journals under ``STATE_ROOT/runs``, in name order.
 
     An entry without a regular ``journal.json`` is left out.
     """
+    return [data for _name, data in _journals(state_root)]
+
+
+def run_journals(state_root):
+    """Return the journals ``list_journals`` returns, each checked as ``load_run_journal`` checks one.
+
+    A command that chooses among the runs refuses them all if one names
+    another run or state root or lacks a field, before it chooses.
+    """
+    found = []
+    for name, data in _journals(state_root):
+        check_run_journal(state_root, name, data)
+        found.append(data)
+    return found
+
+
+def _journals(state_root):
     runs = os.path.join(os.fspath(state_root), "runs")
     found = []
     if not os.path.isdir(runs):
@@ -143,5 +212,5 @@ def list_journals(state_root):
     for name in sorted(os.listdir(runs)):
         path = os.path.join(runs, name, "journal.json")
         if os.path.isfile(path) and not os.path.islink(path):
-            found.append(load_journal(path))
+            found.append((name, load_journal(path)))
     return found

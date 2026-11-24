@@ -31,7 +31,7 @@ HEAD=$SITE/ledger-heads/head.json
 
 cases="probe dry-run rebuild prepare files fail resume rollback gc retire lock
 robot userns build-dir no-easyconfig not-installed ledger-setup ledger-run
-ledger-rollback"
+ledger-rollback verify list rollback-to gc-keep"
 
 export EASYBUILD_SOURCEPATH=$SITE/sources
 export EASYBUILD_INSTALLPATH_SOFTWARE=$SITE/software
@@ -99,7 +99,7 @@ case_fail() {
 }
 
 case_resume() {
-    step 0 cp "$HOME/sources/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
+    step 0 install -m 644 "$here/site/example-1.0.sh" "$SITE/sources/e/Example/example-1.0.sh"
     step 0 eb-staged-rebuild resume --state-root "$STATE" example-3
     step 0 eb-staged-rebuild status --state-root "$STATE" example-3
 }
@@ -135,11 +135,16 @@ case_retire() {
 }
 
 case_lock() {
-    # Another process holds the state root's lock for three seconds.
-    flock "$STATE/.lock" sleep 3 &
-    sleep 0.5
+    # Another process holds the state root's lock, says so, and lets go
+    # when this case writes a line to it.
+    : > "$STATE/.lock"
+    local to from
+    coproc HOLDER { flock "$STATE/.lock" sh -c 'echo held; read -r _'; }
+    from=${HOLDER[0]} to=${HOLDER[1]}
+    read -r _ <&"$from"
     step 2 eb-staged-rebuild gc --state-root "$STATE" --dry-run --lock-timeout 0.2
-    wait
+    echo release >&"$to"
+    wait "$HOLDER_PID"
 }
 
 case_robot() {
@@ -201,6 +206,56 @@ case_ledger-run() {
 case_ledger-rollback() {
     step 0 eb-staged-rebuild rollback --state-root "$STATE" example-4
     step 0 "$EB_STACK" ledger show --log "$LOG" --package Example
+}
+
+case_verify() {
+    # The builder's EasyBuild configuration leaves the new tree readable by
+    # its owner only.
+    export EASYBUILD_UMASK=077
+    STATUS=2 run_example example-6 --verify
+    unset EASYBUILD_UMASK
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
+    step 1 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 cat "$STATE/runs/example-6/verify.json"
+    step 0 chmod -R go+rX "$STATE/generations/example-6/software/Example/1.0-GCCcore-15.2.0"
+    step 0 eb-staged-rebuild verify --state-root "$STATE" example-6
+    step 0 eb-staged-rebuild resume --state-root "$STATE" example-6
+    step 0 ls -l "$SITE/software/Example/1.0-GCCcore-15.2.0/example-1.0.sh"
+}
+
+case_list() {
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+}
+
+case_rollback-to() {
+    run_example example-7
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-6
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --to example-6
+    step 0 eb-staged-rebuild rollback --state-root "$STATE" --latest
+    step 0 eb-staged-rebuild status --state-root "$STATE" example-6
+    step 2 eb-staged-rebuild rollback --state-root "$STATE" --to example-7
+}
+
+case_gc-keep() {
+    local tree=$SITE/software/Example/.1.0-GCCcore-15.2.0.example-8 to from
+    run_example example-8
+    run_example example-9
+    step 0 eb-staged-rebuild list --state-root "$STATE"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --dry-run
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --dry-run
+    # A job on this machine with its working directory in the tree that
+    # example-8 replaced. It says so once it is there, and ends when this
+    # case writes a line to it.
+    coproc JOB { cd "$tree" && echo ready && read -r _; }
+    from=${JOB[0]} to=${JOB[1]}
+    read -r _ <&"$from"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
+    echo release >&"$to"
+    wait "$JOB_PID"
+    step 0 eb-staged-rebuild gc --state-root "$STATE" --keep 1 --grace-hours 0 --check-in-use
+    step 0 eb-staged-rebuild list --state-root "$STATE"
 }
 
 clean() {

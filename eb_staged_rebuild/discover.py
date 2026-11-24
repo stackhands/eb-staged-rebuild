@@ -1,9 +1,16 @@
 """Find module files EasyBuild wrote and decide which install directory they name."""
 
+import errno
 import os
 
+from eb_staged_rebuild.atomicio import read_bytes
 from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.modulefile import loads, module_identity, parse_root, rewrite_root
+from eb_staged_rebuild.modulefile import (
+    loads,
+    module_identity,
+    parse_root,
+    rewrite_root,
+)
 from eb_staged_rebuild.paths import abspath, is_real_dir, is_within, lstat_kind
 
 
@@ -12,14 +19,24 @@ def walk_module_tree(modules_root):
 
     ``files`` is a list of regular ``.lua`` and ``.tcl`` files. ``links`` is a
     list of ``(relative posix path, link text)``. Symlinked directories are not
-    descended into.
+    descended into. An interrupted read of a directory is raised. Any other
+    error reading a directory refuses the tree, as the Zig walk does.
     """
     modules_root = os.fspath(modules_root)
     files = []
     links = []
+
+    def _walk_error(error):
+        # os.walk skips a directory whose os.scandir fails unless this raises.
+        if error.errno == errno.EINTR:
+            raise error
+        raise Refused(f"module tree is unreadable: {modules_root}") from error
+
     if lstat_kind(modules_root) != "dir":
         raise Refused(f"module tree is not a real directory: {modules_root}")
-    for dirpath, dirnames, filenames in os.walk(modules_root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(
+        modules_root, followlinks=False, onerror=_walk_error
+    ):
         kept = []
         for name in list(dirnames):
             child = os.path.join(dirpath, name)
@@ -103,8 +120,14 @@ def order_module_files(files, modules_root):
     """Publish dependencies first. A cycle falls back to path order for the rest."""
     texts = {}
     for path in files:
-        with open(path, encoding="utf-8") as handle:
-            texts[path] = handle.read()
+        try:
+            raw = read_bytes(path)
+        except OSError as exc:
+            raise Refused(f"cannot read staged module file {path}: {exc}") from exc
+        try:
+            texts[path] = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise Refused(f"{path} is not UTF-8 text") from exc
     identity = {path: module_identity(modules_root, path).replace(os.sep, "/") for path in files}
     by_identity = {}
     for path, name in identity.items():

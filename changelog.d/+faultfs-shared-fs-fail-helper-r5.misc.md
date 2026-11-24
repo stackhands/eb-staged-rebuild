@@ -1,0 +1,1 @@
+Fault-injection tests share helpers for skip policy, Python 3.14 selection, ptrace checks, per-test tracer builds, and Filesystem in Userspace mount probes, removing duplicated setup code across parity suites.

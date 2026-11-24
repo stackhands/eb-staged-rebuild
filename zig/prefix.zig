@@ -17,6 +17,7 @@ const admin = @import("admin.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
+const pyfmt = @import("pyfmt.zig");
 const oom = @import("oom.zig").oom;
 const Allocator = std.mem.Allocator;
 
@@ -176,7 +177,24 @@ fn transformed(a: Allocator, data: []const u8, old: []const u8, new: []const u8,
     return (try replacePrefix(a, data, old, new, why)).bytes;
 }
 
-fn punchZeros(fd: fsx.fd_t, data: []const u8) void {
+fn punchIgnored() bool {
+    // Python leaves the written zeros in place for these and continues.
+    return switch (sys.last_errno) {
+        .OPNOTSUPP, .NOSYS, .INVAL => true,
+        else => false,
+    };
+}
+
+fn refusePunch(a: Allocator, why: *[]const u8, partial: []const u8) Error {
+    var out: std.ArrayList(u8) = .empty;
+    const text = sys.errnoText(sys.last_errno) orelse "Unknown error";
+    out.print(a, "[Errno {d}] fallocate(PUNCH_HOLE): {s}: ", .{ @backingInt(sys.last_errno), text }) catch return error.OutOfMemory;
+    pyfmt.reprStr(&out, a, partial) catch return error.OutOfMemory;
+    why.* = out.items;
+    return error.Refused;
+}
+
+fn punchZeros(a: Allocator, fd: fsx.fd_t, data: []const u8, partial: []const u8, why: *[]const u8) Error!void {
     var index: usize = 0;
     while (index < data.len) {
         if (data[index] != 0) {
@@ -188,16 +206,26 @@ fn punchZeros(fd: fsx.fd_t, data: []const u8) void {
         const start = (index + 4095) & ~@as(usize, 4095);
         const aligned = end & ~@as(usize, 4095);
         if (aligned > start) {
-            _ = linux.fallocate(fd, 3, @intCast(start), @intCast(aligned - start));
+            while (true) {
+                if (sys.result(linux.fallocate(fd, 3, @intCast(start), @intCast(aligned - start))) catch {
+                    if (punchIgnored()) break;
+                    return refusePunch(a, why, partial);
+                }) |_| break;
+            }
         }
         index = end;
     }
 }
 
-fn copyUserXattrs(src: fsx.fd_t, dst: fsx.fd_t) void {
+fn copyUserXattrs(a: Allocator, src: fsx.fd_t, dst: fsx.fd_t, source: []const u8, partial: []const u8, why: *[]const u8) Error!void {
     var names: [64 * 1024]u8 = undefined;
-    const n = atomic.ops.flistxattr(src, &names);
-    if (linux.errno(n) != .SUCCESS) return;
+    const n = while (true) {
+        if (sys.result(atomic.ops.flistxattr(src, &names)) catch |err| switch (err) {
+            // Python treats ENOTSUP and EOPNOTSUPP as an empty list.
+            error.Unsupported => return,
+            else => return fail(a, why, err, source),
+        }) |got| break got;
+    };
     var it = std.mem.splitScalar(u8, names[0..n], 0);
     while (it.next()) |name| {
         if (name.len == 0) continue;
@@ -207,9 +235,12 @@ fn copyUserXattrs(src: fsx.fd_t, dst: fsx.fd_t) void {
         @memcpy(named[0..name.len], name);
         named[name.len] = 0;
         var value: [64 * 1024]u8 = undefined;
-        const vn = atomic.ops.fgetxattr(src, named[0..name.len :0], &value);
-        if (linux.errno(vn) != .SUCCESS) continue;
-        _ = atomic.ops.fsetxattr(dst, named[0..name.len :0], value[0..vn]);
+        const vn = while (true) {
+            if (sys.result(atomic.ops.fgetxattr(src, named[0..name.len :0], &value)) catch |err| return fail(a, why, err, source)) |got| break got;
+        };
+        while (true) {
+            if (sys.result(atomic.ops.fsetxattr(dst, named[0..name.len :0], value[0..vn])) catch |err| return fail(a, why, err, partial)) |_| break;
+        }
     }
 }
 
@@ -264,10 +295,37 @@ fn restoreAccess(a: Allocator, fd: fsx.fd_t, meta: atomic.Metadata, why: *[]cons
     }
 }
 
+/// The test artifact fails this unlink when EB_STAGED_REBUILD_FAIL_AT names
+/// `prefix.ready.unlink`. A release build drops the check, so the env var
+/// is not in that binary.
+fn injectedReadyUnlink() bool {
+    if (comptime !atomic.replaceable) return false;
+    const fd = sys.openat(fsx.cwd, "/proc/self/environ", .{ .ACCMODE = .RDONLY }, 0) catch return false;
+    defer sys.close(fd);
+    var buf: [1 << 16]u8 = undefined;
+    var got: usize = 0;
+    while (got < buf.len) {
+        const n = sys.read(fd, buf[got..]) catch break;
+        if (n == 0) break;
+        got += n;
+    }
+    const key = "EB_STAGED_REBUILD_FAIL_AT=";
+    var it = std.mem.splitScalar(u8, buf[0..got], 0);
+    while (it.next()) |entry| {
+        if (!std.mem.startsWith(u8, entry, key)) continue;
+        var names = std.mem.splitScalar(u8, entry[key.len..], ',');
+        while (names.next()) |name| {
+            if (std.mem.eql(u8, name, "prefix.ready.unlink")) return true;
+        }
+    }
+    return false;
+}
+
 fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: *[]const u8) Error!void {
     if (names.len == 1) {
+        const parent = std.fs.path.dirname(names[0]) orelse "/";
         sys.renameat(fsx.cwd, ready, fsx.cwd, names[0]) catch |err| return fail(a, why, err, names[0]);
-        atomic.fsyncDir(std.fs.path.dirname(names[0]) orelse "/") catch {};
+        atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
         return;
     }
     for (names) |name| {
@@ -287,10 +345,12 @@ fn commitNames(a: Allocator, names: []const []const u8, ready: []const u8, why: 
             sys.unlinkat(fsx.cwd, temporary, 0) catch {};
             return fail(a, why, err, name);
         };
-        atomic.fsyncDir(parent) catch {};
+        atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
     }
-    sys.unlinkat(fsx.cwd, ready, 0) catch {};
-    atomic.fsyncDir(std.fs.path.dirname(ready) orelse "/") catch {};
+    const ready_parent = std.fs.path.dirname(ready) orelse "/";
+    if (injectedReadyUnlink()) return fail(a, why, error.AccessDenied, ready);
+    sys.unlinkat(fsx.cwd, ready, 0) catch |err| return fail(a, why, err, ready);
+    atomic.fsyncDir(ready_parent) catch |err| return fail(a, why, err, ready_parent);
 }
 
 fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]const u8) Error!void {
@@ -315,13 +375,19 @@ fn publish(a: Allocator, names: []const []const u8, image: []const u8, why: *[]c
         sys.unlinkat(fsx.cwd, partial, 0) catch {};
     };
     sys.writeAll(fd, image) catch |err| return fail(a, why, err, partial);
-    punchZeros(fd, image);
-    copyUserXattrs(src, fd);
+    try punchZeros(a, fd, image, partial, why);
+    try copyUserXattrs(a, src, fd, source, partial, why);
     try restoreAccess(a, fd, meta, why);
     sys.fsync(fd) catch |err| return fail(a, why, err, partial);
     sys.close(fd);
     failed = false;
     sys.renameat(fsx.cwd, partial, fsx.cwd, ready) catch |err| return fail(a, why, err, ready);
+    // The directory entry for the finished file has to be durable before
+    // the published name starts pointing at it. Python flushes here.
+    atomic.fsyncDir(parent) catch |err| {
+        sys.unlinkat(fsx.cwd, ready, 0) catch {};
+        return fail(a, why, err, parent);
+    };
     try commitNames(a, names, ready, why);
 }
 
@@ -345,7 +411,7 @@ fn rewriteSymlink(a: Allocator, path: []const u8, old: []const u8, new: []const 
         sys.unlinkat(fsx.cwd, temporary, 0) catch {};
         return fail(a, why, err, path);
     };
-    atomic.fsyncDir(parent) catch {};
+    atomic.fsyncDir(parent) catch |err| return fail(a, why, err, parent);
 }
 
 const private_suffixes = [_][]const u8{
@@ -378,22 +444,27 @@ fn consider(a: Allocator, groups: *std.ArrayList(Group), path: []const u8, why: 
 }
 
 fn collect(a: Allocator, root: []const u8, groups: *std.ArrayList(Group), links: *std.ArrayList([]const u8), why: *[]const u8) Error!void {
-    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
-    defer sys.close(fd);
-    var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
     var subdirs: std.ArrayList([]const u8) = .empty;
-    while (true) {
-        const entry = it.next() catch |err| return fail(a, why, err, root);
-        const item = entry orelse break;
-        if (ours(item.name)) continue;
-        const child = try std.fs.path.join(a, &.{ root, item.name });
-        const kind = main_mod.lstatKind(child);
-        if (std.mem.eql(u8, kind, "symlink")) {
-            try links.append(a, child);
-        } else if (std.mem.eql(u8, kind, "dir")) {
-            try subdirs.append(a, child);
-        } else if (std.mem.eql(u8, kind, "file")) {
-            try consider(a, groups, child, why);
+    {
+        // the descriptor and the iterator are closed before the walk
+        // descends, so one is held at a time whatever the tree's shape
+        const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+        defer sys.close(fd);
+        var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
+        defer it.deinit(a);
+        while (true) {
+            const entry = it.next() catch |err| return fail(a, why, err, root);
+            const item = entry orelse break;
+            if (ours(item.name)) continue;
+            const child = try std.fs.path.join(a, &.{ root, item.name });
+            const kind = main_mod.lstatKind(child);
+            if (std.mem.eql(u8, kind, "symlink")) {
+                try links.append(a, child);
+            } else if (std.mem.eql(u8, kind, "dir")) {
+                try subdirs.append(a, child);
+            } else if (std.mem.eql(u8, kind, "file")) {
+                try consider(a, groups, child, why);
+            }
         }
     }
     for (subdirs.items) |dir| try collect(a, dir, groups, links, why);
@@ -422,8 +493,11 @@ fn containsChunked(fd: fsx.fd_t, old: []const u8) !bool {
     }
 }
 
-fn discardPath(path: []const u8) void {
-    sys.unlinkat(fsx.cwd, path, 0) catch {};
+fn discardPath(a: Allocator, path: []const u8, why: *[]const u8) Error!void {
+    sys.unlinkat(fsx.cwd, path, 0) catch |err| switch (err) {
+        error.NotFound => return,
+        else => return fail(a, why, err, path),
+    };
 }
 
 fn pathLess(_: void, left: []const u8, right: []const u8) bool {
@@ -442,7 +516,7 @@ fn recoverTree(a: Allocator, root: []const u8, why: *[]const u8) Error!void {
         var names: std.ArrayList([]const u8) = .empty;
         try namesOnInode(a, root, inode, ready, &names, why);
         if (names.items.len == 0) {
-            discardPath(ready);
+            try discardPath(a, ready, why);
             continue;
         }
         std.mem.sort([]const u8, names.items, {}, pathLess);
@@ -462,27 +536,31 @@ fn readyInode(ready: []const u8) ?u64 {
 }
 
 fn sweepReady(a: Allocator, root: []const u8, found: *std.ArrayList([]const u8), keep_ready: bool, why: *[]const u8) Error!void {
-    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
-    defer sys.close(fd);
-    var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
     var subdirs: std.ArrayList([]const u8) = .empty;
-    while (true) {
-        const entry = it.next() catch |err| return fail(a, why, err, root);
-        const item = entry orelse break;
-        const child = try std.fs.path.join(a, &.{ root, item.name });
-        const kind = main_mod.lstatKind(child);
-        if (std.mem.eql(u8, kind, "symlink")) continue;
-        if (std.mem.eql(u8, kind, "dir")) {
-            try subdirs.append(a, child);
-            continue;
-        }
-        if (keep_ready and std.mem.startsWith(u8, item.name, ".") and std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
-            try found.append(a, child);
-        } else if (!std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
-            for (private_suffixes) |suffix| {
-                if (std.mem.endsWith(u8, item.name, suffix)) {
-                    discardPath(child);
-                    break;
+    {
+        // closed before the descent, one descriptor at a time
+        const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+        defer sys.close(fd);
+        var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
+        defer it.deinit(a);
+        while (true) {
+            const entry = it.next() catch |err| return fail(a, why, err, root);
+            const item = entry orelse break;
+            const child = try std.fs.path.join(a, &.{ root, item.name });
+            const kind = main_mod.lstatKind(child);
+            if (std.mem.eql(u8, kind, "symlink")) continue;
+            if (std.mem.eql(u8, kind, "dir")) {
+                try subdirs.append(a, child);
+                continue;
+            }
+            if (keep_ready and std.mem.startsWith(u8, item.name, ".") and std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
+                try found.append(a, child);
+            } else if (!std.mem.endsWith(u8, item.name, ".ebsr-ready")) {
+                for (private_suffixes) |suffix| {
+                    if (std.mem.endsWith(u8, item.name, suffix)) {
+                        try discardPath(a, child, why);
+                        break;
+                    }
                 }
             }
         }
@@ -491,25 +569,29 @@ fn sweepReady(a: Allocator, root: []const u8, found: *std.ArrayList([]const u8),
 }
 
 fn namesOnInode(a: Allocator, root: []const u8, inode: u64, ready: []const u8, names: *std.ArrayList([]const u8), why: *[]const u8) Error!void {
-    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
-    defer sys.close(fd);
-    var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
     var subdirs: std.ArrayList([]const u8) = .empty;
-    while (true) {
-        const entry = it.next() catch |err| return fail(a, why, err, root);
-        const item = entry orelse break;
-        if (ours(item.name)) continue;
-        const child = try std.fs.path.join(a, &.{ root, item.name });
-        if (std.mem.eql(u8, child, ready)) continue;
-        const kind = main_mod.lstatKind(child);
-        if (std.mem.eql(u8, kind, "symlink")) continue;
-        if (std.mem.eql(u8, kind, "dir")) {
-            try subdirs.append(a, child);
-            continue;
+    {
+        // closed before the descent, one descriptor at a time
+        const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+        defer sys.close(fd);
+        var it = fsx.DirIter.init(a, fd) catch |err| return fail(a, why, err, root);
+        defer it.deinit(a);
+        while (true) {
+            const entry = it.next() catch |err| return fail(a, why, err, root);
+            const item = entry orelse break;
+            if (ours(item.name)) continue;
+            const child = try std.fs.path.join(a, &.{ root, item.name });
+            if (std.mem.eql(u8, child, ready)) continue;
+            const kind = main_mod.lstatKind(child);
+            if (std.mem.eql(u8, kind, "symlink")) continue;
+            if (std.mem.eql(u8, kind, "dir")) {
+                try subdirs.append(a, child);
+                continue;
+            }
+            if (!std.mem.eql(u8, kind, "file")) continue;
+            const info = fsx.statAt(fsx.cwd, child, false) catch continue;
+            if (info.isReg() and info.ino == inode) try names.append(a, child);
         }
-        if (!std.mem.eql(u8, kind, "file")) continue;
-        const info = fsx.statAt(fsx.cwd, child, false) catch continue;
-        if (info.isReg() and info.ino == inode) try names.append(a, child);
     }
     for (subdirs.items) |dir| try namesOnInode(a, dir, inode, ready, names, why);
 }
@@ -607,7 +689,7 @@ test "a read-only directory names that directory" {
     defer {
         var restore: [sys.path_max:0]u8 = undefined;
         if (sys.z(&restore, root)) |z| {
-            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755, 0);
+            _ = linux.fchmodat(fsx.cwd, z.ptr, 0o755);
         } else |_| {}
         fsx.deleteTree(a, fsx.cwd, root) catch {};
     }
@@ -619,7 +701,7 @@ test "a read-only directory names that directory" {
         try sys.writeAll(fd, body);
         sys.close(fd);
     }
-    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555, 0)) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.fchmodat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o555)) == .SUCCESS);
     defer atomic.ops.* = .{};
     atomic.ops.fchmod = readOnlyChmod;
     var why: []const u8 = "";
@@ -753,6 +835,80 @@ test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by r
     var stx: linux.Statx = undefined;
     try std.testing.expect(linux.errno(linux.statx(sfd, "", linux.AT.EMPTY_PATH, .{ .BLOCKS = true, .SIZE = true }, &stx)) == .SUCCESS);
     try std.testing.expect(stx.blocks < 128);
-    const head = try fsx.readAll(a, sfd, 64);
-    try std.testing.expect(std.mem.startsWith(u8, head, "/stable/lib\x00"));
+    var head: [64]u8 = undefined;
+    const n = linux.read(sfd, &head, head.len);
+    try std.testing.expect(linux.errno(n) == .SUCCESS);
+    try std.testing.expect(std.mem.startsWith(u8, head[0..n], "/stable/lib\x00"));
+}
+
+test "collect crosses a deep tree under a tight descriptor limit" {
+    const gpa = std.testing.allocator;
+    const seed: u64 = 0x5EEDC0;
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
+    var cwd_buf: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &cwd_buf);
+    const base = try std.fmt.allocPrint(gpa, "{s}/.zig-cache/ebsr-prefixdeep-{d}", .{ here, linux.getpid() });
+    defer gpa.free(base);
+    try common.atomic.makedirs(base);
+
+    var names: std.ArrayList(u8) = .empty;
+    defer names.deinit(gpa);
+    var zb: [sys.path_max:0]u8 = undefined;
+    var fd = try fsx.openDir(fsx.cwd, base, false);
+    defer sys.close(fd);
+    var depth: usize = 0;
+    while (depth < 1300) : (depth += 1) {
+        const c: u8 = 'a' + @as(u8, @intCast(rand.uintLessThan(u8, 26)));
+        try names.append(gpa, c);
+        const nm = names.items[names.items.len - 1 ..];
+        _ = try sys.call(linux.mkdirat, .{ fd, (try sys.z(&zb, nm)).ptr, @as(linux.mode_t, 0o755) });
+        const sub = try fsx.openDir(fd, nm, false);
+        sys.close(fd);
+        fd = sub;
+    }
+    const keep = try sys.openat(fd, "keep.bin", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o644);
+    try sys.writeAll(keep, "deep\n");
+    sys.close(keep);
+
+    var old: linux.rlimit = undefined;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, null, &old)));
+    const lim: linux.rlimit = .{ .cur = 1024, .max = old.max };
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, &lim, null)));
+    defer _ = linux.prlimit(0, .NOFILE, &old, null);
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var groups: std.ArrayList(Group) = .empty;
+    var links: std.ArrayList([]const u8) = .empty;
+    var why: []const u8 = "";
+    collect(a, base, &groups, &links, &why) catch |err| {
+        std.debug.print("collect walk seed: {d}: gave {s} ({s}) errno E{s}\n", .{ seed, @errorName(err), why, @tagName(sys.last_errno) });
+        return err;
+    };
+    var found = false;
+    for (groups.items) |g| {
+        for (g.names.items) |n| if (std.mem.endsWith(u8, n, "/keep.bin")) {
+            found = true;
+        };
+    }
+    if (!found) return error.TestUnexpectedResult;
+
+    var full: std.ArrayList(u8) = .empty;
+    defer full.deinit(gpa);
+    try full.appendSlice(gpa, base);
+    for (names.items) |ch| {
+        try full.append(gpa, '/');
+        try full.append(gpa, ch);
+    }
+    try full.appendSlice(gpa, "/keep.bin");
+    var fz: [sys.path_max:0]u8 = undefined;
+    _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, full.items), 0);
+    full.shrinkRetainingCapacity(full.items.len - "/keep.bin".len);
+    while (full.items.len > base.len) {
+        _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, full.items), linux.AT.REMOVEDIR);
+        full.shrinkRetainingCapacity(full.items.len - 2);
+    }
+    _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, base), linux.AT.REMOVEDIR);
 }
