@@ -2,6 +2,62 @@
 
 <!-- towncrier release notes start -->
 
+## 2.0.1 (2026-11-24)
+
+### Fixes
+
+- A dry run reports the same free-space refusal as a real run, and it does not create the state root.
+- A failed flush of the directory holding a swapped install names that directory.
+- A filename-less flush of the parent directory is reported on that directory.
+- A full or read-only filesystem during publication names the directory or temporary file that could not be written.
+- A hole that cannot be punched in a rewritten file stops publication, and the original file stays.
+- A killed rewrite of a hard-linked file is finished by the next publication, instead of refusing because a temporary link is still in the tree.
+- A retire that cannot list a directory it created still removes that directory when it is empty. An interrupted listing is tried again.
+- A rewritten file stays unpublished when its directory cannot be flushed.
+- A sealed directory that cannot be made writable stops publication before the completion stamp is written.
+- A user attribute that cannot be copied onto a rewritten file stops publication, and the original file stays.
+- An interrupted read of the staged module tree is reported on standard error. A directory that cannot be read for another reason is skipped.
+- Garbage collection rejects a lock timeout that is not a finite number.
+- Module-tree discovery now refuses an unreadable subdirectory instead of skipping it without a message, so publication decisions rest on a complete listing.
+- Planning a staged run refuses a non-UTF-8 or unreadable staged module file with the path and reason on both frontends, leaving the live tree untouched and marking the run journal failed.
+- Propagate failures removing the completed hard-link replacement during prefix publication instead of publishing with a stranded temporary.
+- Refuse a prefix rewrite when a directory cannot be listed, matching the release binary.
+- Report a failure removing a private prefix temporary during recovery instead of publishing the staged tree with that temporary still inside it.
+- Report symlink unlink errors in Zig publish recovery and rollback instead of discarding them and clearing link ownership in the journal.
+- Resume rejects a lock timeout that is not a finite number.
+- Retire rejects a lock timeout that is not a finite number.
+- Rollback rejects a lock timeout that is not a finite number.
+- Run rejects a lock timeout that is not a finite number.
+- The Zig binary reports directory-open errors such as `Permission denied` when `STATE_ROOT/runs` is an unreadable directory instead of silently treating the run list as empty, matching the Python implementation.
+- The Zig state-root lock normalizes `--state-root` before checking symbolic-link components and avoids double slashes in lock error paths, matching the Python `FileLock` behavior.
+- The deep walks hold one descriptor at a time: the prefix walkers close
+  their directory before descending, the livecheck walk keeps a worklist of
+  paths, and the admin cleanup refuses a tree nested past 512 levels with
+  `error.TooDeep`, so a run tree past the file-descriptor limit still walks
+  whole.
+- When `--state-root` points to an existing regular file, the Python frontend now reports `Not a directory` like the Zig frontend instead of reporting `File exists`.
+- `eb-staged-rebuild run --min-free-bytes` accepts every unsigned 128-bit integer in the Zig build.
+- `probe --json` reports a failed file operation with Python's own text,
+  `[Errno N] text: 'path'`, through the helper the rest of the program
+  uses.
+- resolve reports a module file that has no root assignment.
+
+### Miscellaneous
+
+- Add a parity test for `gc` refusal while another process has the state-root lock.
+- Delegate `admin.abspath` in `zig/admin.zig` to `zig-common` `fsx.absPath` instead of carrying a local path normalization loop.
+- One function checks that a lock timeout is finite.
+- The empty `--metrics-file` test compares against the binary named by `TOOL_BIN` instead of a fixed `zig-out/bin` path.
+- The prefix-walk test checks the Python rewrite when the release binary
+  is unset.
+- The remaining black-box CLI tests use the shared runners in `tests/support.py` instead of their own copies.
+- The remaining parity and CLI tests run through the shared helpers in `tests/support.py`, so `TOOL_BIN` reaches every parity check instead of a fixed `zig-out/bin` path.
+- The test of a link unlink in a sealed directory compiles again: it ignored the error `chmod` returns since the sealed-directory refusal.
+- The user attribute test reports an unexpected child status, and the zig job requires it.
+- The user attribute test skips when a user namespace or an overlay mount is unavailable, and the zig job runs it with TOOL_BIN set.
+- The zig job installs fuse3 once and requires the filesystem fault tests.
+
+
 ## 2.0.0 (2026-11-19)
 
 ### Features
