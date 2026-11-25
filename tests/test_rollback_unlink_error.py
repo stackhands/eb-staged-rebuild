@@ -135,7 +135,7 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
     def test_link_dir_fsync_eio_keeps_the_published_tree(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
 
-    def _rollback_to(self, argv):
+    def _rollback_to(self, argv, retry_fsync=False):
         # run2 creates the class link run1 made and lost; run3 finds it in
         # place. Two runs over run1 keep rollback --to off the one-run path.
         root, env, run_args, _ = self._layout()
@@ -157,6 +157,12 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
             "states": [_state(root, run_id) for run_id in ("run2", "run3")],
             "run2_links": _links(root, "run2"),
         }
+        if retry_fsync:
+            retry = self._traced(back, root, env, 5, "fsync", 1, "modules/tools/demo")
+            outcome["retry_rc"] = retry.returncode
+            outcome["retry_stderr"] = _scrub(retry.stderr, root)
+            outcome["retry_states"] = [_state(root, run_id) for run_id in ("run2", "run3")]
+            outcome["retry_run2_links"] = _links(root, "run2")
         again = subprocess.run(back, cwd=root, env=env, capture_output=True, text=True, check=False)
         outcome["again_rc"] = again.returncode
         outcome["final"] = [_state(root, run_id) for run_id in ("run2", "run3")]
@@ -177,3 +183,17 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
         self.assertEqual(zig["final_run2_links"], [(False, "removed")])
         self.assertEqual(zig["payload"], "new\n")
+
+    def test_rollback_to_missing_link_is_flushed_again(self):
+        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True)
+        zig = self._rollback_to([os.environ["TOOL_BIN"]], retry_fsync=True)
+        self.assertEqual(py, zig)
+        self.assertEqual(zig["retry_rc"], 2)
+        self.assertEqual(
+            zig["retry_stderr"],
+            "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n",
+        )
+        self.assertEqual(zig["retry_states"], ["rolling_back", "rolled_back"])
+        self.assertEqual(zig["retry_run2_links"], [(True, "created")])
+        self.assertEqual(zig["again_rc"], 0)
+        self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
