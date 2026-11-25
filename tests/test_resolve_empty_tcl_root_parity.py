@@ -22,6 +22,7 @@ class ResolveEmptyTclRootParityTests(unittest.TestCase):
             self.assertEqual(py.stderr, "")
             py_doc = json.loads(py.stdout)
             py_doc.pop("path", None)
+            self.assertNotIn("error", py_doc)
             self.assertEqual(py_doc["syntax"], "tcl")
             self.assertEqual(py_doc["root"], "")
 
@@ -32,6 +33,7 @@ class ResolveEmptyTclRootParityTests(unittest.TestCase):
             self.assertEqual(zig.stderr, "")
             zig_doc = json.loads(zig.stdout)
             zig_doc.pop("path", None)
+            self.assertNotIn("error", zig_doc)
             self.assertEqual(py_doc, zig_doc)
 
 
