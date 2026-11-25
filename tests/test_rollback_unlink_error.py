@@ -109,12 +109,19 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         done = subprocess.run(argv + run_args, cwd=root, env=env, capture_output=True, text=True, check=False)
         self.assertEqual(done.returncode, 0, done.stderr)
 
-    def _compare(self, errno, op, nth, needle):
+    def _compare(self, errno, op, nth, needle, replaced=False):
+        # With `replaced`, another symlink takes the place of run1's class
+        # link before the rollback, and a clean rollback runs afterwards.
         tool = os.environ["TOOL_BIN"]
         py_root, py_env, py_run, py_back = self._layout()
         zig_root, zig_env, zig_run, zig_back = self._layout()
         self._publish([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_run)
         self._publish([tool], zig_root, zig_env, zig_run)
+        if replaced:
+            for root in (py_root, zig_root):
+                link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+                os.unlink(link)
+                os.symlink("elsewhere.lua", link)
         py = self._traced(
             [self.python, "-m", "eb_staged_rebuild.cli", *py_back], py_root, py_env, errno, op, nth, needle
         )
@@ -125,6 +132,32 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         self.assertEqual(py_err, zig_err)
         self.assertEqual(_payload(py_root), _payload(zig_root))
         self.assertEqual(_state(py_root), _state(zig_root))
+        if not replaced:
+            return None
+        outcomes = []
+        for argv, root, env, back, done, err in (
+            ([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_back, py, py_err),
+            ([tool], zig_root, zig_env, zig_back, zig, zig_err),
+        ):
+            link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+            outcome = {
+                "rc": done.returncode,
+                "stderr": err,
+                "state": _state(root),
+                "message": _journal(root, "run1").get("message"),
+                "links": _links(root, "run1"),
+                "link": os.readlink(link),
+                "payload": _payload(root),
+            }
+            again = subprocess.run(argv + back, cwd=root, env=env, capture_output=True, text=True, check=False)
+            outcome["again_rc"] = again.returncode
+            outcome["final"] = _state(root)
+            outcome["final_links"] = _links(root, "run1")
+            outcome["final_link"] = os.readlink(link)
+            outcome["final_payload"] = _payload(root)
+            outcomes.append(outcome)
+        self.assertEqual(outcomes[0], outcomes[1])
+        return outcomes[1]
 
     def test_unlink_eio_keeps_the_published_tree(self):
         self._compare(5, "unlink", 1, "modules/tools/demo/1.lua")
@@ -134,6 +167,23 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
 
     def test_link_dir_fsync_eio_keeps_the_published_tree(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
+
+    def test_link_dir_fsync_eio_with_a_replaced_link_keeps_the_published_tree(self):
+        # The entry that replaced the link is kept, and its directory is
+        # still flushed before the link is recorded as removed.
+        zig = self._compare(5, "fsync", 1, "modules/tools/demo", replaced=True)
+        self.assertEqual(zig["rc"], 2)
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n")
+        self.assertEqual(zig["state"], "complete")
+        self.assertEqual(zig["message"], "rollback interrupted; published tree restored")
+        self.assertEqual(zig["links"], [(True, "kept")])
+        self.assertEqual(zig["link"], "elsewhere.lua")
+        self.assertEqual(zig["payload"], "new\n")
+        self.assertEqual(zig["again_rc"], 0)
+        self.assertEqual(zig["final"], "rolled_back")
+        self.assertEqual(zig["final_links"], [(False, "removed")])
+        self.assertEqual(zig["final_link"], "elsewhere.lua")
+        self.assertEqual(zig["final_payload"], "old\n")
 
     def _rollback_to(self, argv, retry_fsync=False, replaced=False):
         # run2 creates the class link run1 made and lost; run3 finds it in
