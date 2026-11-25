@@ -904,12 +904,8 @@ def _remove_created_links(journal):
         path = link["live_path"]
         if lstat_kind(path) == "symlink" and os.readlink(path) == link["target"]:
             os.unlink(path)
-        elif lstat_kind(path) != "missing":
-            link["created"] = False
-            link["status"] = "pending"
-            continue
         # The link is gone only once its parent has been flushed. A retry
-        # that finds it already absent still has to flush.
+        # that finds it already absent or replaced still has to flush.
         fsync_dir(os.path.dirname(path))
         link["created"] = False
         link["status"] = "pending"
@@ -1741,10 +1737,6 @@ def _rollback_run(state_root, run_id, faults, now):
             if lstat_kind(link_path) == "symlink" and os.readlink(link_path) == link["target"]:
                 faults.reach(f"rollback.unlink:{link['rel']}")
                 os.unlink(link_path)
-            elif lstat_kind(link_path) != "missing":
-                link["created"] = False
-                link["status"] = "removed"
-                continue
             fsync_dir(os.path.dirname(link_path))
             link["created"] = False
             link["status"] = "removed"

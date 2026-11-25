@@ -255,12 +255,19 @@ class LinkRecoveryInjectionTests(unittest.TestCase):
         with open(path, encoding="utf-8") as handle:
             return json.load(handle)
 
-    def _compare(self, errno, op, nth, needle):
+    def _compare(self, errno, op, nth, needle, replaced=False):
+        # With `replaced`, another symlink takes the place of the created
+        # class link before the resume, and a clean resume runs afterwards.
         tool = os.environ["TOOL_BIN"]
         py_root, py_env, py_run, py_resume = self._layout()
         zig_root, zig_env, zig_run, zig_resume = self._layout()
         self._publish_and_rewind([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_run)
         self._publish_and_rewind([tool], zig_root, zig_env, zig_run)
+        if replaced:
+            for root in (py_root, zig_root):
+                link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+                os.unlink(link)
+                os.symlink("elsewhere.lua", link)
         py = self._traced(
             [self.python, "-m", "eb_staged_rebuild.cli", *py_resume],
             py_root,
@@ -291,6 +298,36 @@ class LinkRecoveryInjectionTests(unittest.TestCase):
         zig_created = [link.get("created") for link in zig_j.get("links_plan") or []]
         self.assertEqual(py_created, zig_created)
         self.assertEqual(py_created, [False])
+        if not replaced:
+            return
+        outcomes = []
+        for argv, root, env, resume, done in (
+            ([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_resume, py),
+            ([tool], zig_root, zig_env, zig_resume, zig),
+        ):
+            link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+            outcome = {
+                "rc": done.returncode,
+                "stderr": done.stderr.replace(root, "ROOT"),
+                "links": [(item["created"], item["status"]) for item in self._journal(root)["links_plan"]],
+                "link": os.readlink(link),
+            }
+            again = subprocess.run(argv + resume, cwd=root, env=env, capture_output=True, text=True, check=False)
+            outcome["again_rc"] = again.returncode
+            outcome["final"] = self._journal(root).get("state")
+            outcome["final_links"] = [(item["created"], item["status"]) for item in self._journal(root)["links_plan"]]
+            outcome["final_link"] = os.readlink(link)
+            outcomes.append(outcome)
+        self.assertEqual(outcomes[0], outcomes[1])
+        zig = outcomes[1]
+        self.assertEqual(zig["rc"], 2)
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n")
+        self.assertEqual(zig["links"], [(False, "pending")])
+        self.assertEqual(zig["link"], "elsewhere.lua")
+        self.assertEqual(zig["again_rc"], 0)
+        self.assertEqual(zig["final"], "complete")
+        self.assertEqual(zig["final_links"], [(False, "kept")])
+        self.assertEqual(zig["final_link"], "elsewhere.lua")
 
     def test_oneshot_unlink_leaves_the_journal_built(self):
         self._compare(5, "unlink", 1, "modules/tools/demo/1.lua")
@@ -300,6 +337,9 @@ class LinkRecoveryInjectionTests(unittest.TestCase):
 
     def test_oneshot_directory_flush_leaves_the_journal_built(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
+
+    def test_oneshot_directory_flush_with_a_replaced_link_leaves_the_journal_built(self):
+        self._compare(5, "fsync", 1, "modules/tools/demo", replaced=True)
 
 
 if __name__ == "__main__":
