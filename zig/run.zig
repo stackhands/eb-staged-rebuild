@@ -1607,7 +1607,27 @@ pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
         } else |_| {}
     }
     const l = try lockRoot(r);
-    defer l.release();
+    return released(r, l, startLocked(r, learned, run_id, probes, policy));
+}
+
+/// The outcome of a command that held `l`, once `l` is released. After a
+/// command that succeeded, a failed release is its error, as the Python
+/// tool's `finally: lock.release()` lets the OSError out. After another
+/// error the release is dropped, so that error is the one reported.
+fn released(r: *R, l: state.RootLock, outcome: E!Result) E!Result {
+    const res = outcome catch |err| {
+        rootlock.releaseAfterError(l);
+        return err;
+    };
+    if (rootlock.release(l)) |why| return r.osFail("{s}", .{why});
+    return res;
+}
+
+/// run under the state root's lock: write the new journal, then build and
+/// publish.
+fn startLocked(r: *R, learned: Learned, run_id: []const u8, probes: Py, policy: Py) E!Result {
+    const a = r.a;
+    const rels = learned.rels;
     try checkStageFilesystem(r, rels);
     try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
@@ -1712,15 +1732,23 @@ fn specFromJournal(a: Allocator, state_root: []const u8, run_id: []const u8, j: 
 pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64, verify: bool, force: bool) E!Result {
     const loaded = admin.loadRunJournal(a, state_root, run_id);
     const path = loaded.path;
-    var j = loaded.journal;
+    const j = loaded.journal;
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
     var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, state_root, run_id, j, lock_timeout), .path = path };
     r.spec.force = force;
     defer main_mod.last_why = r.why;
     engine.checkRoots(a, r.spec);
     const l = try lockRoot(&r);
-    defer l.release();
-    j = admin.loadRunJournal(a, state_root, run_id).journal;
+    return released(&r, l, resumeLocked(&r, run_id, verify, force));
+}
+
+/// resume under the state root's lock, from the journal as it is once the
+/// lock is held.
+fn resumeLocked(r: *R, run_id: []const u8, verify: bool, force: bool) E!Result {
+    const a = r.a;
+    const env = r.env;
+    const state_root = r.spec.state_root;
+    const j = admin.loadRunJournal(a, state_root, run_id).journal;
     r.journal = j;
     const state_name = r.str("state");
     const gated = pyfmt.truthy(r.get("verify_before_swap"));
@@ -1745,18 +1773,18 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
             }
         }
         const m = try a.print("run {s} is already complete", .{run_id});
-        return recordFinished(&r, try publisher(&r), m);
+        return recordFinished(r, try publisher(r), m);
     }
     if (std.mem.eql(u8, state_name, "rolled_back")) return r.refuse("run {s} was rolled back; start a new run", .{run_id});
     if (std.mem.eql(u8, state_name, "rolling_back")) return r.refuse("{s}", .{rollingBack(a, j)});
     if (std.mem.eql(u8, state_name, "created") or std.mem.eql(u8, state_name, "building") or std.mem.eql(u8, state_name, "failed")) {
         if (published) return r.intervene("run {s} is {s} but a module was already published", .{ run_id, state_name });
         log("resume {s} from {s}: rebuilding the unpublished generation", .{ run_id, state_name });
-        return runLocked(&r, true);
+        return runLocked(r, true);
     }
     if (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing")) {
         log("resume {s} from {s}: publishing", .{ run_id, state_name });
-        return publishRecorded(&r);
+        return publishRecorded(r);
     }
     return r.intervene("run {s} is in an unknown state {s}", .{ run_id, state_name });
 }

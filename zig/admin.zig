@@ -281,6 +281,14 @@ fn lock(c: *Ctx, state_root: []const u8, timeout_s: ?f64) state.RootLock {
     };
 }
 
+/// Release the lock `lock` returned once the command that held it is done.
+/// A refusal exits without coming here, so a failed release is the
+/// command's error: exit status 2, as the Python tool reports the OSError
+/// its `finally: lock.release()` lets out.
+fn release(l: state.RootLock) void {
+    if (rootlock.release(l)) |why| refuse("{s}", .{why});
+}
+
 fn sha256Hex(a: Allocator, data: []const u8) []const u8 {
     var out: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(data, &out, .{});
@@ -493,7 +501,7 @@ pub fn retire(
         return 0;
     }
     const l = lock(c, state_root, lock_timeout);
-    defer l.release();
+    defer release(l);
     const p = plan(c, state_root, module_file);
     const used = checkUsageLog(c, p.software_dir, usage_log, eb_keep_logs);
     if (used.in_use) {
@@ -593,7 +601,7 @@ pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout:
     const a = c.a;
     if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
     const l = lock(c, state_root, lock_timeout);
-    defer l.release();
+    defer release(l);
     const loaded = loadRunJournal(a, state_root, run_id);
     const path = loaded.path;
     const journal = loaded.journal;
@@ -620,7 +628,7 @@ pub fn rollback(c: *Ctx, state_root: []const u8, run_id: ?[]const u8, to: ?[]con
         refuse("give one of a run id, --latest and --to GEN", .{});
     if (run_id orelse to) |rid| if (!plainRunId(rid)) refuse("run id is not a plain name: '{s}'", .{rid});
     const l = lock(c, state_root, lock_timeout);
-    defer l.release();
+    defer release(l);
     const run_mod = @import("run.zig");
     var r: run_mod.R = .{ .a = c.a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} } };
     if (to) |gen| return outcome(&r, run_mod.rollbackTo(&r, gen));
@@ -1050,7 +1058,6 @@ pub fn gc(
     if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
     const now = c.now_fn();
     const l = lock(c, state_root_in, lock_timeout);
-    defer l.release();
     const state_root = abspath(a, state_root_in);
     var journals = main_mod.listJournals(a, state_root);
     const roots = liveRoots(c, journals);
@@ -1228,6 +1235,8 @@ pub fn gc(
         }
     }
     if (metrics_file) |path| writeMetrics(c, path, state_root, journals);
+    // The Python tool prints the actions once `collect` has released the lock.
+    release(l);
     if (json_output) {
         const out = json.dumps(a, gcDocument(a, actions.items), 2, true) catch return 1;
         cli.put(1, out);
