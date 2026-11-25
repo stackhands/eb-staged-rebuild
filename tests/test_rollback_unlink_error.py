@@ -135,9 +135,10 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
     def test_link_dir_fsync_eio_keeps_the_published_tree(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
 
-    def _rollback_to(self, argv, retry_fsync=False):
+    def _rollback_to(self, argv, retry_fsync=False, replaced=False):
         # run2 creates the class link run1 made and lost; run3 finds it in
         # place. Two runs over run1 keep rollback --to off the one-run path.
+        # With `replaced`, another symlink takes the link's place afterwards.
         root, env, run_args, _ = self._layout()
         state = os.path.join(root, "state")
         link = os.path.join(root, "modules", "tools", "demo", "1.lua")
@@ -148,12 +149,15 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
             self._publish(argv, root, env, run_args[:at] + [run_id] + run_args[at + 1:])
         self.assertEqual(_links(root, "run2"), [(True, "created")])
         self.assertEqual(_links(root, "run3"), [(False, "present")])
+        if replaced:
+            os.unlink(link)
+            os.symlink("elsewhere.lua", link)
         back = [*argv, "rollback", "--state-root", state, "--lock-timeout", "0", "--to", "run1"]
         failed = self._traced(back, root, env, 5, "fsync", 1, "modules/tools/demo")
         outcome = {
             "rc": failed.returncode,
             "stderr": _scrub(failed.stderr, root),
-            "link": os.path.lexists(link),
+            "link": os.readlink(link) if os.path.islink(link) else os.path.lexists(link),
             "states": [_state(root, run_id) for run_id in ("run2", "run3")],
             "run2_links": _links(root, "run2"),
         }
@@ -167,22 +171,31 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         outcome["again_rc"] = again.returncode
         outcome["final"] = [_state(root, run_id) for run_id in ("run2", "run3")]
         outcome["final_run2_links"] = _links(root, "run2")
+        outcome["final_link"] = os.readlink(link) if os.path.islink(link) else os.path.lexists(link)
         outcome["payload"] = _payload(root)
         return outcome
 
     def test_rollback_to_link_dir_fsync_eio_keeps_the_run_rolling_back(self):
-        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"])
-        zig = self._rollback_to([os.environ["TOOL_BIN"]])
-        self.assertEqual(py, zig)
-        self.assertEqual(zig["rc"], 2)
-        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n")
-        self.assertFalse(zig["link"])
-        self.assertEqual(zig["states"], ["rolling_back", "rolled_back"])
-        self.assertEqual(zig["run2_links"], [(True, "created")])
-        self.assertEqual(zig["again_rc"], 0)
-        self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
-        self.assertEqual(zig["final_run2_links"], [(False, "removed")])
-        self.assertEqual(zig["payload"], "new\n")
+        # The link is flushed away whether rollback --to unlinks it or finds
+        # another entry in its place, which it keeps.
+        for replaced, link in ((False, False), (True, "elsewhere.lua")):
+            with self.subTest(replaced=replaced):
+                py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], replaced=replaced)
+                zig = self._rollback_to([os.environ["TOOL_BIN"]], replaced=replaced)
+                self.assertEqual(py, zig)
+                self.assertEqual(zig["rc"], 2)
+                self.assertEqual(
+                    zig["stderr"],
+                    "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n",
+                )
+                self.assertEqual(zig["link"], link)
+                self.assertEqual(zig["states"], ["rolling_back", "rolled_back"])
+                self.assertEqual(zig["run2_links"], [(True, "created")])
+                self.assertEqual(zig["again_rc"], 0)
+                self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
+                self.assertEqual(zig["final_run2_links"], [(False, "removed")])
+                self.assertEqual(zig["final_link"], link)
+                self.assertEqual(zig["payload"], "new\n")
 
     def test_rollback_to_missing_link_is_flushed_again(self):
         py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True)
