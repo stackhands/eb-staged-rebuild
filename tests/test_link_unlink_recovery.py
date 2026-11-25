@@ -317,6 +317,8 @@ class LinkRecoveryInjectionTests(unittest.TestCase):
             outcome["final"] = self._journal(root).get("state")
             outcome["final_links"] = [(item["created"], item["status"]) for item in self._journal(root)["links_plan"]]
             outcome["final_link"] = os.readlink(link)
+            with open(os.path.join(root, "software", "demo", "1", "PAYLOAD"), encoding="utf-8") as handle:
+                outcome["final_payload"] = handle.read()
             outcomes.append(outcome)
         self.assertEqual(outcomes[0], outcomes[1])
         zig = outcomes[1]
@@ -328,6 +330,7 @@ class LinkRecoveryInjectionTests(unittest.TestCase):
         self.assertEqual(zig["final"], "complete")
         self.assertEqual(zig["final_links"], [(False, "kept")])
         self.assertEqual(zig["final_link"], "elsewhere.lua")
+        self.assertEqual(zig["final_payload"], "new\n")
 
     def test_oneshot_unlink_leaves_the_journal_built(self):
         self._compare(5, "unlink", 1, "modules/tools/demo/1.lua")
