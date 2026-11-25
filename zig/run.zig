@@ -2198,7 +2198,8 @@ pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
             if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
                 try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
                 sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
-                atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+                const parent = std.fs.path.dirname(path) orelse "/";
+                atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
             }
             r.setItem("links_plan", i, "created", .{ .bool = false });
             r.setItem("links_plan", i, "status", Py.s("removed"));
