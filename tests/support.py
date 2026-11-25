@@ -4,6 +4,7 @@ import contextlib
 import ctypes
 import json
 import os
+import re
 import select
 import shutil
 import stat
@@ -259,6 +260,27 @@ def _run(argv, env=None, cwd=None, clear=(), prefix=()):
 
 
 PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
+
+
+_USERNS_PYTHON = re.compile(r"[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox")
+_USERNS_TOKEN = "SANDBOX"
+
+
+def normalize_userns_helper(text, binary=None):
+    """Map both userns helper argv spellings onto one token.
+
+    Python spells the helper as ``python -m eb_staged_rebuild.userns_sandbox``.
+    The binary spells it as that program followed by ``__userns-sandbox``.
+    Every other byte is left as it is.
+    """
+    text = _USERNS_PYTHON.sub(_USERNS_TOKEN, text)
+    tool = os.environ.get("TOOL_BIN") if binary is None else binary
+    if tool:
+        text = text.replace(f"{tool} __userns-sandbox", _USERNS_TOKEN)
+        resolved = os.path.realpath(tool)
+        if resolved != tool:
+            text = text.replace(f"{resolved} __userns-sandbox", _USERNS_TOKEN)
+    return text
 
 
 def run_cli(

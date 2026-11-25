@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import normalize_userns_helper, run_cli, run_cli_optional_binary
 
 
 class CliPathBytesParityTests(unittest.TestCase):
@@ -38,7 +38,10 @@ class CliPathBytesParityTests(unittest.TestCase):
             binary = run_cli_optional_binary(*args)
             if binary is not None:
                 self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
-                self.assertEqual(proc.stdout, binary.stdout)
+                self.assertEqual(
+                    normalize_userns_helper(proc.stdout),
+                    normalize_userns_helper(binary.stdout),
+                )
                 self.assertEqual(proc.stderr, binary.stderr)
 
 
