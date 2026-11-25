@@ -24,6 +24,37 @@ def _deadline(seconds: float):
 
 
 class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
+    def test_dangling_config_escapes_nbsp_and_soft_hyphen_like_python(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            software = os.path.join(root, "software")
+            modules = os.path.join(root, "modules")
+            config = os.path.join(root, "ledger-\u00a0-\u00ad.json")
+            os.makedirs(software, exist_ok=True)
+            os.makedirs(modules, exist_ok=True)
+
+            args = (
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--dry-run",
+                "--ledger-config",
+                config,
+                "--",
+                "demo.eb",
+            )
+            py = run_cli(*args)
+            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
+            self.assertIn(r"\xa0", py.stderr)
+            self.assertIn(r"\xad", py.stderr)
+
+            zig = run_cli_optional_binary(*args)
+            if zig is not None:
+                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                self.assertEqual(zig.stdout, "")
+                self.assertEqual(zig.stderr, py.stderr)
+
     def test_run_dry_refuses_hostile_ledger_config_paths(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")
@@ -37,12 +68,22 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
             os.makedirs(directory_path, exist_ok=True)
             fifo_path = os.path.join(root, "ledger-fifo")
             os.mkfifo(fifo_path)
+            symlink_dir_path = os.path.join(root, "ledger-dir-link")
+            os.symlink(directory_path, symlink_dir_path)
+            symlink_loop_path = os.path.join(root, "ledger-loop")
+            os.symlink(symlink_loop_path, symlink_loop_path)
             dangling_path = os.path.join(root, "ledger-dangling.json")
             os.symlink(os.path.join(root, "absent-ledger.json"), dangling_path)
 
             for label, path, needle in (
                 ("directory", directory_path, "Invalid argument"),
                 ("fifo", fifo_path, "Invalid argument"),
+                ("symlink-directory", symlink_dir_path, "Invalid argument"),
+                (
+                    "symlink-loop",
+                    symlink_loop_path,
+                    "Too many levels of symbolic links",
+                ),
                 ("dangling", dangling_path, "No such file or directory"),
             ):
                 with self.subTest(path_kind=label):

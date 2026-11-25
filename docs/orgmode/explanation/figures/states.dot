@@ -10,6 +10,7 @@ digraph states {
     built [label="built\nthe module files are prepared;\nnothing is published yet"];
     publishing [label="publishing\nthe trees and module files are being exchanged"];
     complete [label="complete\nevery module is published"];
+    rolling_back [label="rolling_back\na rollback --to is putting\nan earlier run's trees back"];
     rolled_back [label="rolled_back\nthe previous trees and module files are back"];
 
     created -> building [label=" run"];
@@ -20,4 +21,6 @@ digraph states {
     publishing -> built [label=" a step failed:\n the old trees are back"];
     publishing -> complete;
     complete -> rolled_back [label=" rollback"];
+    complete -> rolling_back [label=" rollback --to"];
+    rolling_back -> rolled_back [label=" the pass\n is finished"];
 }

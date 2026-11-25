@@ -1,10 +1,12 @@
-//! run, resume and rollback of a run journal: build into a generation
-//! under the state root, check the live tree did not change, plan each
-//! module, optionally run a publication-preparation program, then exchange
-//! each staged tree with its live directory and write the module files;
-//! with a ledger configuration, publish.zig records each stage. Every step
-//! is journaled before it happens; a failure while publishing puts the old
-//! live trees back.
+//! run, resume, verify and rollback of a run journal: build into a
+//! generation under the state root, check the live tree did not change,
+//! plan each module, optionally run a publication-preparation program,
+//! verify the stage (verify.zig), then exchange each staged tree with its
+//! live directory and write the module files; with a ledger configuration,
+//! publish.zig records each stage. Every step is journaled before it
+//! happens; a failure while publishing puts the old live trees back.
+//! rollbackTo undoes every run published over an earlier one in one pass,
+//! and newestComplete names the run that rollback --latest undoes.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -21,6 +23,8 @@ const modulefile = @import("modulefile.zig");
 const builders = @import("builders.zig");
 const publish_mod = @import("publish.zig");
 const prefix_mod = @import("prefix.zig");
+const faultmount = if (@import("builtin").is_test) @import("faultmount.zig") else struct {};
+const verify_mod = @import("verify.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -145,6 +149,9 @@ fn s(v: ?Py) []const u8 {
 }
 
 fn now() f64 {
+    // The release binary does not compile the test clock. A replaceable
+    // build (zig build test, the -Dtest-ops artifact) may replace it.
+    if (comptime common.atomic.replaceable) return @import("testnow.zig").now();
     return admin.nowSeconds();
 }
 
@@ -156,10 +163,18 @@ fn isKind(p: []const u8, k: []const u8) bool {
     return std.mem.eql(u8, kind(p), k);
 }
 
-fn readBytes(r: *R, p: []const u8) E![]const u8 {
-    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, p)});
+const ReadFail = enum { refuse, os_fail };
+
+fn readBytes(r: *R, p: []const u8, fail: ReadFail) E![]const u8 {
+    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| switch (fail) {
+        .refuse => return r.refuse("{s}", .{main_mod.osError(r.a, err, p)}),
+        .os_fail => return r.osFail("{s}", .{main_mod.osError(r.a, err, p)}),
+    };
     defer sys.close(f.fd);
-    return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| r.refuse("{s}", .{main_mod.osError(r.a, err, p)});
+    return fsx.readAll(r.a, f.fd, 1 << 30) catch |err| switch (fail) {
+        .refuse => r.refuse("{s}", .{main_mod.osError(r.a, err, p)}),
+        .os_fail => r.osFail("{s}", .{main_mod.osError(r.a, err, p)}),
+    };
 }
 
 fn sha(a: Allocator, data: []const u8) []const u8 {
@@ -724,7 +739,7 @@ fn stageRoots(r: *R, gen: []const u8) E!struct { software: []const u8, modules: 
         return .{ .software = try std.fs.path.join(a, &.{ gen, "software" }), .modules = try std.fs.path.join(a, &.{ gen, "modules" }), .how = "installpath" };
     const info_path = try std.fs.path.join(a, &.{ gen, "bwrap_info.json" });
     if (!isKind(info_path, "file")) return r.refuse("bwrap backend finished without {s}; nothing was published", .{info_path});
-    const raw = try readBytes(r, info_path);
+    const raw = try readBytes(r, info_path, .refuse);
     const parsed = json.parse(a, raw) catch return r.refuse("cannot read {s}: not valid JSON", .{info_path});
     const info = json.toPy(a, parsed) catch return r.refuse("cannot read {s}: not valid JSON", .{info_path});
     if (info != .dict) return r.refuse("bwrap_info.json is not an object", .{});
@@ -769,14 +784,16 @@ fn withWritableDir(r: *R, dir: []const u8) E!?u32 {
     const st = fsx.statAt(fsx.cwd, dir, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
     const mode = st.perm();
     if (mode & 0o200 != 0) return null;
-    chmod(dir, mode | 0o300);
+    chmod(dir, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
     return mode;
 }
 
-fn chmod(p: []const u8, mode: u32) void {
+fn chmod(p: []const u8, mode: u32) sys.Error!void {
     var zb: [sys.path_max:0]u8 = undefined;
-    const z = sys.z(&zb, p) catch return;
-    _ = linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode));
+    const z = try sys.z(&zb, p);
+    while (true) {
+        if (try sys.result(linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode)))) |_| return;
+    }
 }
 
 fn plan(r: *R) E!void {
@@ -827,13 +844,13 @@ fn plan(r: *R) E!void {
         const stamp_text = try a.print("{s}\n", .{try json.dumps(a, stamp, 2, true)});
         const sealed = try withWritableDir(r, d.staged);
         const res = write(r, try std.fs.path.join(a, &.{ d.staged, ".eb-staged-rebuild-complete" }), stamp_text, try a.print("stamp:{s}", .{d.rel}), null, r.faults());
-        if (sealed) |m| chmod(d.staged, m);
+        if (sealed) |m| chmod(d.staged, m) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, d.staged)});
         try res;
         const existed = isKind(d.live_module, "file");
         var old_hash: Py = .null;
         var previous_root: Py = .null;
         if (existed) {
-            const old = try readBytes(r, d.live_module);
+            const old = try readBytes(r, d.live_module, .os_fail);
             old_hash = Py.s(sha(a, old));
             if (!std.unicode.utf8ValidateSlice(old)) return r.refuse("{s} is not UTF-8 text", .{d.live_module});
             if (modulefile.parseRoot(old)) |pr| if (pr.path.len > 0) {
@@ -901,7 +918,9 @@ fn installComplete(a: Allocator, path: []const u8) bool {
 
 // ---- publish --------------------------------------------------------------
 
-fn treeRunId(a: Allocator, path: []const u8) ?[]const u8 {
+/// The run that the .eb-staged-rebuild-complete in the tree at `path` names,
+/// or null when the tree has none or it cannot be read.
+pub fn treeRunId(a: Allocator, path: []const u8) ?[]const u8 {
     const stamp = std.fs.path.join(a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
     if (!isKind(stamp, "file")) return null;
     const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;
@@ -948,7 +967,7 @@ fn sameAccess(a: Allocator, left: []const u8, right: []const u8) bool {
 }
 
 fn fileHash(r: *R, p: []const u8) E![]const u8 {
-    return sha(r.a, try readBytes(r, p));
+    return sha(r.a, try readBytes(r, p, .refuse));
 }
 
 fn prepareBackup(r: *R, m: Py) E!void {
@@ -959,7 +978,7 @@ fn prepareBackup(r: *R, m: Py) E!void {
     if (std.mem.eql(u8, k, "symlink")) return r.refuse("refusing to replace module symlink {s}", .{live});
     if (pyfmt.truthy(pyfmt.get(m, "existed"))) {
         if (!std.mem.eql(u8, k, "file")) return r.intervene("{s} disappeared before publish", .{live});
-        const current = try readBytes(r, live);
+        const current = try readBytes(r, live, .refuse);
         const current_hash = sha(a, current);
         const backup = s(pyfmt.get(m, "backup"));
         if (std.mem.eql(u8, current_hash, s(pyfmt.get(m, "new_hash"))) and isKind(backup, "file")) {
@@ -982,13 +1001,13 @@ fn prepareBackup(r: *R, m: Py) E!void {
 fn moveSealed(r: *R, source: []const u8, destination: []const u8) E!void {
     const st = fsx.statAt(fsx.cwd, source, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     const mode = st.perm();
-    if (mode & 0o200 == 0) chmod(source, mode | 0o300);
+    if (mode & 0o200 == 0) chmod(source, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     sys.renameat(fsx.cwd, source, fsx.cwd, destination) catch |err| {
-        if (mode & 0o200 == 0) chmod(source, mode);
+        if (mode & 0o200 == 0) chmod(source, mode) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, source)});
         if (err == error.CrossDevice) return r.refuse("the stage and live software tree are on different filesystems; place --state-root beside the software tree", .{});
         return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     };
-    if (mode & 0o200 == 0) chmod(destination, mode);
+    if (mode & 0o200 == 0) chmod(destination, mode) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
 }
 
 fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
@@ -1008,8 +1027,21 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
     if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
         try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
         try moveSealed(r, staged, retired);
-        atomic.fsyncDir(std.fs.path.dirname(retired) orelse "/") catch {};
-    } else if (!(std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir"))) {
+        // A cross-directory rename is durable only after both parents are
+        // flushed: the destination gained the retired name, and the source
+        // lost the staged name.
+        const parent = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        const source = std.fs.path.dirname(staged) orelse "/";
+        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    } else if (std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir")) {
+        // The rename already happened. A failed flush left it uncommitted,
+        // so a retry flushes both parents again before publishing.
+        const parent = std.fs.path.dirname(retired) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        const source = std.fs.path.dirname(staged) orelse "/";
+        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    } else {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
     // After an exchange the journal did not record, the run's tree is live
@@ -1025,7 +1057,7 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
 fn writeNewModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     const a = r.a;
     const rel = s(pyfmt.get(m, "rel"));
-    const prepared = try readBytes(r, s(pyfmt.get(m, "prepared")));
+    const prepared = try readBytes(r, s(pyfmt.get(m, "prepared")), .refuse);
     if (!std.mem.eql(u8, sha(a, prepared), s(pyfmt.get(m, "new_hash")))) return r.intervene("prepared module bytes for {s} changed", .{rel});
     const live = s(pyfmt.get(m, "live_module"));
     const k = kind(live);
@@ -1049,7 +1081,7 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
     if (pyfmt.truthy(pyfmt.get(m, "existed"))) {
         const backup = s(pyfmt.get(m, "backup"));
         if (!isKind(backup, "file")) return r.intervene("no backup to restore for {s}", .{rel});
-        const previous = try readBytes(r, backup);
+        const previous = try readBytes(r, backup, .refuse);
         if (!std.mem.eql(u8, sha(a, previous), s(pyfmt.get(m, "old_hash")))) return r.intervene("backup for {s} changed", .{rel});
         if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "old_hash")))) {
             // The backup carries the previous access policy; the same bytes
@@ -1061,14 +1093,18 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
         try write(r, live, previous, try a.print("restore.file:{s}", .{rel}), backup, faults);
         return;
     }
-    if (std.mem.eql(u8, k, "missing")) return;
-    if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
+    const parent = std.fs.path.dirname(live) orelse "/";
+    if (std.mem.eql(u8, k, "missing")) {
+        // A retry after a failed flush finds the file already removed and
+        // still has to flush. A module never written may have no directory.
+        if (!isKind(parent, "dir")) return;
+    } else if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
         try hit(r, faults, try a.print("restore.remove:{s}", .{rel}));
         sys.unlinkat(fsx.cwd, live, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, live)});
-        atomic.fsyncDir(std.fs.path.dirname(live) orelse "/") catch {};
-        return;
+    } else {
+        return r.intervene("{s} is not the module file this run created", .{live});
     }
-    return r.intervene("{s} is not the module file this run created", .{live});
+    atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, parent)});
 }
 
 fn readlinkText(a: Allocator, p: []const u8) []const u8 {
@@ -1107,7 +1143,7 @@ fn createLinks(r: *R, faults: atomic.Faults) E!void {
     }
 }
 
-fn removeCreatedLinks(r: *R) void {
+fn removeCreatedLinks(r: *R) E!void {
     const links = r.list("links_plan");
     var i = links.len;
     while (i > 0) {
@@ -1116,9 +1152,12 @@ fn removeCreatedLinks(r: *R) void {
         if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
-            sys.unlinkat(fsx.cwd, path, 0) catch {};
-            atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
         }
+        // The link is gone only once its parent has been flushed. A retry
+        // that finds it already absent or replaced still has to flush.
+        const parent = std.fs.path.dirname(path) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
         r.setItem("links_plan", i, "created", .{ .bool = false });
         r.setItem("links_plan", i, "status", Py.s("pending"));
     }
@@ -1148,13 +1187,13 @@ fn normalizeBaseline(r: *R) E!void {
         r.setItem("modules_plan", i, "swap_method", .null);
         r.setItem("modules_plan", i, "published_at", .null);
     }
-    removeCreatedLinks(r);
+    try removeCreatedLinks(r);
 }
 
 fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
     const x = v orelse return "None";
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, x) catch return x;
+    common.pytext.reprStr(&out, a, x) catch return x;
     return out.items;
 }
 
@@ -1202,7 +1241,9 @@ fn publish(r: *R) E!void {
     publishSteps(r) catch |err| {
         const first = r.why;
         const kind_err = err;
-        removeCreatedLinks(r);
+        removeCreatedLinks(r) catch {
+            return r.intervene("publish failed and the old live tree could not be restored: {s}", .{r.why});
+        };
         normalizeBaseline(r) catch {
             return r.intervene("publish failed and the old live tree could not be restored: {s}", .{r.why});
         };
@@ -1325,8 +1366,10 @@ fn publisher(r: *R) E!?Py {
     return policy.?;
 }
 
+/// _record: queue records in the outbox of the journal's run under the
+/// caller's state root, and deliver what is queued.
 fn record(r: *R, config: Py, recs_in: []const Py, step: ?[]const u8) E![]const Py {
-    const rdir = runDir(r.a, r.str("state_root"), r.str("run_id"));
+    const rdir = runDir(r.a, r.spec.state_root, r.str("run_id"));
     var why: []const u8 = "";
     if (recs_in.len > 0) publish_mod.enqueue(r.a, rdir, recs_in, r.faults(), step.?, &why) catch |err| return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
@@ -1369,10 +1412,73 @@ fn recordFinished(r: *R, config: ?Py, message: []const u8) E!Result {
 
 /// _publish_recorded: swap only after a required ledger acknowledged every
 /// started record.
+/// Each module's staged tree: at its stage name, or at its hidden name
+/// after a restored publish.
+fn verifyTrees(r: *R) E![]const []const u8 {
+    var trees: std.ArrayList([]const u8) = .empty;
+    for (r.list("modules_plan")) |m| {
+        const staged = s(pyfmt.get(m, "staged"));
+        const retired = s(pyfmt.get(m, "retired"));
+        const owner = if (isKind(retired, "dir")) treeRunId(r.a, retired) else null;
+        if (isKind(staged, "dir")) {
+            try trees.append(r.a, admin.abspath(r.a, staged));
+        } else if (owner != null and std.mem.eql(u8, owner.?, r.str("run_id"))) {
+            try trees.append(r.a, admin.abspath(r.a, retired));
+        } else {
+            return r.refuse("the staged tree of {s} is missing: {s}", .{ s(pyfmt.get(m, "rel")), staged });
+        }
+    }
+    return trees.items;
+}
+
+/// Check the stage, write verify.json beside the journal, and return the
+/// record the journal keeps.
+fn verifyStage(r: *R, faults: atomic.Faults) E!Py {
+    const a = r.a;
+    const trees = try verifyTrees(r);
+    const outcome = verify_mod.check(a, r.env, r.journal, trees);
+    const at = now();
+    const path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, r.str("run_id")), verify_mod.report_name });
+    const rep = verify_mod.report(a, r.str("run_id"), outcome, at, path);
+    try write(r, path, rep.text, "verify.report", null, faults);
+    verify_mod.logReport(a, r.str("run_id"), outcome, path);
+    return rep.record;
+}
+
+/// Whether the stage may be published: it passes verify, or --force
+/// overrides a failure.
+fn verifyGate(r: *R) E!bool {
+    const verified = try verifyStage(r, r.faults());
+    const failed = !std.mem.eql(u8, s(pyfmt.get(verified, "result")), "pass");
+    r.set("verify", dictSet(r.a, verified, "forced", .{ .bool = failed and r.spec.force }));
+    r.set("updated_at", pyfmt.get(verified, "at").?);
+    const message = if (failed and !r.spec.force)
+        try r.a.print("verify failed; the live directory was not swapped. Fix the stage and resume {s}, or resume it with --force to publish it anyway", .{r.str("run_id")})
+    else
+        "";
+    r.set("message", Py.s(message));
+    try r.save("journal.verified");
+    if (failed) {
+        if (r.spec.force) log("verify failed; publishing run {s} anyway (--force)", .{r.str("run_id")}) else log("{s}", .{message});
+    }
+    return !failed or r.spec.force;
+}
+
+/// verify: check a built run's stage and record the result; nothing is
+/// published. 0 when it passes, 1 when it fails.
+pub fn verifyCommand(r: *R) E!u8 {
+    const verified = try verifyStage(r, r.faults());
+    r.set("verify", verified);
+    try r.save("journal.verified");
+    return if (std.mem.eql(u8, s(pyfmt.get(verified, "result")), "pass")) 0 else 1;
+}
+
 fn publishRecorded(r: *R) E!Result {
     try requirePublicationFields(r);
     const rc = try preparePublication(r);
     if (rc != 0) return .{ .code = rc, .message = r.str("message") };
+    const gated = std.mem.eql(u8, r.str("state"), "built") and pyfmt.truthy(r.get("verify_before_swap"));
+    if (gated and !try verifyGate(r)) return .{ .code = 2, .message = r.str("message") };
     const config = try publisher(r);
     if (config) |c| {
         try validatePublicationSet(r);
@@ -1501,7 +1607,27 @@ pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
         } else |_| {}
     }
     const l = try lockRoot(r);
-    defer l.release();
+    return released(r, l, startLocked(r, learned, run_id, probes, policy));
+}
+
+/// The outcome of a command that held `l`, once `l` is released. After a
+/// command that succeeded, a failed release is its error, as the Python
+/// tool's `finally: lock.release()` lets the OSError out. After another
+/// error the release is dropped, so that error is the one reported.
+fn released(r: *R, l: state.RootLock, outcome: E!Result) E!Result {
+    const res = outcome catch |err| {
+        rootlock.releaseAfterError(l);
+        return err;
+    };
+    if (rootlock.release(l)) |why| return r.osFail("{s}", .{why});
+    return res;
+}
+
+/// run under the state root's lock: write the new journal, then build and
+/// publish.
+fn startLocked(r: *R, learned: Learned, run_id: []const u8, probes: Py, policy: Py) E!Result {
+    const a = r.a;
+    const rels = learned.rels;
     try checkStageFilesystem(r, rels);
     try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
@@ -1551,6 +1677,11 @@ pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     });
     if (r.spec.build_dir) |bd| try j_entries.append(a, .{ .key = "build_dir", .value = Py.s(admin.abspath(a, bd)) });
     r.journal = .{ .dict = j_entries.items };
+    if (r.spec.verify) {
+        r.set("verify_before_swap", .{ .bool = true });
+        r.set("verify_context", verify_mod.context(a, r.spec.eb_args, r.env));
+        r.set("verify", .null);
+    }
     try r.save("journal.created");
     log("run {s} backend {s} generation {s}", .{ run_id, r.spec.backend, gen });
     return runLocked(r, true);
@@ -1561,8 +1692,9 @@ fn usable(probes: Py, key: []const u8) bool {
     return pyfmt.truthy(pyfmt.get(x, "usable"));
 }
 
-/// The spec a journal records, for resume and rollback.
-fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
+/// The spec a journal records, for resume, under the caller's state root
+/// and run id.
+fn specFromJournal(a: Allocator, state_root: []const u8, run_id: []const u8, j: Py, lock_timeout: ?f64) engine.Spec {
     var rels: std.ArrayList([]const u8) = .empty;
     if (pyfmt.get(j, "module_rels")) |v| if (v == .list) for (v.list) |x| if (x == .str) rels.append(a, x.str) catch oom();
     var args: std.ArrayList([]const u8) = .empty;
@@ -1571,7 +1703,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
     return .{
         .software = s(pyfmt.get(j, "software")),
         .modules = s(pyfmt.get(j, "modules")),
-        .state_root = s(pyfmt.get(j, "state_root")),
+        .state_root = state_root,
         .eb_args = args.items,
         .backend = s(pyfmt.get(j, "backend")),
         .grace_hours = if (grace) |g| switch (g) {
@@ -1581,7 +1713,7 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
         } else admin.default_grace_hours,
         .module_rels = rels.items,
         .eb_executable = if (s(pyfmt.get(j, "eb_executable")).len > 0) s(pyfmt.get(j, "eb_executable")) else "eb",
-        .run_id = s(pyfmt.get(j, "run_id")),
+        .run_id = run_id,
         .skip_live_check = pyfmt.truthy(pyfmt.get(j, "skip_live_check")),
         .require_exchange = pyfmt.truthy(pyfmt.get(j, "require_exchange")),
         .lock_timeout = lock_timeout,
@@ -1592,28 +1724,44 @@ fn specFromJournal(a: Allocator, j: Py, lock_timeout: ?f64) engine.Spec {
 }
 
 /// resume: finish or undo the run the journal names, as its state says,
-/// under the state root's lock.
-pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) E!Result {
-    if (!admin.plainRunId(run_id)) main_mod.refuse("run id is not a plain name: '{s}'", .{run_id});
-    const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
-    const st = fsx.statAt(fsx.cwd, path, false) catch {
-        main_mod.refuse("no journal at {s}", .{path});
-    };
-    if (!st.isReg()) main_mod.refuse("no journal at {s}", .{path});
-    var j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        main_mod.refuse("journal run id does not match its directory", .{});
+/// under the state root's lock. A run started with --verify, or resumed
+/// with `verify`, has its stage checked before the swap; the journal keeps
+/// that, with the directories the checks judge the stage against, so a
+/// later resume checks it the same way. With `force` as well, a stage that
+/// fails is published anyway, and the journal records that it was forced.
+pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64, verify: bool, force: bool) E!Result {
+    const loaded = admin.loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    const j = loaded.journal;
     if (std.mem.eql(u8, s(pyfmt.get(j, "kind")), "retire")) main_mod.refuse("run {s} is a retire record; rollback restores the module file", .{run_id});
-    var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, j, lock_timeout), .path = path };
+    var r: R = .{ .a = a, .env = env, .ctx = ctx, .spec = specFromJournal(a, state_root, run_id, j, lock_timeout), .path = path };
+    r.spec.force = force;
     defer main_mod.last_why = r.why;
     engine.checkRoots(a, r.spec);
     const l = try lockRoot(&r);
-    defer l.release();
-    j = main_mod.loadJournal(a, path);
-    if (!admin.matchingRunId(j, run_id))
-        return r.intervene("journal run id does not match its directory", .{});
+    return released(&r, l, resumeLocked(&r, run_id, verify, force));
+}
+
+/// resume under the state root's lock, from the journal as it is once the
+/// lock is held.
+fn resumeLocked(r: *R, run_id: []const u8, verify: bool, force: bool) E!Result {
+    const a = r.a;
+    const env = r.env;
+    const state_root = r.spec.state_root;
+    const j = admin.loadRunJournal(a, state_root, run_id).journal;
     r.journal = j;
     const state_name = r.str("state");
+    const gated = pyfmt.truthy(r.get("verify_before_swap"));
+    if (force and !(verify or gated)) return r.refuse("--force needs --verify; run {s} does not check its stage before the swap", .{run_id});
+    if ((verify or gated) and (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing"))) admin.requireStageModules(env, j);
+    if (verify and !gated) for ([_][]const u8{ "created", "building", "failed", "built" }) |unpublished| {
+        if (!std.mem.eql(u8, state_name, unpublished)) continue;
+        r.set("verify_before_swap", .{ .bool = true });
+        r.set("verify_context", verify_mod.context(a, r.spec.eb_args, r.env));
+        try r.save("journal.verify_before_swap");
+        break;
+    };
+    r.spec.verify = pyfmt.truthy(r.get("verify_before_swap"));
     var published = false;
     for (r.list("modules_plan")) |m| if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "published")) {
         published = true;
@@ -1625,17 +1773,18 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
             }
         }
         const m = try a.print("run {s} is already complete", .{run_id});
-        return recordFinished(&r, try publisher(&r), m);
+        return recordFinished(r, try publisher(r), m);
     }
     if (std.mem.eql(u8, state_name, "rolled_back")) return r.refuse("run {s} was rolled back; start a new run", .{run_id});
+    if (std.mem.eql(u8, state_name, "rolling_back")) return r.refuse("{s}", .{rollingBack(a, j)});
     if (std.mem.eql(u8, state_name, "created") or std.mem.eql(u8, state_name, "building") or std.mem.eql(u8, state_name, "failed")) {
         if (published) return r.intervene("run {s} is {s} but a module was already published", .{ run_id, state_name });
         log("resume {s} from {s}: rebuilding the unpublished generation", .{ run_id, state_name });
-        return runLocked(&r, true);
+        return runLocked(r, true);
     }
     if (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing")) {
         log("resume {s} from {s}: publishing", .{ run_id, state_name });
-        return publishRecorded(&r);
+        return publishRecorded(r);
     }
     return r.intervene("run {s} is in an unknown state {s}", .{ run_id, state_name });
 }
@@ -1644,6 +1793,7 @@ pub fn resumeRun(a: Allocator, env: probe.Env, ctx: *admin.Ctx, state_root: []co
 pub fn rollbackRun(r: *R) E!Result {
     const a = r.a;
     const run_id = r.str("run_id");
+    if (std.mem.eql(u8, r.str("state"), "rolling_back")) return r.refuse("{s}", .{rollingBack(a, r.journal)});
     const config = try publisher(r);
     var finished: publish_mod.Corrects = .empty;
     var started = false;
@@ -1655,7 +1805,7 @@ pub fn rollbackRun(r: *R) E!Result {
             return .{ .code = publish_mod.pending_exit, .message = m };
         }
         var why: []const u8 = "";
-        const data = publish_mod.load(a, runDir(a, r.str("state_root"), run_id), &why) catch |err| return switch (err) {
+        const data = publish_mod.load(a, runDir(a, r.spec.state_root, run_id), &why) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.NeedsIntervention => r.intervene("{s}", .{why}),
             error.Refused => r.refuse("{s}", .{why}),
@@ -1789,9 +1939,10 @@ fn rollbackSteps(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
             try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
-            sys.unlinkat(fsx.cwd, path, 0) catch {};
-            atomic.fsyncDir(std.fs.path.dirname(path) orelse "/") catch {};
+            sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
         }
+        const parent = std.fs.path.dirname(path) orelse "/";
+        atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
         r.setItem("links_plan", k, "created", .{ .bool = false });
         r.setItem("links_plan", k, "status", Py.s("removed"));
     }
@@ -1820,6 +1971,279 @@ fn restorePublished(r: *R) E!void {
         r.setItem("modules_plan", i, "status", Py.s("published"));
     }
     try createLinks(r, .{});
+}
+
+/// _rolling_back: the refusal for a run an interrupted rollback --to marked.
+fn rollingBack(a: Allocator, j: Py) []const u8 {
+    var target: std.ArrayList(u8) = .empty;
+    pyfmt.str(&target, a, pyfmt.get(j, "rollback_to")) catch oom();
+    return a.print("run {s} is rolling back to {s}; run rollback --to {s} to finish", .{ s(pyfmt.get(j, "run_id")), target.items, target.items }) catch oom();
+}
+
+fn pyStr(a: Allocator, v: ?Py) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    pyfmt.str(&out, a, v) catch oom();
+    return out.items;
+}
+
+/// _when: a recorded time, or null for anything that is not a number.
+fn when(v: ?Py) ?f64 {
+    const x = v orelse return null;
+    return switch (x) {
+        .int => |n| @floatFromInt(n),
+        .float => |f| f,
+        else => null,
+    };
+}
+
+/// _completed: runs order by completion time, then run id.
+fn completedLess(x: Py, y: Py) bool {
+    const xw = when(pyfmt.get(x, "completed_at")) orelse 0;
+    const yw = when(pyfmt.get(y, "completed_at")) orelse 0;
+    if (xw != yw) return xw < yw;
+    return json.pyTextLess(s(pyfmt.get(x, "run_id")), s(pyfmt.get(y, "run_id")));
+}
+
+fn isRetire(j: Py) bool {
+    return admin.eqlStr(pyfmt.get(j, "kind"), "retire");
+}
+
+/// _newest_complete: the run rollback --latest undoes.
+pub fn newestComplete(r: *R) E![]const u8 {
+    var best: ?Py = null;
+    for (main_mod.runJournals(r.a, r.spec.state_root)) |j| {
+        if (isRetire(j) or !admin.eqlStr(pyfmt.get(j, "state"), "complete")) continue;
+        if (best == null or completedLess(best.?, j)) best = j;
+    }
+    const b = best orelse return r.refuse("no complete run to roll back", .{});
+    return s(pyfmt.get(b, "run_id"));
+}
+
+fn livePaths(a: Allocator, j: Py) []const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    const v = pyfmt.get(j, "modules_plan") orelse return &.{};
+    if (v != .list) return &.{};
+    for (v.list) |m| out.append(a, admin.abspath(a, s(pyfmt.get(m, "live_software")))) catch oom();
+    return out.items;
+}
+
+fn holds(items: []const []const u8, x: []const u8) bool {
+    for (items) |y| if (std.mem.eql(u8, x, y)) return true;
+    return false;
+}
+
+fn completedLessCtx(_: void, x: Run, y: Run) bool {
+    return completedLess(x.journal, y.journal);
+}
+
+/// One run rollback --to undoes: its journal as this pass changes it.
+const Run = struct { path: []const u8, journal: Py };
+
+/// _runs_over: the complete runs published after `target` on one of its
+/// install paths, and the runs an interrupted rollback --to marked; oldest
+/// first.
+fn runsOver(r: *R, journals: []const Py, target: Py) E![]Run {
+    const a = r.a;
+    const gen = s(pyfmt.get(target, "run_id"));
+    const ours = livePaths(a, target);
+    var chosen: std.ArrayList(Run) = .empty;
+    for (journals) |j| {
+        if (isRetire(j) or std.mem.eql(u8, s(pyfmt.get(j, "run_id")), gen)) continue;
+        const state_name = pyfmt.get(j, "state");
+        const pick = if (admin.eqlStr(state_name, "rolling_back"))
+            true
+        else if (admin.eqlStr(state_name, "complete") and completedLess(target, j)) blk: {
+            for (livePaths(a, j)) |live| if (holds(ours, live)) break :blk true;
+            break :blk false;
+        } else false;
+        if (pick) chosen.append(a, .{ .path = runJournal(a, r.spec.state_root, s(pyfmt.get(j, "run_id"))), .journal = j }) catch oom();
+    }
+    std.mem.sort(Run, chosen.items, {}, completedLessCtx);
+    for (chosen.items) |undo| {
+        for (livePaths(a, undo.journal)) |live| for (journals) |later| {
+            if (isRetire(later) or !admin.eqlStr(pyfmt.get(later, "state"), "complete")) continue;
+            var named = false;
+            for (chosen.items) |c| named = named or std.mem.eql(u8, s(pyfmt.get(c.journal, "run_id")), s(pyfmt.get(later, "run_id")));
+            if (named or !completedLess(undo.journal, later) or !holds(livePaths(a, later), live)) continue;
+            const id = s(pyfmt.get(later, "run_id"));
+            return r.refuse("run {s} published {s} after run {s}; roll back run {s} first", .{ id, live, s(pyfmt.get(undo.journal, "run_id")), id });
+        };
+    }
+    return chosen.items;
+}
+
+fn runJournal(a: Allocator, state_root: []const u8, run_id: []const u8) []const u8 {
+    return std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" }) catch oom();
+}
+
+/// A plan entry of one chosen run: indices, so that it is read back after
+/// the journal changes.
+const Link = struct { run: usize, mod: usize };
+
+fn planItem(runs: []const Run, l: Link) Py {
+    return pyfmt.get(runs[l.run].journal, "modules_plan").?.list[l.mod];
+}
+
+fn runId(runs: []const Run, l: Link) []const u8 {
+    return s(pyfmt.get(runs[l.run].journal, "run_id"));
+}
+
+/// _rotation_stage: how many runs of `chain` already hold their own tree at
+/// their retired path, read from the run markers.
+fn rotationStage(r: *R, gen: []const u8, live: []const u8, chain: []const Link, runs: []const Run, ours: bool) E!usize {
+    const a = r.a;
+    const n = chain.len;
+    var i: usize = 0;
+    while (i + 1 < n) : (i += 1) try recoverPair(r, s(pyfmt.get(planItem(runs, chain[i + 1]), "retired")), s(pyfmt.get(planItem(runs, chain[i]), "retired")));
+    try recoverPair(r, live, s(pyfmt.get(planItem(runs, chain[n - 1]), "retired")));
+    var kept: std.ArrayList([]const u8) = .empty;
+    for (chain) |l| kept.append(a, s(pyfmt.get(planItem(runs, l), "retired"))) catch oom();
+    kept.append(a, live) catch oom();
+    for (kept.items) |p| {
+        const k = kind(p);
+        if (!std.mem.eql(u8, k, "dir")) return r.refuse("cannot roll back to {s}: {s} is {s}, not a kept tree", .{ gen, p, k });
+    }
+    const names = a.alloc([]const u8, n) catch oom();
+    const held = a.alloc(?[]const u8, n) catch oom();
+    for (chain, 0..) |l, k| {
+        names[k] = runId(runs, l);
+        held[k] = treeRunId(a, kept.items[k]);
+    }
+    const live_id = treeRunId(a, live);
+    var stage: usize = 0;
+    while (stage < n and held[stage] != null and std.mem.eql(u8, held[stage].?, names[stage])) stage += 1;
+    var first: ?[]const u8 = live_id;
+    var placed = true;
+    if (stage < n) {
+        first = held[stage];
+        placed = live_id != null and std.mem.eql(u8, live_id.?, names[n - 1]);
+        for (stage + 1..n) |k| placed = placed and held[k] != null and std.mem.eql(u8, held[k].?, names[k - 1]);
+    }
+    const named = first != null and holds(names, first.?);
+    const not_gen = first == null or !std.mem.eql(u8, first.?, gen);
+    if (named or !placed or (ours and not_gen)) return r.intervene("cannot roll back {s} to {s}: its trees are not where the journals put them", .{ live, gen });
+    return stage;
+}
+
+/// Point `r` at one chosen run, so that its journal methods act on it.
+fn select(r: *R, undo: *const Run) void {
+    r.journal = undo.journal;
+    r.path = undo.path;
+}
+
+/// _rollback_to: undo every run published over generation `gen`. Each
+/// install path switches once, straight to the tree `gen` left there, and
+/// each undone run's tree ends at its own retired path. The runs are marked
+/// rolling_back first, so running the same command again finishes an
+/// interrupted pass.
+pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
+    const a = r.a;
+    const state_root = r.spec.state_root;
+    const journals = main_mod.runJournals(a, state_root);
+    const target = admin.loadRunJournal(a, state_root, gen).journal;
+    if (isRetire(target)) return r.refuse("run {s} is a retire record, not a published generation", .{gen});
+    if (!admin.eqlStr(pyfmt.get(target, "state"), "complete")) return r.refuse("run {s} is {s}; rollback --to returns to a complete run", .{ gen, pyStr(a, pyfmt.get(target, "state")) });
+    for (journals) |j| if (admin.eqlStr(pyfmt.get(j, "state"), "rolling_back") and !admin.eqlStr(pyfmt.get(j, "rollback_to"), gen)) return r.refuse("{s}", .{rollingBack(a, j)});
+    const runs = try runsOver(r, journals, target);
+    if (runs.len == 0) {
+        for (livePaths(a, target)) |live| {
+            const holder = treeRunId(a, live);
+            if (holder != null and std.mem.eql(u8, holder.?, gen)) continue;
+            const why = if (holder != null and holder.?.len > 0) try a.print("run {s} replaced it", .{holder.?}) else "the tree there has no run marker";
+            return r.refuse("run {s} is not live at {s}: {s}; finish or roll back that run first", .{ gen, live, why });
+        }
+        const m = try a.print("run {s} is already live", .{gen});
+        log("{s}", .{m});
+        return .{ .code = 0, .message = m };
+    }
+    if (runs.len == 1 and admin.eqlStr(pyfmt.get(runs[0].journal, "state"), "complete")) {
+        const loaded = admin.loadRunJournal(a, state_root, s(pyfmt.get(runs[0].journal, "run_id")));
+        r.path = loaded.path;
+        r.journal = loaded.journal;
+        return rollbackRun(r);
+    }
+    var ledgered: std.ArrayList([]const u8) = .empty;
+    for (runs) |undo| if (pyfmt.truthy(pyfmt.get(undo.journal, "ledger_config"))) ledgered.append(a, s(pyfmt.get(undo.journal, "run_id"))) catch oom();
+    if (ledgered.items.len > 0) return r.refuse("rollback --to {s} would pass over runs that record to a ledger ({s}); roll them back one at a time", .{ gen, std.mem.join(a, ", ", ledgered.items) catch oom() });
+    const ours = livePaths(a, target);
+    var chains: std.StringArrayHashMapUnmanaged(std.ArrayList(Link)) = .empty;
+    for (runs, 0..) |undo, k| {
+        const mods = pyfmt.get(undo.journal, "modules_plan") orelse continue;
+        if (mods != .list) continue;
+        for (mods.list, 0..) |m, i| {
+            const got = chains.getOrPut(a, admin.abspath(a, s(pyfmt.get(m, "live_software")))) catch oom();
+            if (!got.found_existing) got.value_ptr.* = .empty;
+            got.value_ptr.append(a, .{ .run = k, .mod = i }) catch oom();
+        }
+    }
+    for (chains.keys(), chains.values()) |live, chain| {
+        const one = admin.abspath(a, s(pyfmt.get(planItem(runs, chain.items[0]), "live_module")));
+        for (chain.items[1..]) |l| if (!std.mem.eql(u8, admin.abspath(a, s(pyfmt.get(planItem(runs, l), "live_module"))), one))
+            return r.refuse("cannot roll back {s} to {s}: the runs over it wrote different module files", .{ live, gen });
+    }
+    const stages = a.alloc(usize, chains.count()) catch oom();
+    for (chains.keys(), chains.values(), 0..) |live, chain, k| stages[k] = try rotationStage(r, gen, live, chain.items, runs, holds(ours, live));
+    for (runs) |*undo| {
+        if (admin.eqlStr(pyfmt.get(undo.journal, "state"), "rolling_back")) continue;
+        select(r, undo);
+        r.set("state", Py.s("rolling_back"));
+        r.set("rollback_to", Py.s(gen));
+        r.set("message", Py.s(try a.print("rolling back to {s}", .{gen})));
+        try r.save(try a.print("journal.rolling_back:{s}", .{r.str("run_id")}));
+        undo.journal = r.journal;
+    }
+    var methods: std.StringHashMapUnmanaged([]const u8) = .empty;
+    for (chains.keys(), chains.values(), 0..) |live, chain, k| {
+        const items = chain.items;
+        select(r, &runs[items[items.len - 1].run]);
+        for (stages[k]..items.len) |index| {
+            const m = planItem(runs, items[index]);
+            const rel = s(pyfmt.get(m, "rel"));
+            const method = if (index + 1 < items.len)
+                try swapPair(r, s(pyfmt.get(planItem(runs, items[index + 1]), "retired")), s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.rotate:{s}:{s}", .{ rel, runId(runs, items[index]) }))
+            else
+                try swapPair(r, live, s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.swap:{s}", .{rel}));
+            methods.put(a, try a.print("{s}\x00{s}", .{ runId(runs, items[index]), live }), method) catch oom();
+        }
+        const first = planItem(runs, items[0]);
+        const last = planItem(runs, items[items.len - 1]);
+        try restoreOldModule(r, dictSet(a, first, "new_hash", pyfmt.get(last, "new_hash") orelse .null), r.faults());
+        log("restored {s}", .{s(pyfmt.get(first, "rel"))});
+    }
+    var undone: std.ArrayList([]const u8) = .empty;
+    var k = runs.len;
+    while (k > 0) {
+        k -= 1;
+        select(r, &runs[k]);
+        for (r.list("links_plan"), 0..) |l, i| {
+            if (!pyfmt.truthy(pyfmt.get(l, "created"))) continue;
+            const path = s(pyfmt.get(l, "live_path"));
+            if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(a, path), s(pyfmt.get(l, "target")))) {
+                try hit(r, r.faults(), try a.print("rollback.unlink:{s}", .{s(pyfmt.get(l, "rel"))}));
+                sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, path)});
+            }
+            const parent = std.fs.path.dirname(path) orelse "/";
+            atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(a, err, parent)});
+            r.setItem("links_plan", i, "created", .{ .bool = false });
+            r.setItem("links_plan", i, "status", Py.s("removed"));
+        }
+        const id = r.str("run_id");
+        for (r.list("modules_plan"), 0..) |m, i| {
+            const previous = s(pyfmt.get(m, "rollback_method"));
+            const recorded = methods.get(try a.print("{s}\x00{s}", .{ id, admin.abspath(a, s(pyfmt.get(m, "live_software"))) }));
+            r.setItem("modules_plan", i, "status", Py.s("restored"));
+            r.setItem("modules_plan", i, "rollback_method", Py.s(recorded orelse if (previous.len > 0) previous else "recovered"));
+        }
+        r.set("state", Py.s("rolled_back"));
+        r.set("rolled_back_at", .{ .float = now() });
+        r.set("message", Py.s(try a.print("rolled back to {s}", .{gen})));
+        try r.save(try a.print("journal.rolled_back:{s}", .{id}));
+        runs[k].journal = r.journal;
+        undone.append(a, id) catch oom();
+    }
+    const m = try a.print("rolled back to {s}: runs {s} rolled back; replacements kept at their retired paths", .{ gen, std.mem.join(a, ", ", undone.items) catch oom() });
+    log("{s}", .{m});
+    return .{ .code = 0, .message = m };
 }
 
 test "relsFromDryRun" {
@@ -2237,4 +2661,278 @@ test "availableBytes falls back to block_size and multiplies in u128 without ove
     info.fragment_size = 1 << 30;
     info.blocks_available = 1 << 40;
     try std.testing.expectEqual(@as(u128, 1) << 70, availableBytes(info));
+}
+
+test "removeCreatedLinks surfaces unlink errors and keeps created true" {
+    if (linux.geteuid() == 0) return;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-link-unlink-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const dir = try std.fs.path.join(a, &.{ root, "tools", "demo" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ root, "all", "demo", "1.lua" });
+    const link = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    {
+        var zt: [sys.path_max:0]u8 = undefined;
+        var zl: [sys.path_max:0]u8 = undefined;
+        _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zl, link)).ptr });
+    }
+    try chmod(dir, 0o555);
+    defer chmod(dir, 0o755) catch {};
+
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const link_item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("tools/demo/1.lua") },
+        .{ .key = "live_path", .value = Py.s(link) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var r: R = .{
+        .a = a,
+        .env = env,
+        .ctx = &ctx,
+        .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} },
+        .journal = .{ .dict = try a.dupe(Py.Entry, &.{
+            .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{link_item}) } },
+        }) },
+    };
+    try std.testing.expectError(error.Os, removeCreatedLinks(&r));
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "[Errno 13] Permission denied:") != null);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(r.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(link, "symlink"));
+}
+
+fn writeBytes(path: []const u8, data: []const u8) !void {
+    const fd = try sys.openat(fsx.cwd, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    defer sys.close(fd);
+    try sys.writeAll(fd, data);
+}
+
+fn linkTo(target: []const u8, path: []const u8) !void {
+    var zt: [sys.path_max:0]u8 = undefined;
+    var zp: [sys.path_max:0]u8 = undefined;
+    _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, target)).ptr, linux.AT.FDCWD, (try sys.z(&zp, path)).ptr });
+}
+
+fn testRun(a: Allocator, ctx: *admin.Ctx, env: probe.Env, journal: Py) R {
+    return .{
+        .a = a,
+        .env = env,
+        .ctx = ctx,
+        .spec = .{ .software = "/s", .modules = "/m", .state_root = "/st", .eb_args = &.{} },
+        .journal = journal,
+    };
+}
+
+const empty_envp: common.proc.Envp = &[_:null]?[*:0]const u8{};
+
+fn testEnv() probe.Env {
+    return .{ .envp = empty_envp };
+}
+
+fn expectFlush(why: []const u8, dir: []const u8) !void {
+    try std.testing.expect(std.mem.indexOf(u8, why, "Input/output error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, why, dir) != null);
+}
+
+test "a failed directory flush after a staged tree is renamed is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage", "/software");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, std.fs.path.dirname(retired).?);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a failed flush of the source parent after a cross-directory rename is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage-source", "/generations/r1/software/demo");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const source = std.fs.path.dirname(staged).?;
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    try std.testing.expect(std.mem.indexOf(u8, r.why, std.fs.path.dirname(retired).?) == null);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a failed directory flush after a created module file is unlinked is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "module", "/modules");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "modules" });
+    try atomic.makedirs(dir);
+    const live = try std.fs.path.join(a, &.{ dir, "1.lua" });
+    const body = "created-module\n";
+    try writeBytes(live, body);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1.lua") },
+        .{ .key = "live_module", .value = Py.s(live) },
+        .{ .key = "new_hash", .value = Py.s(sha(a, body)) },
+        .{ .key = "existed", .value = .{ .bool = false } },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try std.testing.expectError(error.Refused, restoreOldModule(&r, item, .{}));
+    try expectFlush(r.why, dir);
+    try std.testing.expect(isKind(live, "missing"));
+}
+
+test "a failed directory flush after a created link is unlinked is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "links", "/links");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "links" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ fused.mnt, "all/1.lua" });
+    const created = try std.fs.path.join(a, &.{ dir, "a.lua" });
+    const rolled = try std.fs.path.join(a, &.{ dir, "b.lua" });
+    try linkTo(target, created);
+    try linkTo(target, rolled);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const first = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/a.lua") },
+        .{ .key = "live_path", .value = Py.s(created) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var removing = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{first}) } },
+    }) });
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(created, "missing"));
+
+    const second = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/b.lua") },
+        .{ .key = "live_path", .value = Py.s(rolled) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var rolling = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{second}) } },
+    }) });
+    try std.testing.expectError(error.Os, rollbackSteps(&rolling));
+    try expectFlush(rolling.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(rolling.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(rolled, "missing"));
+}
+
+test "a retry flushes the source parent again after the rename" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "stage-retry", "/generations/r1/software/demo");
+    defer fused.stop();
+    const staged = try std.fs.path.join(a, &.{ fused.mnt, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ fused.mnt, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ fused.mnt, "software/.1.retired" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(retired).?);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const source = std.fs.path.dirname(staged).?;
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    r.why = "";
+    try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
+    try expectFlush(r.why, source);
+    try std.testing.expect(isKind(staged, "missing"));
+    try std.testing.expect(isKind(retired, "dir"));
+}
+
+test "a retry flushes the parent of a created link that is already gone" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "link-retry", "/links");
+    defer fused.stop();
+    const dir = try std.fs.path.join(a, &.{ fused.mnt, "links" });
+    try atomic.makedirs(dir);
+    const target = try std.fs.path.join(a, &.{ fused.mnt, "all/1.lua" });
+    const created = try std.fs.path.join(a, &.{ dir, "a.lua" });
+    try linkTo(target, created);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("links/a.lua") },
+        .{ .key = "live_path", .value = Py.s(created) },
+        .{ .key = "target", .value = Py.s(target) },
+        .{ .key = "status", .value = Py.s("created") },
+        .{ .key = "created", .value = .{ .bool = true } },
+    }) };
+    var removing = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "links_plan", .value = .{ .list = try a.dupe(Py, &.{item}) } },
+    }) });
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+    try std.testing.expect(isKind(created, "missing"));
+    removing.why = "";
+    try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
+    try expectFlush(removing.why, dir);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
 }

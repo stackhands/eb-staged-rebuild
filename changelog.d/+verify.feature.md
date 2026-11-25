@@ -1,0 +1,1 @@
+Add `verify STAGE`, which checks a built run's staged trees without publishing them and lists each problem in `runs/<run-id>/verify.json`. `run --verify` and `resume --verify` run the same checks before the swap. A failing stage is refused unless `--force` is given. The Python command and the Zig binary have the same checks, the same options and the same `verify.json`.

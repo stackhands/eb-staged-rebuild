@@ -90,11 +90,19 @@ fn inline_(a: Allocator, out: *std.ArrayList(u8), v: Py, sort: bool) Allocator.E
 const fields = [_][]const u8{ "actor", "stack", "target" };
 const actions = [_][]const u8{ "install", "rebuild-inplace", "rebuild-bump" };
 
+fn mapConfigOpenError(err: anyerror) anyerror {
+    return switch (err) {
+        error.IsDir, error.NotRegularFile => error.InvalidArgument,
+        else => err,
+    };
+}
+
 /// load_config: the ledger configuration with its defaults and "path".
 pub fn loadConfig(a: Allocator, path_in: []const u8, why: *[]const u8) Error!Py {
     const path = admin.abspath(a, path_in);
     const f = fsx.openRegular(fsx.cwd, path, true) catch |err| {
-        why.* = try a.print("cannot read ledger config {s}: {s}", .{ path, main_mod.osError(a, err, path) });
+        const mapped = mapConfigOpenError(err);
+        why.* = try a.print("cannot read ledger config {s}: {s}", .{ path, main_mod.osError(a, mapped, path) });
         return error.Refused;
     };
     defer sys.close(f.fd);
@@ -205,12 +213,15 @@ fn utc(a: Allocator, t: f64) []const u8 {
 pub const Corrects = std.StringArrayHashMapUnmanaged(Py);
 
 /// publication_records: one record per published module file; with
-/// `corrects`, the correction records of a rollback.
+/// `corrects`, the correction records of a rollback. Otherwise, when
+/// `--force` published the run past a failed verify, `build.verify` holds
+/// that result, `forced` and each check's count.
 pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const u8, now: f64, corrects: ?*const Corrects, why: *[]const u8) Error![]const Py {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(s(pyfmt.get(journal, "state_root")), &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
     const scope = hex[0..16];
+    const forced = try forcedVerify(a, journal);
     var records: std.ArrayList(Py) = .empty;
     const run_id = s(pyfmt.get(journal, "run_id"));
     const plan = pyfmt.get(journal, "modules_plan") orelse Py{ .list = &.{} };
@@ -226,6 +237,14 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
         if (corrects != null) std.mem.swap(Py, &new, &old);
         const name = if (corrects != null) try a.print("rollback-{s}", .{stage}) else stage;
         const live = s(pyfmt.get(m, "live_software"));
+        var build: std.ArrayList(Py.Entry) = .empty;
+        try build.appendSlice(a, &.{
+            .{ .key = "event_id", .value = Py.s(try a.print("eb-staged-rebuild/{s}/{s}/{s}/{s}", .{ scope, run_id, rel, name })) },
+            .{ .key = "run_id", .value = Py.s(run_id) },
+            .{ .key = "module_file", .value = Py.s(rel) },
+            .{ .key = "tool", .value = Py.s("eb-staged-rebuild") },
+        });
+        if (corrects == null) if (forced) |v| try build.append(a, .{ .key = "verify", .value = v });
         var entries: std.ArrayList(Py.Entry) = .empty;
         try entries.appendSlice(a, &.{
             .{ .key = "ts", .value = Py.s(utc(a, now)) },
@@ -241,12 +260,7 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
                 .{ .key = "sha256", .value = new },
                 .{ .key = "previous_sha256", .value = old },
             }) } },
-            .{ .key = "build", .value = .{ .dict = try a.dupe(Py.Entry, &.{
-                .{ .key = "event_id", .value = Py.s(try a.print("eb-staged-rebuild/{s}/{s}/{s}/{s}", .{ scope, run_id, rel, name })) },
-                .{ .key = "run_id", .value = Py.s(run_id) },
-                .{ .key = "module_file", .value = Py.s(rel) },
-                .{ .key = "tool", .value = Py.s("eb-staged-rebuild") },
-            }) } },
+            .{ .key = "build", .value = .{ .dict = build.items } },
         });
         if (corrects) |c| {
             try entries.append(a, .{ .key = "corrects", .value = c.get(rel).? });
@@ -255,6 +269,17 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
         try records.append(a, .{ .dict = entries.items });
     }
     return records.items;
+}
+
+fn forcedVerify(a: Allocator, journal: Py) Error!?Py {
+    const verify = pyfmt.get(journal, "verify") orelse return null;
+    const forced = pyfmt.get(verify, "forced") orelse return null;
+    if (forced != .bool or !forced.bool) return null;
+    return .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "result", .value = pyfmt.get(verify, "result") orelse .null },
+        .{ .key = "forced", .value = .{ .bool = true } },
+        .{ .key = "checks", .value = pyfmt.get(verify, "checks") orelse .null },
+    }) };
 }
 
 // ---- the outbox -------------------------------------------------------------
@@ -508,7 +533,7 @@ fn append(a: Allocator, envp: common.proc.Envp, config: Py, record_path: []const
     const first = out[0 .. std.mem.findAny(u8, out, "\n\r") orelse out.len];
     const m = parseSummary(first) orelse {
         var rp: std.ArrayList(u8) = .empty;
-        try pyfmt.reprStr(&rp, a, lastChars(out, 500));
+        try common.pytext.reprStr(&rp, a, lastChars(out, 500));
         return publisherError(a, "eb-stack ledger append printed no receipt: {s}", .{rp.items});
     };
     const head_v = readJson(a, head) orelse return publisherError(a, "cannot read head {s}: not valid JSON", .{head});
@@ -572,4 +597,43 @@ test "isPositiveTimeout rejects non-finite and non-positive values" {
     try std.testing.expect(!isPositiveTimeout(.{ .float = -1.0 }));
     try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.nan(f64) }));
     try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.inf(f64) }));
+}
+
+test "loadConfig reports EINVAL for non-regular paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const root = try fsx.mkdtemp(a, "/tmp", "publish-load-config-");
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+
+    const dir_path = try a.print("{s}/dir", .{root});
+    var zdir: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.mkdirat(fsx.cwd, (try sys.z(&zdir, dir_path)).ptr, 0o700)),
+    );
+
+    const fifo_path = try a.print("{s}/fifo", .{root});
+    var zfifo: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.mknodat(linux.AT.FDCWD, (try sys.z(&zfifo, fifo_path)).ptr, linux.S.IFIFO | 0o600, 0)),
+    );
+
+    const dir_link = try a.print("{s}/dir-link", .{root});
+    var ztarget: [sys.path_max:0]u8 = undefined;
+    var zlink: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.symlinkat((try sys.z(&ztarget, dir_path)).ptr, linux.AT.FDCWD, (try sys.z(&zlink, dir_link)).ptr)),
+    );
+
+    for ([_][]const u8{ dir_path, fifo_path, dir_link }) |p| {
+        var why: []const u8 = "";
+        try std.testing.expectError(error.Refused, loadConfig(a, p, &why));
+        const expected = try a.print("cannot read ledger config {s}: [Errno 22] Invalid argument: '{s}'", .{ p, p });
+        try std.testing.expectEqualStrings(expected, why);
+    }
+    try std.testing.expectEqual(error.SymLink, mapConfigOpenError(error.SymLink));
 }

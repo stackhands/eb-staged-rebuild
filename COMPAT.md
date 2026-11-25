@@ -1,16 +1,17 @@
 # The Zig build and the Python tool
 
 The Zig build in `zig/` carries every command of the Python tool: `probe`,
-`status`, `resolve`, `retire`, `gc`, `run`, `resume` and `rollback`, with or
-without `--ledger-config`. Either build can be used: releases carry the
+`status`, `list`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
+with or without `--ledger-config`. Either build can be used: releases carry the
 binary, and CI runs the command-line and real-EasyBuild tests against it
 through `TOOL_BIN`.
 
 `tests/differential.sh` runs both on the same invocations and fails on any
-difference in exit code, stdout or stderr; for the commands that change a fixture
-(`retire`, `gc`, `rollback`, `run`, `resume`) it also compares the journals and
-the trees they leave, with timestamps and the sandbox command normalized, and,
-for whole runs, the sha256 of module text that names each fixture's own path.
+difference in exit code, stdout or stderr; for the commands that change a
+fixture (`retire`, `gc`, `rollback`, `run`, `resume`, `verify`) it also compares
+the journals and the trees they leave, with timestamps and the sandbox command
+normalized, and, for whole runs, the sha256 of module text that names each
+fixture's own path.
 
 ## Where the Zig build differs on purpose
 
@@ -29,3 +30,4 @@ for whole runs, the sha256 of module text that names each fixture's own path.
 | the user-namespace probe | `unshare ... python3 -m eb_staged_rebuild.userns_sandbox --probe` | `unshare ... <this binary> __userns-sandbox --probe` |
 | `\d` in `eb-stack ledger append` receipts | any Unicode decimal digit | ASCII digits only |
 | an operating-system error with no fixed text in the Zig build | `[Errno N] strerror: 'PATH'` | `ErrorName: 'PATH'` (`[Errno N] ...` for ENOENT, EACCES, EISDIR, ENOTDIR, ELOOP, EEXIST, ENOSPC, EROFS) |
+| a failed release of the state-root lock after a refusal or another error under the lock | the release's `OSError` from `lockfile.py:146` or `:153` replaces the first error as it leaves `finally: lock.release()` (`engine.py:1459`, `:1545`, `:1566`, `:1661`, `retire.py:249`, `gc.py:432`), so the message is `[Errno N] strerror` | the first error is reported and the failed release is dropped (`zig/rootlock.zig` `releaseAfterError`); a refusal that exits at once leaves the release to process exit; after a command that succeeded both report the release's `[Errno N] strerror`, exit 2 |

@@ -1,3 +1,0 @@
-# Modules the zig job does not run. The unit job still discovers them.
-# One module stem, a tab, and why the comparison cannot pass.
-# An empty list is valid: every discovered module then runs.

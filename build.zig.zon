@@ -1,13 +1,10 @@
 .{
     .name = .eb_staged_rebuild,
-    .version = "2.0.0",
+    .version = "2.0.1",
     .fingerprint = 0xee0442ffc6cda659,
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
-        .zig_common = .{
-            .url = "git+https://github.com/stackhands/zig-common#v0.10.0",
-            .hash = "zig_common-0.10.0-kBaPebVtBABxNPUshBTfOZOiLCQhOaXdCAfkd4sSq8Ju",
-        },
+        .zig_common = .{ .url = "git+https://github.com/stackhands/zig-common?ref=develop#a45142ad410c099d901241ab7aeba5aa2fd17321", .hash = "zig_common-0.13.0-kBaPeac6CQA9othDLZWEw-nshWseJI2Q74IcjWL4ek7d" },
     },
     .paths = .{
         "build.zig",

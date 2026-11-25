@@ -35,6 +35,11 @@ fn readlink(a: Allocator, path: []const u8) []const u8 {
     return a.dupe(u8, buf[0..n]) catch "";
 }
 
+fn unreadableTree(a: Allocator, root: []const u8, why: *[]const u8) Error {
+    why.* = a.print("module tree is unreadable: {s}", .{root}) catch "module tree is unreadable";
+    return error.Refused;
+}
+
 /// walk_module_tree: the regular .lua and .tcl files (sorted), and every
 /// symbolic link as (relative path, link text); linked directories are not
 /// entered.
@@ -48,10 +53,10 @@ pub fn walkModuleTree(a: Allocator, modules_root: []const u8, why: *[]const u8) 
     var stack: std.ArrayList([]const u8) = .empty;
     try stack.append(a, modules_root);
     while (stack.pop()) |dir| {
-        const fd = fsx.openDir(fsx.cwd, dir, false) catch continue;
+        const fd = fsx.openDir(fsx.cwd, dir, false) catch return unreadableTree(a, modules_root, why);
         defer sys.close(fd);
-        var it = fsx.DirIter.init(a, fd) catch continue;
-        while (it.next() catch null) |e| {
+        var it = fsx.DirIter.init(a, fd) catch return unreadableTree(a, modules_root, why);
+        while (it.next() catch return unreadableTree(a, modules_root, why)) |e| {
             const child = try std.fs.path.join(a, &.{ dir, e.name });
             const st = fsx.statAt(fsx.cwd, child, false) catch continue;
             if (st.isLink()) {

@@ -1,11 +1,20 @@
 """Shared fixtures and CLI helpers for eb-staged-rebuild tests."""
 
 import contextlib
+import ctypes
+import json
 import os
 import re
+import select
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import time
+import unittest
+from collections.abc import Collection, Sequence
+from typing import NamedTuple
 
 from eb_staged_rebuild.atomicio import atomic_write
 from eb_staged_rebuild.faults import FaultInjector
@@ -165,11 +174,12 @@ def restore_os(originals):
 
 
 
-def _lock_and_sleep(state_root: str) -> None:
+def _lock_and_sleep(state_root: str, acquired) -> None:
     from eb_staged_rebuild.lockfile import FileLock
 
     lock = FileLock(state_root)
     lock.acquire(0)
+    acquired.set()
     try:
         import time
 
@@ -180,23 +190,12 @@ def _lock_and_sleep(state_root: str) -> None:
 
 def start_lock_holder_process(state_root: str):
     import multiprocessing as mp
-    import time
 
-    from eb_staged_rebuild.errors import Refused
-    from eb_staged_rebuild.lockfile import FileLock
-
-    proc = mp.Process(target=_lock_and_sleep, args=(state_root,))
+    acquired = mp.Event()
+    proc = mp.Process(target=_lock_and_sleep, args=(state_root, acquired))
     proc.start()
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        contender = FileLock(state_root)
-        try:
-            contender.acquire(0)
-        except Refused:
-            return proc
-        else:
-            contender.release()
-            time.sleep(0.01)
+    if acquired.wait(5):
+        return proc
     proc.terminate()
     proc.join(5)
     raise RuntimeError("lock holder did not acquire the state-root lock")
@@ -215,21 +214,52 @@ def hold_state_root_lock(state_root: str, timeout: float | None = 0):
         lock.release()
 
 
+def pause_fifo(directory):
+    """A FIFO to name in EB_STAGED_REBUILD_PAUSE_READY, made in DIRECTORY, and its read end.
+
+    The pause hook opens that path for writing and closes it when the command
+    reaches its pause step. With the read end opened before the command starts,
+    the close is an event ``wait_for_pause`` can wait for.
+    """
+    path = os.path.join(tempfile.mkdtemp(dir=directory, prefix="pause-"), "ready")
+    os.mkfifo(path)
+    return path, os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+
+def wait_for_pause(proc, fifo, timeout=60):
+    """Whether PROC reached its pause step: its hook opened and closed FIFO before PROC exited or TIMEOUT seconds.
+
+    FIFO is the read end ``pause_fifo`` returned; it is closed here.
+    """
+    exited = os.pidfd_open(proc.pid)
+    try:
+        poller = select.poll()
+        poller.register(fifo, select.POLLIN | select.POLLHUP)
+        poller.register(exited, select.POLLIN)
+        return fifo in dict(poller.poll(timeout * 1000))
+    finally:
+        os.close(exited)
+        os.close(fifo)
+
+
 def mode_of(path):
     return stat.S_IMODE(os.lstat(path).st_mode)
 
 
-def _run(argv, env=None, cwd=None):
-    merged = dict(os.environ)
+def _run(argv, env=None, cwd=None, clear=(), prefix=()):
+    merged = {key: value for key, value in os.environ.items() if key not in clear}
     if env:
         merged.update(env)
-    completed = subprocess.run(argv, capture_output=True, text=False, check=False, env=merged, cwd=cwd)
+    completed = subprocess.run([*prefix, *argv], capture_output=True, text=False, check=False, env=merged, cwd=cwd)
     return subprocess.CompletedProcess(
         completed.args,
         completed.returncode,
         completed.stdout.decode("utf-8", "surrogateescape"),
         completed.stderr.decode("utf-8", "surrogateescape"),
     )
+
+
+PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
 
 
 _USERNS_PYTHON = re.compile(r"[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox")
@@ -254,23 +284,54 @@ def normalize_userns_helper(text, binary=None):
 
 
 def run_cli(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
-    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere."""
+    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere.
+
+    The variables named in CLEAR are left out of the inherited environment; ENV is added after.
+    PREFIX is a command, such as ``unshare``, that runs the CLI.
+    """
     if cwd is not None:
         search = [_REPO, os.environ.get("PYTHONPATH", "")]
         env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([sys.executable, "-m", "eb_staged_rebuild.cli", *args], env, cwd)
+    return _run([*PYTHON_CLI, *args], env, cwd, clear, prefix)
 
 
 def run_cli_optional_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str] | None:
     """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
     tool = os.environ.get("TOOL_BIN")
     if not tool:
         return None
-    return _run([tool, *args], env, cwd)
+    return _run([tool, *args], env, cwd, clear, prefix)
+
+
+def require_tool_bin() -> str:
+    """Return TOOL_BIN or raise, for tests that require both front ends."""
+    tool = os.environ.get("TOOL_BIN")
+    if not tool:
+        raise AssertionError("TOOL_BIN is required for this test")
+    return tool
+
+
+def run_cli_binary(
+    *args: str,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    clear: Collection[str] = (),
+    prefix: Sequence[str] = (),
+) -> subprocess.CompletedProcess[str]:
+    """Run the binary front end named by TOOL_BIN, which this test requires."""
+    return _run([require_tool_bin(), *args], env, cwd, clear, prefix)
 
 
 def run_cli_or_binary(
@@ -281,3 +342,234 @@ def run_cli_or_binary(
     if binary is not None:
         return binary
     return run_cli(*args, env=env, cwd=cwd)
+
+
+def _skip(case: unittest.TestCase, reason: str) -> None:
+    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
+        case.fail(reason)
+    case.skipTest(reason)
+
+
+def _python314() -> str | None:
+    if sys.version_info[:2] == (3, 14):
+        return sys.executable
+    found = shutil.which("python3.14")
+    if not found:
+        return None
+    completed = subprocess.run(
+        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
+        check=False,
+    )
+    return found if completed.returncode == 0 else None
+
+
+def _ptrace_problem() -> str | None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        if libc.ptrace(0, 0, None, None) != 0:
+            os.write(write_fd, os.strerror(ctypes.get_errno()).encode())
+            os._exit(1)
+        os._exit(0)
+    os.close(write_fd)
+    _pid, status = os.waitpid(pid, 0)
+    detail = os.read(read_fd, 200).decode()
+    os.close(read_fd)
+    if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+        return None
+    if detail:
+        return detail
+    return f"ptrace(PTRACE_TRACEME) failed with wait status {status}"
+
+
+def _program(case: unittest.TestCase, binary_name: str) -> str:
+    if shutil.which("gcc") is None:
+        case.skipTest("gcc is not on PATH, so tests/fs_fail.c cannot be built")
+    problem = _ptrace_problem()
+    if problem:
+        case.skipTest(f"ptrace is unavailable: {problem}")
+    src = os.path.join(_REPO, "tests", "fs_fail.c")
+    build_root = tempfile.TemporaryDirectory(prefix=f"{binary_name}-")
+    case.addCleanup(build_root.cleanup)
+    out = os.path.join(build_root.name, binary_name)
+    built = subprocess.run(
+        ["gcc", "-O2", "-o", out, src],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode != 0:
+        detail = (built.stderr or built.stdout or "gcc failed").strip()
+        case.skipTest(f"gcc could not build tests/fs_fail.c: {detail}")
+    return out
+
+
+def _fuse_ready() -> str | None:
+    if not os.path.exists("/dev/fuse"):
+        return "FUSE is not available"
+    if shutil.which("fusermount3") is None or shutil.which("cc") is None:
+        return "FUSE is not available"
+    flags = subprocess.run(
+        ["pkg-config", "--cflags", "--libs", "fuse3"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if flags.returncode != 0:
+        return "FUSE is not available"
+    return None
+
+
+def _compile_fuse_faultfs(src: str, binary: str) -> None:
+    flags = subprocess.run(
+        ["pkg-config", "--cflags", "--libs", "fuse3"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    done = subprocess.run(
+        ["cc", "-O2", "-Wall", "-Wextra", "-o", binary, src, *flags.stdout.split()],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if done.returncode != 0:
+        raise AssertionError(done.stderr)
+
+
+def _wait_mount(case: unittest.TestCase, mnt: str, mounted: subprocess.Popen[bytes]) -> None:
+    for _ in range(50):
+        with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+            if f" {mnt} " in handle.read():
+                return
+        if mounted.poll() is not None:
+            err = mounted.stderr.read().decode() if mounted.stderr else ""
+            case.fail(f"FUSE exited: {err}")
+        time.sleep(0.05)
+    case.fail("FUSE mount did not appear")
+
+
+class Implementation(NamedTuple):
+    """One front end: its name, the command that starts it, and how a test runs it to completion."""
+
+    name: str
+    command: tuple[str, ...]
+
+    def run(self, *args, env=None, cwd=None, clear=(), prefix=()):
+        runner = run_cli if self.name == "python" else run_cli_binary
+        return runner(*args, env=env, cwd=cwd, clear=clear, prefix=prefix)
+
+
+def implementations():
+    """The Python front end and the program TOOL_BIN names, which the tests that use both require."""
+    return [Implementation("python", PYTHON_CLI), Implementation("binary", (require_tool_bin(),))]
+
+
+def remove_tree(root):
+    """Remove ROOT, first giving back the write access a test took from its directories."""
+    for directory, dirs, _files in os.walk(root):
+        for entry in dirs:
+            path = os.path.join(directory, entry)
+            if not os.path.islink(path):
+                os.chmod(path, 0o755)
+    shutil.rmtree(root)
+
+
+def sites(test, make, prefix):
+    """``make(implementation, root)`` for each front end, each in a fresh ROOT that TEST removes when it ends.
+
+    A list, so a test opens its own ``subTest`` around each site rather than a generator yielding from inside one.
+    """
+    made = []
+    for implementation in implementations():
+        root = tempfile.mkdtemp(prefix=prefix)
+        test.addCleanup(remove_tree, root)
+        made.append(make(implementation, root))
+    return made
+
+
+def write(path, data, mode=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb" if isinstance(data, bytes) else "w") as handle:
+        handle.write(data)
+    if mode is not None:
+        os.chmod(path, mode)
+
+
+FAKE_EB = os.path.join(_REPO, "tests", "fake_eb.py")
+FAKE_LMOD = os.path.join(_REPO, "tests", "fake_lmod.py")
+CLEARED = ("LMOD_CMD", "MODULEPATH", "LOADEDMODULES", "_LMFILES_", "EESSI_CVMFS_REPO", "EESSI_EPREFIX")
+
+
+class Site:
+    """A live demo/1 and the commands that stage, verify and publish it with one front end.
+
+    LMOD_CMD, the EESSI variables and EASYBUILD_* are unset unless a command sets them.
+    """
+
+    def __init__(self, implementation, root):
+        self.implementation = implementation
+        self.name = implementation.name
+        self.root = root
+        self.software = os.path.join(root, "software")
+        self.modules = os.path.join(root, "modules")
+        self.state = os.path.join(root, "state")
+        self.tmp = os.path.join(root, "tmp")
+        self.live = os.path.join(self.software, "demo", "1")
+        write(os.path.join(self.live, "PAYLOAD"), "old\n")
+        write(
+            os.path.join(self.modules, "all", "demo", "1.lua"),
+            f'local root = "{self.live}"\nsetenv("EBROOTDEMO", root)\n',
+        )
+        os.makedirs(self.tmp)
+        self.eb = os.path.join(root, "eb")
+        write(self.eb, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_EB}" "$@"\n', 0o755)
+        self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
+
+    def cli(self, *args, prefix=(), **env):
+        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared(), prefix=prefix)
+
+    def cleared(self):
+        return [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
+
+    def environ(self, **env):
+        """The environment ``cli`` gives a command, for a process the test starts itself."""
+        kept = {key: value for key, value in os.environ.items() if key not in self.cleared()}
+        return {**kept, **self.env, **env}
+
+    def run(self, *options, extra=None, verify=True, run_id="r1", modules=("demo/1",), **env):
+        if extra is not None:
+            env["FAKE_EB_EXTRA"] = json.dumps(extra)
+        gate = ["--verify"] if verify else []
+        named = [arg for rel in modules for arg in ("--module", rel)]
+        return self.cli(
+            "run", "--software", self.software, "--modules", self.modules, "--state-root", self.state,
+            "--backend", "installpath", "--eb", self.eb, "--run-id", run_id, "--skip-live-check",
+            *named, *gate, *options, "--", "demo-1.eb", f"--buildpath={self.root}/build", **env,
+        )
+
+    def journal_path(self, run_id="r1"):
+        return os.path.join(self.state, "runs", run_id, "journal.json")
+
+    def journal(self, run_id="r1"):
+        with open(self.journal_path(run_id), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def report(self, run_id="r1"):
+        with open(self.report_path(run_id), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def report_path(self, run_id="r1"):
+        return os.path.join(self.state, "runs", run_id, "verify.json")
+
+    def staged(self):
+        return self.journal()["modules_plan"][0]["staged"]
+
+    def payload(self):
+        with open(os.path.join(self.live, "PAYLOAD"), encoding="utf-8") as handle:
+            return handle.read()

@@ -33,7 +33,6 @@ class RunBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.stderr, "")
             self.assertIn("dry-run: no build, no module file written", proc.stdout)
 
-    @unittest.expectedFailure
     def test_run_rejects_non_finite_lock_timeout(self) -> None:
         """Reproducer: `eb-staged-rebuild run ... --lock-timeout nan -- Demo-1.0.eb`."""
         with tempfile.TemporaryDirectory() as tmp:

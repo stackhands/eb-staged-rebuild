@@ -7,6 +7,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const common = @import("zig_common");
+const probe = @import("probe.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -42,6 +43,29 @@ fn exited(pid: linux.pid_t) bool {
     const rc = linux.waitid(.PID, pid, &info, linux.W.EXITED | linux.W.NOHANG | linux.W.NOWAIT, null);
     if (linux.errno(rc) != .SUCCESS) return true;
     return @backingInt(info.signo) != 0;
+}
+
+fn parseEasybuildUmask(raw: []const u8) ?u16 {
+    const text = std.mem.trim(u8, raw, " \t\r\n");
+    if (text.len == 0) return null;
+    const base_text, const base: u8 = blk: {
+        if (std.mem.startsWith(u8, text, "0o") or std.mem.startsWith(u8, text, "0O"))
+            break :blk .{ text[2..], 8 };
+        const octal = for (text) |ch| {
+            if (ch < '0' or ch > '7') break false;
+        } else true;
+        if (octal) break :blk .{ text, 8 };
+        break :blk .{ text, 10 };
+    };
+    if (base_text.len == 0) return null;
+    const parsed = std.fmt.parseInt(u16, base_text, base) catch return null;
+    return if (parsed <= 0o777) parsed else null;
+}
+
+fn applyEasybuildUmask(env: probe.Env) void {
+    if (env.get("EASYBUILD_UMASK")) |raw| {
+        if (parseEasybuildUmask(raw)) |mode| _ = linux.syscall1(.umask, @as(usize, mode));
+    }
 }
 
 /// Refused: there is no /proc to confirm that the process group stopped;
@@ -110,6 +134,7 @@ pub fn runCommand(a: Allocator, exe: []const u8, argv: []const []const u8, envp:
         const w: linux.fd_t = report[1];
         if (w > 3) _ = linux.close_range(3, w - 1, .{ .UNSHARE = false, .CLOEXEC = false });
         _ = linux.close_range(w + 1, std.math.maxInt(linux.fd_t), .{ .UNSHARE = false, .CLOEXEC = false });
+        applyEasybuildUmask(.{ .envp = envp });
         const exec_rc = linux.execve(zexe.ptr, zargv.ptr, envp);
         const code: u32 = @backingInt(linux.errno(exec_rc));
         _ = linux.write(report[1], std.mem.asBytes(&code), @sizeOf(u32));

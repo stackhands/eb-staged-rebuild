@@ -11,9 +11,10 @@ TOOL_BIN_TEST_OPS fails the same step. Each
 implementation then takes its own error path. A failed run must leave
 every live tree and module file as it was, or have published all of
 them; a resume must then publish. A failed rollback must leave the run
-published or rolled back; a second rollback must roll it back. Both
-implementations must leave the same trees, module files and journal
-states.
+published or rolled back; a second rollback must roll it back. A failed
+rollback --to r1 over r2 and r3 must be finished by running it again, as
+must one that cannot unlink the class link r2 made. Both implementations
+must leave the same trees, module files and journal states.
 
     TOOL_BIN_TEST_OPS=zig-out/bin/eb-staged-rebuild-test-ops python3 tests/fail_matrix.py
 """
@@ -65,6 +66,39 @@ def failed_rollback(fixture, step):
     return body
 
 
+def failed_rollback_to(fixture, fallback, step, locked=None):
+    def body(impl, root):
+        modules = cm.published_over(impl, fixture, root, fallback, relinked=locked is not None)
+        args = ["rollback", "--state-root", f"{root}/state", "--to", "r1"]
+        if locked:
+            os.chmod(os.path.join(root, "modules", locked), 0o555)
+        try:
+            rc = call(impl, fixture, root, args, fail_at=step)
+        finally:
+            if locked:
+                os.chmod(os.path.join(root, "modules", locked), 0o755)
+        after = cm.to_outcome(fixture, root)
+        again = call(impl, fixture, root, args)
+        return {"failed_rc": rc, "after": after, "again_rc": again, "published_modules": modules, "final": cm.to_outcome(fixture, root)}
+    return body
+
+
+def check_to(label, fixture, results):
+    """A failed rollback --to fails, and running it again finishes it."""
+    py, zig = results["py"], results["zig"]
+    trees, states = cm.to_expected(fixture)
+    final = py["final"]
+    ok = py == zig and py["failed_rc"] == 2 and py["again_rc"] == 0
+    ok = ok and final["trees"] == trees and final["states"] == states and final["modules"] == py["published_modules"]
+    if ok:
+        print(f"same {label}: exit 2, then rolled back to r1")
+        return 0
+    print(f"{'DIFF' if py != zig else 'BAD '} {label}")
+    for impl in ("py", "zig"):
+        print(f"     {impl}: {results[impl]}")
+    return 1
+
+
 def untouched_or_published(fixture, info):
     old = info["payloads"] == ["old\n"] * len(fixture.rels) and all("EBROOT" in m and "conflict" not in m for m in info["modules"])
     new = info["payloads"] == ["from-eb\n"] * len(fixture.rels) and all("conflict" in m for m in info["modules"])
@@ -100,7 +134,7 @@ def main():
         return 2
     os.environ["TOOL_BIN"] = os.environ["TOOL_BIN_TEST_OPS"]
     failures = total = 0
-    for fixture in (cm.ONE, cm.TWO):
+    for fixture in (cm.ONE, cm.TWO, cm.VERIFY):
         for step in cm.steps_reached(fixture):
             failures += check(f"{fixture.name}: run fails at {step}", fixture, cm.each_impl("fail", failed_run(fixture, step)), "run")
             total += 1
@@ -123,6 +157,15 @@ def main():
             results = cm.each_impl("fail2", failed_run(fixture, both))
             failures += check(f"one module: run fails at {step} and its restore record", fixture, results, "run")
         total += 1
+    for fixture, fallback in ((cm.ONE, False), (cm.TWO, False), (cm.ONE, True)):
+        label = fixture.name + (", rename fallback" if fallback else "")
+        for step in cm.steps_rollback_to(fixture, fallback):
+            results = cm.each_impl("fail-to", failed_rollback_to(fixture, fallback, step))
+            failures += check_to(f"{label}: rollback --to fails at {step}", fixture, results)
+            total += 1
+    results = cm.each_impl("fail-to-unlink", failed_rollback_to(cm.ONE, False, None, locked="tools/demo"))
+    failures += check_to("one module: rollback --to cannot unlink tools/demo/1.lua", cm.ONE, results)
+    total += 1
     print(f"{total - failures} of {total} cases match")
     return 1 if failures else 0
 
