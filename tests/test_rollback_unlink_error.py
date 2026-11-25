@@ -24,10 +24,18 @@ def _payload(root):
         return handle.read()
 
 
-def _state(root):
-    path = os.path.join(root, "state", "runs", "run1", "journal.json")
+def _journal(root, run_id):
+    path = os.path.join(root, "state", "runs", run_id, "journal.json")
     with open(path, encoding="utf-8") as handle:
-        return json.load(handle).get("state")
+        return json.load(handle)
+
+
+def _state(root, run_id="run1"):
+    return _journal(root, run_id).get("state")
+
+
+def _links(root, run_id):
+    return [(link["created"], link["status"]) for link in _journal(root, run_id)["links_plan"]]
 
 
 class RollbackUnlinkErrorTest(unittest.TestCase):
@@ -126,3 +134,46 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
 
     def test_link_dir_fsync_eio_keeps_the_published_tree(self):
         self._compare(5, "fsync", 1, "modules/tools/demo")
+
+    def _rollback_to(self, argv):
+        # run2 creates the class link run1 made and lost; run3 finds it in
+        # place. Two runs over run1 keep rollback --to off the one-run path.
+        root, env, run_args, _ = self._layout()
+        state = os.path.join(root, "state")
+        link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+        at = run_args.index("--run-id") + 1
+        for run_id in ("run1", "run2", "run3"):
+            if run_id == "run2":
+                os.unlink(link)
+            self._publish(argv, root, env, run_args[:at] + [run_id] + run_args[at + 1:])
+        self.assertEqual(_links(root, "run2"), [(True, "created")])
+        self.assertEqual(_links(root, "run3"), [(False, "present")])
+        back = [*argv, "rollback", "--state-root", state, "--lock-timeout", "0", "--to", "run1"]
+        failed = self._traced(back, root, env, 5, "fsync", 1, "modules/tools/demo")
+        outcome = {
+            "rc": failed.returncode,
+            "stderr": _scrub(failed.stderr, root),
+            "link": os.path.lexists(link),
+            "states": [_state(root, run_id) for run_id in ("run2", "run3")],
+            "run2_links": _links(root, "run2"),
+        }
+        again = subprocess.run(back, cwd=root, env=env, capture_output=True, text=True, check=False)
+        outcome["again_rc"] = again.returncode
+        outcome["final"] = [_state(root, run_id) for run_id in ("run2", "run3")]
+        outcome["final_run2_links"] = _links(root, "run2")
+        outcome["payload"] = _payload(root)
+        return outcome
+
+    def test_rollback_to_link_dir_fsync_eio_keeps_the_run_rolling_back(self):
+        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"])
+        zig = self._rollback_to([os.environ["TOOL_BIN"]])
+        self.assertEqual(py, zig)
+        self.assertEqual(zig["rc"], 2)
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n")
+        self.assertFalse(zig["link"])
+        self.assertEqual(zig["states"], ["rolling_back", "rolled_back"])
+        self.assertEqual(zig["run2_links"], [(True, "created")])
+        self.assertEqual(zig["again_rc"], 0)
+        self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
+        self.assertEqual(zig["final_run2_links"], [(False, "removed")])
+        self.assertEqual(zig["payload"], "new\n")
