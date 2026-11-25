@@ -1,0 +1,1 @@
+The generations and ledger command-line tests run each front end through the shared `sites()` and runners in `tests/support.py`, with their own subtest per front end, and the crash matrix reads tree markers with the engine's own reader.

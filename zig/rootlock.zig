@@ -29,36 +29,6 @@ pub fn joinPath(a: Allocator, state_root: []const u8, name: []const u8) []const 
     return a.print("{s}/{s}", .{ state_root, name }) catch state_root;
 }
 
-/// Normalize `path` the way `os.path.abspath(os.path.normpath(path))` does,
-/// without following symbolic links in `path` itself.
-fn normalizePath(a: Allocator, path: []const u8) Allocator.Error![]u8 {
-    var owned_full: ?[]u8 = null;
-    defer if (owned_full) |buf| a.free(buf);
-    const full: []const u8 = if (path.len == 0 or path[0] != '/') blk: {
-        var rb: [sys.path_max]u8 = undefined;
-        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch ".";
-        const joined = try std.fs.path.join(a, &.{ cwd, path });
-        owned_full = joined;
-        break :blk joined;
-    } else path;
-
-    var parts: std.ArrayList([]const u8) = .empty;
-    defer parts.deinit(a);
-    var it = std.mem.splitScalar(u8, full, '/');
-    while (it.next()) |seg| {
-        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
-        if (std.mem.eql(u8, seg, "..")) {
-            _ = parts.pop();
-            continue;
-        }
-        try parts.append(a, seg);
-    }
-    if (parts.items.len == 0) return a.dupe(u8, "/");
-    const joined = try std.mem.join(a, "/", parts.items);
-    defer a.free(joined);
-    return a.print("/{s}", .{joined});
-}
-
 fn isLink(path: []const u8) bool {
     const st = fsx.statAt(fsx.cwd, path, false) catch return false;
     return st.isLink();
@@ -91,7 +61,7 @@ fn tighten(fd: fsx.fd_t) bool {
 /// `detail` receives an owned copy of the symlink component when the error is
 /// `Unsafe`.
 pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]const u8) Error!state.RootLock {
-    const normalized = normalizePath(a, root) catch return error.OutOfMemory;
+    const normalized = fsx.absPath(a, root) catch return error.OutOfMemory;
     defer a.free(normalized);
     if (offendingComponent(normalized)) |component| {
         detail.* = a.dupe(u8, component) catch return error.OutOfMemory;

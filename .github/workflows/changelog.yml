@@ -2,7 +2,7 @@ name: changelog
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:

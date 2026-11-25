@@ -205,12 +205,15 @@ fn utc(a: Allocator, t: f64) []const u8 {
 pub const Corrects = std.StringArrayHashMapUnmanaged(Py);
 
 /// publication_records: one record per published module file; with
-/// `corrects`, the correction records of a rollback.
+/// `corrects`, the correction records of a rollback. Otherwise, when
+/// `--force` published the run past a failed verify, `build.verify` holds
+/// that result, `forced` and each check's count.
 pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const u8, now: f64, corrects: ?*const Corrects, why: *[]const u8) Error![]const Py {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(s(pyfmt.get(journal, "state_root")), &digest, .{});
     const hex = std.fmt.bytesToHex(digest, .lower);
     const scope = hex[0..16];
+    const forced = try forcedVerify(a, journal);
     var records: std.ArrayList(Py) = .empty;
     const run_id = s(pyfmt.get(journal, "run_id"));
     const plan = pyfmt.get(journal, "modules_plan") orelse Py{ .list = &.{} };
@@ -226,6 +229,14 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
         if (corrects != null) std.mem.swap(Py, &new, &old);
         const name = if (corrects != null) try a.print("rollback-{s}", .{stage}) else stage;
         const live = s(pyfmt.get(m, "live_software"));
+        var build: std.ArrayList(Py.Entry) = .empty;
+        try build.appendSlice(a, &.{
+            .{ .key = "event_id", .value = Py.s(try a.print("eb-staged-rebuild/{s}/{s}/{s}/{s}", .{ scope, run_id, rel, name })) },
+            .{ .key = "run_id", .value = Py.s(run_id) },
+            .{ .key = "module_file", .value = Py.s(rel) },
+            .{ .key = "tool", .value = Py.s("eb-staged-rebuild") },
+        });
+        if (corrects == null) if (forced) |v| try build.append(a, .{ .key = "verify", .value = v });
         var entries: std.ArrayList(Py.Entry) = .empty;
         try entries.appendSlice(a, &.{
             .{ .key = "ts", .value = Py.s(utc(a, now)) },
@@ -241,12 +252,7 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
                 .{ .key = "sha256", .value = new },
                 .{ .key = "previous_sha256", .value = old },
             }) } },
-            .{ .key = "build", .value = .{ .dict = try a.dupe(Py.Entry, &.{
-                .{ .key = "event_id", .value = Py.s(try a.print("eb-staged-rebuild/{s}/{s}/{s}/{s}", .{ scope, run_id, rel, name })) },
-                .{ .key = "run_id", .value = Py.s(run_id) },
-                .{ .key = "module_file", .value = Py.s(rel) },
-                .{ .key = "tool", .value = Py.s("eb-staged-rebuild") },
-            }) } },
+            .{ .key = "build", .value = .{ .dict = build.items } },
         });
         if (corrects) |c| {
             try entries.append(a, .{ .key = "corrects", .value = c.get(rel).? });
@@ -255,6 +261,17 @@ pub fn publicationRecords(a: Allocator, config: Py, journal: Py, stage: []const 
         try records.append(a, .{ .dict = entries.items });
     }
     return records.items;
+}
+
+fn forcedVerify(a: Allocator, journal: Py) Error!?Py {
+    const verify = pyfmt.get(journal, "verify") orelse return null;
+    const forced = pyfmt.get(verify, "forced") orelse return null;
+    if (forced != .bool or !forced.bool) return null;
+    return .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "result", .value = pyfmt.get(verify, "result") orelse .null },
+        .{ .key = "forced", .value = .{ .bool = true } },
+        .{ .key = "checks", .value = pyfmt.get(verify, "checks") orelse .null },
+    }) };
 }
 
 // ---- the outbox -------------------------------------------------------------

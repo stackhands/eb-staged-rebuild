@@ -18,6 +18,13 @@ class GcBlackBoxExtraTests(unittest.TestCase):
             data = json.loads(proc.stdout)
             self.assertEqual(data, {"actions": []})
 
+    def test_gc_rejects_non_finite_lock_timeout(self) -> None:
+        """Reproducer: eb-staged-rebuild gc --state-root TMP --dry-run --lock-timeout nan"""
+        with tempfile.TemporaryDirectory() as state_root:
+            proc = run_cli("gc", "--state-root", state_root, "--dry-run", "--lock-timeout", "nan")
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("--lock-timeout is not a finite number", proc.stderr)
+
     def test_gc_requires_state_root_when_environment_is_empty(self) -> None:
         env = {"EB_STAGED_REBUILD_STATE_ROOT": ""}
         proc = run_cli("gc", env=env)

@@ -64,6 +64,13 @@ def remove_generation_tree(path, boundary):
         finally:
             os.close(fd)
         os.rmdir(name, dir_fd=parent)
-        os.fsync(parent)
+        # The open file descriptor has no path. Name the directory that was flushed.
+        flushed = os.path.dirname(path)
+        try:
+            os.fsync(parent)
+        except OSError as error:
+            if error.filename is not None:
+                raise
+            raise OSError(error.errno, error.strerror, flushed) from error
     finally:
         os.close(parent)

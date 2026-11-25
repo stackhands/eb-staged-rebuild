@@ -140,6 +140,7 @@ Give a rebuilt installation and its module file the ownership, modes or access-c
    #+end_example
 
    The program ran after EasyBuild had finished, and the exchange came after it.
+   With =--verify=, the checks before publication run between the two; they leave the owner, the mode bits and the access-control lists of the new tree to the program, and do not compare them with the live tree's.
 
 ** Check that it worked
 
@@ -198,6 +199,7 @@ cat /opt/site/.eb-staged-rebuild/runs/example-2/prepare-context.json
 ** Related
 
 - [[file:rebuild.org][Rebuild an installed module]]
+- [[file:verify-a-stage.org][Check a rebuild before it goes live]]
 - [[file:recover.org][Finish a run that failed or stopped]]
 - [[file:../explanation/publication.org][How a rebuild is published]], for what the program's changes reach
 - [[file:../reference/files.org][Files]], for =prepare-context.json=

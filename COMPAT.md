@@ -1,16 +1,17 @@
 # The Zig build and the Python tool
 
 The Zig build in `zig/` carries every command of the Python tool: `probe`,
-`status`, `resolve`, `retire`, `gc`, `run`, `resume` and `rollback`, with or
-without `--ledger-config`. Either build can be used: releases carry the
+`status`, `list`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
+with or without `--ledger-config`. Either build can be used: releases carry the
 binary, and CI runs the command-line and real-EasyBuild tests against it
 through `TOOL_BIN`.
 
 `tests/differential.sh` runs both on the same invocations and fails on any
-difference in exit code, stdout or stderr; for the commands that change a fixture
-(`retire`, `gc`, `rollback`, `run`, `resume`) it also compares the journals and
-the trees they leave, with timestamps and the sandbox command normalized, and,
-for whole runs, the sha256 of module text that names each fixture's own path.
+difference in exit code, stdout or stderr; for the commands that change a
+fixture (`retire`, `gc`, `rollback`, `run`, `resume`, `verify`) it also compares
+the journals and the trees they leave, with timestamps and the sandbox command
+normalized, and, for whole runs, the sha256 of module text that names each
+fixture's own path.
 
 ## Where the Zig build differs on purpose
 

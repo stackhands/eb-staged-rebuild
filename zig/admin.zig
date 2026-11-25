@@ -1,5 +1,5 @@
-//! retire, rollback of a retire journal, and gc: the commands that change a
-//! module tree or a state root without building anything.
+//! retire, rollback of a retire journal, gc and verify: the commands that
+//! change a module tree or a state root without building anything.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -8,6 +8,8 @@ const main_mod = @import("main.zig");
 const modulefile = @import("modulefile.zig");
 const pyfmt = @import("pyfmt.zig");
 const probe = @import("probe.zig");
+const generations = @import("generations.zig");
+const inuse = @import("inuse.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -17,6 +19,7 @@ const atomic = common.atomic;
 const state = common.state;
 const proc = common.proc;
 const rootlock = @import("rootlock.zig");
+const faultmount = if (@import("builtin").is_test) @import("faultmount.zig") else struct {};
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -89,26 +92,68 @@ pub fn matchingRunId(journal: Py, run_id: []const u8) bool {
         std.mem.eql(u8, recorded.str, run_id);
 }
 
-/// os.path.abspath(os.path.normpath(p)).
+/// What a rebuild journal has to record before a command reads it.
+const run_fields = [_][]const u8{ "software", "modules", "generation_root", "state", "backend" };
+const plan_fields = [_][]const u8{ "rel", "live_module", "prepared", "staged", "live_software", "retired" };
+
+pub const RunJournal = struct { path: []const u8, journal: Py };
+
+/// load_run_journal: the path and journal of run `run_id` under the
+/// caller's `state_root`, checked. The path is made from `state_root` and
+/// the plain name `run_id` alone; see checkRunJournal for what the journal
+/// has to record.
+pub fn loadRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8) RunJournal {
+    if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
+    const path = journalPath(a, state_root, run_id);
+    const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
+    if (!st.isReg()) refuse("no journal at {s}", .{path});
+    const journal = main_mod.loadJournal(a, path);
+    checkRunJournal(a, state_root, run_id, journal);
+    return .{ .path = path, .journal = journal };
+}
+
+/// check_run_journal: a journal read from `state_root`/runs/`run_id` has
+/// to name that run and that state root. A rebuild journal also has to
+/// record, as non-empty text, each of run_fields and each of plan_fields in
+/// every module plan entry, so no command reads a field that is missing or
+/// acts on a journal that describes another state root.
+pub fn checkRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8, journal: Py) void {
+    if (!matchingRunId(journal, run_id)) refuse("journal run id does not match its directory", .{});
+    const recorded = recordedField(journal, "state_root");
+    const root = abspath(a, state_root);
+    if (!std.mem.eql(u8, abspath(a, recorded), root)) refuse("journal state root {s} is not {s}", .{ recorded, root });
+    if (eqlStr(pyfmt.get(journal, "kind"), "retire")) return;
+    for (run_fields) |field| _ = recordedField(journal, field);
+    const mods = pyfmt.get(journal, "modules_plan") orelse refuse("journal does not record modules_plan", .{});
+    if (mods != .list) refuse("journal does not record modules_plan", .{});
+    for (mods.list) |mod| for (plan_fields) |field| {
+        const value = str(pyfmt.get(mod, field)) orelse "";
+        if (value.len == 0) refuse("journal module plan does not record {s}", .{field});
+    };
+}
+
+/// require_stage_modules: with LMOD_CMD set, verify loads each module from
+/// the journal's stage_modules, so a journal without it is refused.
+pub fn requireStageModules(env: probe.Env, journal: Py) void {
+    const lmod = env.get("LMOD_CMD") orelse "";
+    const stage = str(pyfmt.get(journal, "stage_modules")) orelse "";
+    if (lmod.len > 0 and stage.len == 0) refuse("journal does not record stage_modules", .{});
+}
+
+fn recordedField(journal: Py, field: []const u8) []const u8 {
+    const value = str(pyfmt.get(journal, field)) orelse "";
+    if (value.len == 0) refuse("journal does not record {s}", .{field});
+    return value;
+}
+
+/// os.path.abspath(os.path.normpath(p)): `p` made absolute against the
+/// working directory, with empty and `.` segments dropped and each `..`
+/// removing the segment before it, without following symbolic links. As
+/// POSIX leaves a path that begins with exactly two slashes to the system,
+/// `//` is kept and names another path than `/`; three or more leading
+/// slashes are one.
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
-    var full = p;
-    if (p.len == 0 or p[0] != '/') {
-        var rb: [sys.path_max]u8 = undefined;
-        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch ".";
-        full = std.fs.path.join(a, &.{ cwd, p }) catch p;
-    }
-    var parts: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, full, '/');
-    while (it.next()) |seg| {
-        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
-        if (std.mem.eql(u8, seg, "..")) {
-            _ = parts.pop();
-            continue;
-        }
-        parts.append(a, seg) catch oom();
-    }
-    const joined = std.mem.join(a, "/", parts.items) catch return full;
-    return a.print("/{s}", .{joined}) catch full;
+    return fsx.absPath(a, p) catch oom();
 }
 
 /// Whether `child` is `parent` or a path under it, both made absolute as
@@ -140,12 +185,14 @@ fn dictSet(a: Allocator, d: Py, key: []const u8, value: Py) Py {
     return .{ .dict = out.items };
 }
 
-fn str(v: ?Py) ?[]const u8 {
+/// The text of a JSON string, or null for any other value and for none.
+pub fn str(v: ?Py) ?[]const u8 {
     const x = v orelse return null;
     return if (x == .str) x.str else null;
 }
 
-fn eqlStr(v: ?Py, s: []const u8) bool {
+/// Whether `v` is the JSON string `s`.
+pub fn eqlStr(v: ?Py, s: []const u8) bool {
     const x = str(v) orelse return false;
     return std.mem.eql(u8, x, s);
 }
@@ -249,7 +296,9 @@ fn readFile(c: *Ctx, path: []const u8) []const u8 {
 
 // ---- retire -------------------------------------------------------------
 
-fn gmtimeStamp(a: Allocator, t: f64, comptime with_dashes: bool) []const u8 {
+/// The Unix time `t` in UTC, as 2026-11-17T08:53:00Z with `with_dashes` and
+/// as 20261117T085300Z without, to the second.
+pub fn gmtimeStamp(a: Allocator, t: f64, comptime with_dashes: bool) []const u8 {
     const secs: u64 = @intFromFloat(@max(@floor(t), 0));
     const es = std.time.epoch.EpochSeconds{ .secs = secs };
     const day = es.getEpochDay().calculateYearDay();
@@ -408,8 +457,8 @@ fn rename(c: *Ctx, source: []const u8, destination: []const u8, step: []const u8
         error.CrossDevice => refuse("{s} and {s} are on different filesystems", .{ source, destination }),
         else => refuse("{s}", .{main_mod.osError(c.a, err, source)}),
     };
-    atomic.fsyncDir(dirname(destination)) catch {};
-    atomic.fsyncDir(dirname(source)) catch {};
+    atomic.fsyncDir(dirname(destination)) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(destination))});
+    atomic.fsyncDir(dirname(source)) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(source))});
 }
 
 /// retire: move a module file aside under a retire journal, and leave its
@@ -535,29 +584,70 @@ pub fn retire(
     return 0;
 }
 
-// ---- rollback -------------------------------------------------------------
+// ---- verify ---------------------------------------------------------------
 
-/// rollback: hand a run journal to run.zig's rollbackRun, or move a
-/// retired module file back. Returns the exit status.
-pub fn rollback(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
+/// verify: check the stage of a built run under the state root's lock, and
+/// write and print the result with run.zig's verifyCommand. Returns the exit
+/// status: 0 when the stage passes, 1 when it fails.
+pub fn verify(c: *Ctx, state_root: []const u8, run_id: []const u8, lock_timeout: ?f64) u8 {
     const a = c.a;
     if (!plainRunId(run_id)) refuse("run id is not a plain name: '{s}'", .{run_id});
-    const path = journalPath(a, state_root, run_id);
     const l = lock(c, state_root, lock_timeout);
     defer l.release();
-    const st = fsx.statAt(fsx.cwd, path, false) catch refuse("no journal at {s}", .{path});
-    if (!st.isReg()) refuse("no journal at {s}", .{path});
-    var journal = main_mod.loadJournal(a, path);
-    if (!matchingRunId(journal, run_id))
-        refuse("journal run id does not match its directory", .{});
+    const loaded = loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    const journal = loaded.journal;
+    if (eqlStr(pyfmt.get(journal, "kind"), "retire")) refuse("run {s} is a retire record; it has no stage to verify", .{run_id});
+    const state_name = str(pyfmt.get(journal, "state")) orelse "";
+    if (!std.mem.eql(u8, state_name, "built")) refuse("run {s} is {s}; only a built run has a stage to verify", .{ run_id, state_name });
+    requireStageModules(c.env, journal);
+    const run_mod = @import("run.zig");
+    var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
+    return run_mod.verifyCommand(&r) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
+}
+
+// ---- rollback -------------------------------------------------------------
+
+/// rollback: one run, the newest complete run with `latest`, or every run
+/// published over `to`, under one hold of the state root's lock. A run
+/// journal goes to run.zig's rollbackRun and `to` to its rollbackTo; a
+/// retire record's module file is moved back. Returns the exit status.
+pub fn rollback(c: *Ctx, state_root: []const u8, run_id: ?[]const u8, to: ?[]const u8, latest: bool, lock_timeout: ?f64) u8 {
+    if (@as(u8, @intFromBool(run_id != null)) + @intFromBool(to != null) + @intFromBool(latest) != 1)
+        refuse("give one of a run id, --latest and --to GEN", .{});
+    if (run_id orelse to) |rid| if (!plainRunId(rid)) refuse("run id is not a plain name: '{s}'", .{rid});
+    const l = lock(c, state_root, lock_timeout);
+    defer l.release();
+    const run_mod = @import("run.zig");
+    var r: run_mod.R = .{ .a = c.a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} } };
+    if (to) |gen| return outcome(&r, run_mod.rollbackTo(&r, gen));
+    const id = run_id orelse run_mod.newestComplete(&r) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
+    return rollbackOne(c, &r, state_root, id);
+}
+
+fn outcome(r: anytype, result: anytype) u8 {
+    const res = result catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{r.why}),
+    };
+    return res.code;
+}
+
+fn rollbackOne(c: *Ctx, r: anytype, state_root: []const u8, run_id: []const u8) u8 {
+    const a = c.a;
+    const loaded = loadRunJournal(a, state_root, run_id);
+    const path = loaded.path;
+    var journal = loaded.journal;
     if (!eqlStr(pyfmt.get(journal, "kind"), "retire")) {
-        const run_mod = @import("run.zig");
-        var r: run_mod.R = .{ .a = a, .env = c.env, .ctx = c, .spec = .{ .software = "", .modules = "", .state_root = state_root, .eb_args = &.{} }, .journal = journal, .path = path };
-        const res = run_mod.rollbackRun(&r) catch |err| switch (err) {
-            error.OutOfMemory => refuse("out of memory", .{}),
-            else => refuse("{s}", .{r.why}),
-        };
-        return res.code;
+        r.journal = journal;
+        r.path = path;
+        return outcome(r, @import("run.zig").rollbackRun(r));
     }
     if (eqlStr(pyfmt.get(journal, "state"), "rolled_back")) {
         log("run {s} is already rolled back", .{run_id});
@@ -662,7 +752,9 @@ fn referenced(c: *Ctx, directory: []const u8, roots: []const []const u8) bool {
     return false;
 }
 
-fn num(v: ?Py) ?f64 {
+/// A JSON number as a float, a boolean as 1 or 0, and null for any other
+/// value and for none.
+pub fn num(v: ?Py) ?f64 {
     const x = v orelse return null;
     return switch (x) {
         .int => |n| @floatFromInt(n),
@@ -696,28 +788,26 @@ fn finishedRun(j: Py, include_failed: bool) ?[]const u8 {
     return null;
 }
 
-/// Remove the generation of a run whose hidden trees are all settled.
-fn collectGeneration(
+/// What to do with the generation of a run whose hidden trees are all
+/// settled: remove it, or keep it while a live module resolves inside it
+/// or the usage log reports paths under it; null when the run is not
+/// finished or has no generation directory.
+fn generationAction(
     c: *Ctx,
     state_root: []const u8,
     j: Py,
     roots: []const []const u8,
     include_failed: bool,
-    dry_run: bool,
     usage_log: ?[]const u8,
     eb_keep_logs: []const u8,
-    actions: *std.ArrayList(Action),
-) bool {
-    const what = finishedRun(j, include_failed) orelse return false;
+) ?Action {
+    const what = finishedRun(j, include_failed) orelse return null;
     const rid = str(pyfmt.get(j, "run_id")) orelse "";
     if (!plainRunId(rid))
         refuse("refusing a journal whose run id is not a plain name", .{});
     const path = std.fs.path.join(c.a, &.{ state_root, "generations", rid }) catch oom();
-    if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
-    if (referenced(c, path, roots)) {
-        actions.append(c.a, .{ .path = path, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
-        return false;
-    }
+    if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return null;
+    if (referenced(c, path, roots)) return .{ .path = path, .action = "keep", .reason = "a live module resolves inside it" };
     const used = checkUsageLog(c, path, usage_log, eb_keep_logs);
     if (used.in_use) {
         var reason: []const u8 = "usage log reports paths under it";
@@ -726,12 +816,34 @@ fn collectGeneration(
             const first = it.next() orelse "";
             reason = c.a.print("{s}: {s}", .{ reason, first }) catch reason;
         }
-        actions.append(c.a, .{ .path = path, .action = "keep", .reason = reason }) catch oom();
-        return false;
+        return .{ .path = path, .action = "keep", .reason = reason };
     }
-    if (!dry_run) removeTree(c, path, dirname(path));
-    actions.append(c.a, .{ .path = path, .action = "remove", .reason = c.a.print("generation of a {s}", .{what}) catch oom() }) catch oom();
-    return !dry_run;
+    return .{ .path = path, .action = "remove", .reason = c.a.print("generation of a {s}", .{what}) catch oom() };
+}
+
+/// `--keep N`: N as given, compared saturated at 2^64 - 1 and printed as
+/// Python prints int(N).
+pub const Keep = struct { value: u64, text: []const u8 };
+
+/// A generation `list` shows that a rollback can still switch back to.
+fn returnable(listed: []const u8) bool {
+    for ([_][]const u8{ "replaced", "original", "unknown" }) |s| if (std.mem.eql(u8, listed, s)) return true;
+    return false;
+}
+
+/// Each hidden tree a rollback can switch back to, by its place among its
+/// install path's, newest first.
+fn ranks(a: Allocator, journals: []const Py) std.StringHashMapUnmanaged(u64) {
+    var found: std.StringHashMapUnmanaged(u64) = .empty;
+    for (generations.collect(a, journals)) |g| {
+        var rank: u64 = 0;
+        for (g.rows) |row| {
+            if (!returnable(row.state)) continue;
+            found.put(a, row.path, rank) catch oom();
+            rank += 1;
+        }
+    }
+    return found;
 }
 
 fn safeRetiredPath(c: *Ctx, m: Py) []const u8 {
@@ -763,7 +875,8 @@ pub fn removeTree(c: *Ctx, path_in: []const u8, boundary_in: []const u8) void {
     );
     sys.close(fd);
     sys.unlinkat(parent, name, linux.AT.REMOVEDIR) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
-    sys.fsync(parent) catch {};
+    const flushed = dirname(path);
+    sys.fsync(parent) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, flushed)});
 }
 
 fn openOwned(c: *Ctx, parent: sys.fd_t, name: []const u8, dev: u64) sys.fd_t {
@@ -865,17 +978,17 @@ fn currentCreatedAt(c: *Ctx, journals: []const Py, now: f64) ?f64 {
 }
 
 fn metricsBody(c: *Ctx, state_root: []const u8, journals: []const Py, now: f64) []const u8 {
-    const generations = std.fs.path.join(c.a, &.{ state_root, "generations" }) catch oom();
+    const generations_dir = std.fs.path.join(c.a, &.{ state_root, "generations" }) catch oom();
     var names: std.ArrayList([]const u8) = .empty;
-    const fd = fsx.openDir(fsx.cwd, generations, true) catch |err| switch (err) {
+    const fd = fsx.openDir(fsx.cwd, generations_dir, true) catch |err| switch (err) {
         error.NotFound => null,
-        else => refuse("{s}", .{main_mod.osError(c.a, err, generations)}),
+        else => refuse("{s}", .{main_mod.osError(c.a, err, generations_dir)}),
     };
     if (fd) |directory| {
         defer sys.close(directory);
         var it = fsx.DirIter.init(c.a, directory) catch oom();
-        while (it.next() catch |err| refuse("{s}", .{main_mod.osError(c.a, err, generations)})) |e| {
-            const path = std.fs.path.join(c.a, &.{ generations, e.name }) catch oom();
+        while (it.next() catch |err| refuse("{s}", .{main_mod.osError(c.a, err, generations_dir)})) |e| {
+            const path = std.fs.path.join(c.a, &.{ generations_dir, e.name }) catch oom();
             if (std.mem.eql(u8, main_mod.lstatKind(path), "dir"))
                 names.append(c.a, c.a.dupe(u8, e.name) catch oom()) catch oom();
         }
@@ -913,7 +1026,11 @@ fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []c
 /// `include_failed`, the staged tree of a failed run that published
 /// nothing; with `dry_run`, only list them. `grace_hours` applies to every
 /// tree, or with `run_grace` only to the trees whose run recorded no grace
-/// period and to retired module files. Returns the exit status.
+/// period and to retired module files. With `keep`, the newest generations
+/// of each install path that a rollback can return to are kept, and with
+/// `check_in_use`, a tree a process or mount on this node uses. A run's
+/// generation directory goes once every hidden tree of the run is settled,
+/// unless `check_in_use` finds this node using it. Returns the exit status.
 pub fn gc(
     c: *Ctx,
     state_root_in: []const u8,
@@ -926,6 +1043,8 @@ pub fn gc(
     eb_keep_logs: []const u8,
     metrics_file: ?[]const u8,
     json_output: bool,
+    keep: ?Keep,
+    check_in_use: bool,
 ) u8 {
     const a = c.a;
     if (dry_run and metrics_file != null) refuse("--metrics-file cannot be used with --dry-run", .{});
@@ -935,22 +1054,25 @@ pub fn gc(
     const state_root = abspath(a, state_root_in);
     var journals = main_mod.listJournals(a, state_root);
     const roots = liveRoots(c, journals);
-    var actions: std.ArrayList(Action) = .empty;
+    const ranked: std.StringHashMapUnmanaged(u64) = if (keep != null) ranks(a, journals) else .empty;
+    // Each run's lines, the trees it would remove and its generation, decided
+    // before one scan of /proc for the ones that are still in use.
+    const Removal = struct { mod: usize, action: usize };
+    const Planned = struct { journal: usize, mods: []Py, actions: std.ArrayList(Action), removals: std.ArrayList(Removal), generation: ?Action };
+    var planned: std.ArrayList(Planned) = .empty;
     const grace = grace_hours * seconds_per_hour;
-    for (journals, 0..) |j_in, ji| {
-        var j = j_in;
+    for (journals, 0..) |j, ji| {
         if (eqlStr(pyfmt.get(j, "kind"), "retire")) continue;
         const tree_grace = (if (run_grace) runGrace(j, grace_hours) else grace_hours) * seconds_per_hour;
-        var changed = false;
         const plan_v = pyfmt.get(j, "modules_plan");
-        var mods = a.dupe(Py, if (pyfmt.truthy(plan_v)) plan_v.?.list else &.{}) catch oom();
+        var p: Planned = .{ .journal = ji, .mods = a.dupe(Py, if (pyfmt.truthy(plan_v)) plan_v.?.list else &.{}) catch oom(), .actions = .empty, .removals = .empty, .generation = null };
         // A failed build records no plan; the run's own clock decides.
-        var settled = mods.len > 0 or blk: {
+        var settled = p.mods.len > 0 or blk: {
             if (!include_failed or !eqlStr(pyfmt.get(j, "state"), "failed")) break :blk false;
             const w = num(if (pyfmt.truthy(pyfmt.get(j, "updated_at"))) pyfmt.get(j, "updated_at") else pyfmt.get(j, "created_at")) orelse break :blk false;
             break :blk now - w >= tree_grace;
         };
-        for (mods, 0..) |m, mi| {
+        for (p.mods, 0..) |m, mi| {
             if (pyfmt.truthy(pyfmt.get(m, "retired_removed_at"))) continue;
             const retired = safeRetiredPath(c, m);
             const st = str(pyfmt.get(j, "state"));
@@ -975,59 +1097,104 @@ pub fn gc(
                 continue;
             }
             const w = when orelse {
-                actions.append(a, .{ .path = retired, .action = "keep", .reason = why }) catch oom();
+                p.actions.append(a, .{ .path = retired, .action = "keep", .reason = why }) catch oom();
                 settled = false;
                 continue;
             };
             if (referenced(c, retired, roots)) {
-                actions.append(a, .{ .path = retired, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+                p.actions.append(a, .{ .path = retired, .action = "keep", .reason = "a live module resolves inside it" }) catch oom();
+                settled = false;
+                continue;
+            }
+            const rank = ranked.get(retired);
+            if (rank != null and rank.? < keep.?.value) {
+                p.actions.append(a, .{ .path = retired, .action = "keep", .reason = a.print("kept by --keep {s}", .{keep.?.text}) catch oom() }) catch oom();
                 settled = false;
                 continue;
             }
             if (now - w < tree_grace) {
-                actions.append(a, .{ .path = retired, .action = "keep", .reason = a.print("within grace ({s})", .{why}) catch why }) catch oom();
+                p.actions.append(a, .{ .path = retired, .action = "keep", .reason = a.print("within grace ({s})", .{why}) catch why }) catch oom();
                 settled = false;
                 continue;
             }
-            const used = checkUsageLog(c, retired, usage_log, eb_keep_logs);
-            if (used.in_use) {
-                var reason: []const u8 = "usage log reports paths under it";
-                if (used.detail.len > 0) {
-                    var it = std.mem.splitScalar(u8, used.detail, '\n');
+            const log_used = checkUsageLog(c, retired, usage_log, eb_keep_logs);
+            if (log_used.in_use) {
+                var log_reason: []const u8 = "usage log reports paths under it";
+                if (log_used.detail.len > 0) {
+                    var it = std.mem.splitScalar(u8, log_used.detail, '\n');
                     const first = it.next() orelse "";
-                    reason = a.print("{s}: {s}", .{ reason, first }) catch reason;
+                    log_reason = a.print("{s}: {s}", .{ log_reason, first }) catch log_reason;
                 }
-                actions.append(a, .{ .path = retired, .action = "keep", .reason = reason }) catch oom();
+                p.actions.append(a, .{ .path = retired, .action = "keep", .reason = log_reason }) catch oom();
                 settled = false;
                 continue;
             }
-            actions.append(a, .{ .path = retired, .action = "remove", .reason = why }) catch oom();
+            const reason = if (rank == null) why else a.print("{s}, beyond --keep {s}", .{ why, keep.?.text }) catch oom();
+            p.actions.append(a, .{ .path = retired, .action = "remove", .reason = reason }) catch oom();
+            p.removals.append(a, .{ .mod = mi, .action = p.actions.items.len - 1 }) catch oom();
+        }
+        if (settled) p.generation = generationAction(c, state_root, j, roots, include_failed, usage_log, eb_keep_logs);
+        planned.append(a, p) catch oom();
+    }
+    var paths: std.ArrayList([]const u8) = .empty;
+    for (planned.items) |p| {
+        for (p.removals.items) |r| paths.append(a, p.actions.items[r.action].path) catch oom();
+        if (p.generation) |g| if (std.mem.eql(u8, g.action, "remove")) paths.append(a, g.path) catch oom();
+    }
+    const used = if (check_in_use) inuse.users(a, std.heap.page_allocator, paths.items) else none: {
+        const none = a.alloc(?[]const u8, paths.items.len) catch oom();
+        @memset(none, null);
+        break :none none;
+    };
+    var next: usize = 0;
+    var actions: std.ArrayList(Action) = .empty;
+    for (planned.items) |*p| {
+        var j = journals[p.journal];
+        var changed = false;
+        var settled = true;
+        for (p.removals.items) |r| {
+            const act = &p.actions.items[r.action];
+            const user = used[next];
+            next += 1;
+            if (user) |why| {
+                act.action = "keep";
+                act.reason = a.print("in use on this node: {s}", .{why}) catch oom();
+                settled = false;
+                continue;
+            }
             if (dry_run) continue;
-            removeTree(c, retired, dirname(retired));
-            mods[mi] = dictSet(a, m, "retired_removed_at", .{ .float = now });
+            removeTree(c, act.path, dirname(act.path));
+            p.mods[r.mod] = dictSet(a, p.mods[r.mod], "retired_removed_at", .{ .float = now });
             changed = true;
         }
-        const generation_removed = settled and collectGeneration(
-            c,
-            state_root,
-            j,
-            roots,
-            include_failed,
-            dry_run,
-            usage_log,
-            eb_keep_logs,
-            &actions,
-        );
+        var generation_removed = false;
+        if (p.generation) |planned_generation| {
+            var g = planned_generation;
+            const scanned = std.mem.eql(u8, g.action, "remove");
+            const user = if (scanned) used[next] else null;
+            if (scanned) next += 1;
+            if (settled) {
+                if (user) |why| {
+                    g.action = "keep";
+                    g.reason = a.print("in use on this node: {s}", .{why}) catch oom();
+                } else if (scanned and !dry_run) {
+                    removeTree(c, g.path, dirname(g.path));
+                    generation_removed = true;
+                }
+                p.actions.append(a, g) catch oom();
+            }
+        }
+        actions.appendSlice(a, p.actions.items) catch oom();
         if (generation_removed) j = dictSet(a, j, "generation_removed_at", .{ .float = now });
         if (changed or generation_removed) {
-            if (changed) j = dictSet(a, j, "modules_plan", .{ .list = mods });
+            if (changed) j = dictSet(a, j, "modules_plan", .{ .list = p.mods });
             const message = if (changed and generation_removed) "retired tree and generation removed" else if (changed) "retired tree removed" else "generation removed";
             j = dictSet(a, j, "message", Py.s(message));
             const rid = str(pyfmt.get(j, "run_id")) orelse "";
             j = saveJournal(c, journalPath(a, state_root, rid), j, "journal.gc");
             journals = blk: {
                 const copy = a.dupe(Py, journals) catch break :blk journals;
-                copy[ji] = j;
+                copy[p.journal] = j;
                 break :blk copy;
             };
         }
@@ -1179,9 +1346,20 @@ test "gc records its completion time after its starting time" {
     const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
     const env: probe.Env = .{ .envp = parent };
     var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
-    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false));
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false, null, false));
     try std.testing.expectEqual(@as(usize, 2), Clock.calls);
     try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
+}
+
+test "abspath delegates to fsx.absPath for relative and normalized paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("/opt/bin", abspath(a, "/opt/./x/../bin/"));
+    var rb: [sys.path_max]u8 = undefined;
+    const here = try fsx.realpath(fsx.cwd, ".", &rb);
+    const expected = try std.fs.path.join(a, &.{ here, "sub/file" });
+    try std.testing.expectEqualStrings(expected, abspath(a, "sub/./file"));
 }
 
 test "linksTo finds the links that resolve to a module file beside it and in each class directory" {
@@ -1267,4 +1445,74 @@ test "emptyDir refuses a tree nested past its depth bound" {
         full.shrinkRetainingCapacity(full.items.len - 2);
     }
     _ = try sys.unlinkat(fsx.cwd, try sys.z(&fz, base), linux.AT.REMOVEDIR);
+}
+
+fn threadCount() !usize {
+    const fd = try sys.openat(fsx.cwd, "/proc/self/status", .{ .ACCMODE = .RDONLY }, 0);
+    defer sys.close(fd);
+    var buf: [4096]u8 = undefined;
+    const n = linux.read(fd, &buf, buf.len);
+    if (linux.errno(n) != .SUCCESS or n == 0) return error.Status;
+    const text = buf[0..n];
+    const at = std.mem.indexOf(u8, text, "Threads:") orelse return error.Status;
+    var rest = text[at + "Threads:".len ..];
+    while (rest.len > 0 and (rest[0] == ' ' or rest[0] == '\t')) rest = rest[1..];
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+    return std.fmt.parseInt(usize, rest[0..end], 10);
+}
+
+test "a failed directory flush after a generation directory is removed is reported" {
+    try std.testing.expect(linux.geteuid() != 0);
+    try std.testing.expectEqual(@as(usize, 1), try threadCount());
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var fused = try faultmount.mount(a, "generation", "/generations");
+    defer fused.stop();
+    const boundary = try std.fs.path.join(a, &.{ fused.mnt, "generations" });
+    const path = try std.fs.path.join(a, &.{ boundary, "r1" });
+    try atomic.makedirs(path);
+    const note = try std.fs.path.join(a, &.{ path, "note" });
+    const fd = try sys.openat(fsx.cwd, note, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    sys.close(fd);
+
+    var pipe: [2]linux.fd_t = undefined;
+    if (linux.errno(linux.pipe2(&pipe, .{ .CLOEXEC = true })) != .SUCCESS) return error.Pipe;
+    defer sys.close(pipe[0]);
+    const pid_rc = linux.fork();
+    if (linux.errno(pid_rc) != .SUCCESS) return error.Fork;
+    if (pid_rc == 0) {
+        _ = linux.dup2(pipe[1], 1);
+        _ = linux.dup2(pipe[1], 2);
+        _ = linux.close(pipe[0]);
+        _ = linux.close(pipe[1]);
+        _ = linux.close_range(3, std.math.maxInt(linux.fd_t), .{ .UNSHARE = false, .CLOEXEC = false });
+        const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+        const env: probe.Env = .{ .envp = parent };
+        var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+        removeTree(&c, path, boundary);
+        linux.exit_group(0);
+    }
+    _ = linux.close(pipe[1]);
+    var status: i32 = 0;
+    var spins: usize = 0;
+    const child: linux.pid_t = @intCast(pid_rc);
+    while (spins < 5_000_000) : (spins += 1) {
+        const wr = linux.waitpid(child, &status, linux.W.NOHANG);
+        if (wr == child) break;
+        if (wr != 0) return error.Wait;
+    } else {
+        _ = linux.kill(child, linux.SIG.KILL);
+        _ = linux.waitpid(child, &status, 0);
+        return error.ChildHung;
+    }
+    var msg_buf: [4096]u8 = undefined;
+    const n = linux.read(pipe[0], &msg_buf, msg_buf.len);
+    const msg = if (linux.errno(n) == .SUCCESS) msg_buf[0..n] else "";
+    const bits: u32 = @bitCast(status);
+    try std.testing.expect(bits & 0x7f == 0);
+    try std.testing.expectEqual(@as(u8, 2), @as(u8, @intCast((bits >> 8) & 0xff)));
+    try std.testing.expect(std.mem.indexOf(u8, msg, "Input/output error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, boundary) != null);
+    try std.testing.expect(!std.mem.eql(u8, main_mod.lstatKind(path), "dir"));
 }

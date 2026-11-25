@@ -22,6 +22,8 @@ from tests import test_easybuild_integration as base
 @unittest.skipUnless(os.environ.get("TOOL_BIN"), "set TOOL_BIN to the program to test")
 class CliEasyBuildIntegrationTests(base.EasyBuildIntegrationTests):
     def _rebuild(self, prefix, ec, src, backend, *eb_args, build_dir=None):
+        if build_dir is None:
+            build_dir = base._scratch_build(prefix)
         cmd = [
             os.environ["TOOL_BIN"], "run",
             "--software", os.path.join(prefix, "software"),
