@@ -185,17 +185,23 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         self.assertEqual(zig["final_link"], "elsewhere.lua")
         self.assertEqual(zig["final_payload"], "old\n")
 
-    def _rollback_to(self, argv, retry_fsync=False, replaced=False):
+    def _rollback_to(self, argv, retry_fsync=False, replaced=False, module_gone=False):
         # run2 creates the class link run1 made and lost; run3 finds it in
         # place. Two runs over run1 keep rollback --to off the one-run path.
         # With `replaced`, another symlink takes the link's place afterwards.
+        # With `module_gone`, run2 also creates the module file run1 lost, and
+        # the injected flush failure is on the module directory.
         root, env, run_args, _ = self._layout()
         state = os.path.join(root, "state")
         link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+        module = os.path.join(root, "modules", "all", "demo", "1.lua")
+        needle = "modules/all/demo" if module_gone else "modules/tools/demo"
         at = run_args.index("--run-id") + 1
         for run_id in ("run1", "run2", "run3"):
             if run_id == "run2":
                 os.unlink(link)
+                if module_gone:
+                    os.unlink(module)
             self._publish(argv, root, env, run_args[:at] + [run_id] + run_args[at + 1:])
         self.assertEqual(_links(root, "run2"), [(True, "created")])
         self.assertEqual(_links(root, "run3"), [(False, "present")])
@@ -203,16 +209,17 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
             os.unlink(link)
             os.symlink("elsewhere.lua", link)
         back = [*argv, "rollback", "--state-root", state, "--lock-timeout", "0", "--to", "run1"]
-        failed = self._traced(back, root, env, 5, "fsync", 1, "modules/tools/demo")
+        failed = self._traced(back, root, env, 5, "fsync", 1, needle)
         outcome = {
             "rc": failed.returncode,
             "stderr": _scrub(failed.stderr, root),
-            "link": os.readlink(link) if os.path.islink(link) else os.path.lexists(link),
+            "link": _scrub(os.readlink(link), root) if os.path.islink(link) else os.path.lexists(link),
+            "module": os.path.lexists(module),
             "states": [_state(root, run_id) for run_id in ("run2", "run3")],
             "run2_links": _links(root, "run2"),
         }
         if retry_fsync:
-            retry = self._traced(back, root, env, 5, "fsync", 1, "modules/tools/demo")
+            retry = self._traced(back, root, env, 5, "fsync", 1, needle)
             outcome["retry_rc"] = retry.returncode
             outcome["retry_stderr"] = _scrub(retry.stderr, root)
             outcome["retry_states"] = [_state(root, run_id) for run_id in ("run2", "run3")]
@@ -221,7 +228,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         outcome["again_rc"] = again.returncode
         outcome["final"] = [_state(root, run_id) for run_id in ("run2", "run3")]
         outcome["final_run2_links"] = _links(root, "run2")
-        outcome["final_link"] = os.readlink(link) if os.path.islink(link) else os.path.lexists(link)
+        outcome["final_link"] = _scrub(os.readlink(link), root) if os.path.islink(link) else os.path.lexists(link)
+        outcome["final_module"] = os.path.lexists(module)
         outcome["payload"] = _payload(root)
         return outcome
 
@@ -246,6 +254,30 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
                 self.assertEqual(zig["final_run2_links"], [(False, "removed")])
                 self.assertEqual(zig["final_link"], link)
                 self.assertEqual(zig["payload"], "new\n")
+
+    def test_rollback_to_missing_module_is_flushed_again(self):
+        # run2 created the module file, so rollback --to removes it. Its
+        # directory flush fails twice; the retry that finds the file gone
+        # still flushes before the runs are rolled back.
+        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True, module_gone=True)
+        zig = self._rollback_to([os.environ["TOOL_BIN"]], retry_fsync=True, module_gone=True)
+        self.assertEqual(py, zig)
+        self.assertEqual(zig["rc"], 2)
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/all/demo'\n")
+        self.assertFalse(zig["module"])
+        self.assertEqual(zig["states"], ["rolling_back", "rolling_back"])
+        self.assertEqual(zig["retry_rc"], 2)
+        self.assertEqual(
+            zig["retry_stderr"],
+            "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/all/demo'\n",
+        )
+        self.assertEqual(zig["retry_states"], ["rolling_back", "rolling_back"])
+        self.assertEqual(zig["retry_run2_links"], [(True, "created")])
+        self.assertEqual(zig["again_rc"], 0)
+        self.assertEqual(zig["final"], ["rolled_back", "rolled_back"])
+        self.assertEqual(zig["final_run2_links"], [(False, "removed")])
+        self.assertFalse(zig["final_module"])
+        self.assertEqual(zig["payload"], "new\n")
 
     def test_rollback_to_missing_link_is_flushed_again(self):
         py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True)

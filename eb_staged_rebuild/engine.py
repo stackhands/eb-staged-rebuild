@@ -865,14 +865,18 @@ def _restore_old_module(mod, faults):
             metadata_from=backup,
         )
         return
+    parent = os.path.dirname(live)
     if kind == "missing":
-        return
-    if kind == "file" and sha256_bytes(read_bytes(live)) == mod["new_hash"]:
+        # A retry after a failed flush finds the file already removed and
+        # still has to flush. A module never written may have no directory.
+        if lstat_kind(parent) != "dir":
+            return
+    elif kind == "file" and sha256_bytes(read_bytes(live)) == mod["new_hash"]:
         faults.reach(f"restore.remove:{mod['rel']}")
         os.remove(live)
-        fsync_dir(os.path.dirname(live))
-        return
-    raise NeedsIntervention(f"{live} is not the module file this run created")
+    else:
+        raise NeedsIntervention(f"{live} is not the module file this run created")
+    fsync_dir(parent)
 
 
 def _create_links(journal, faults):

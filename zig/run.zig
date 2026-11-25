@@ -1093,15 +1093,18 @@ fn restoreOldModule(r: *R, m: Py, faults: atomic.Faults) E!void {
         try write(r, live, previous, try a.print("restore.file:{s}", .{rel}), backup, faults);
         return;
     }
-    if (std.mem.eql(u8, k, "missing")) return;
-    if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
+    const parent = std.fs.path.dirname(live) orelse "/";
+    if (std.mem.eql(u8, k, "missing")) {
+        // A retry after a failed flush finds the file already removed and
+        // still has to flush. A module never written may have no directory.
+        if (!isKind(parent, "dir")) return;
+    } else if (std.mem.eql(u8, k, "file") and std.mem.eql(u8, try fileHash(r, live), s(pyfmt.get(m, "new_hash")))) {
         try hit(r, faults, try a.print("restore.remove:{s}", .{rel}));
         sys.unlinkat(fsx.cwd, live, 0) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, live)});
-        const parent = std.fs.path.dirname(live) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, parent)});
-        return;
+    } else {
+        return r.intervene("{s} is not the module file this run created", .{live});
     }
-    return r.intervene("{s} is not the module file this run created", .{live});
+    atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, parent)});
 }
 
 fn readlinkText(a: Allocator, p: []const u8) []const u8 {
