@@ -1150,13 +1150,9 @@ fn removeCreatedLinks(r: *R) E!void {
         const path = s(pyfmt.get(l, "live_path"));
         if (isKind(path, "symlink") and std.mem.eql(u8, readlinkText(r.a, path), s(pyfmt.get(l, "target")))) {
             sys.unlinkat(fsx.cwd, path, 0) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, path)});
-        } else if (!isKind(path, "missing")) {
-            r.setItem("links_plan", i, "created", .{ .bool = false });
-            r.setItem("links_plan", i, "status", Py.s("pending"));
-            continue;
         }
         // The link is gone only once its parent has been flushed. A retry
-        // that finds it already absent still has to flush.
+        // that finds it already absent or replaced still has to flush.
         const parent = std.fs.path.dirname(path) orelse "/";
         atomic.fsyncDir(parent) catch |err| return r.osFail("{s}", .{main_mod.osError(r.a, err, parent)});
         r.setItem("links_plan", i, "created", .{ .bool = false });
