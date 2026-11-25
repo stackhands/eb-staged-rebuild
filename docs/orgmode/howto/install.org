@@ -19,24 +19,24 @@ All three run the same commands; [[file:../reference/compatibility.org][Compatib
 1. Download the binary for the machine's architecture, =x86_64= or =aarch64=, and the checksums of the release, and check the binary against them:
 
    #+begin_src bash
-   v=1.0.0 arch=x86_64
+   v=2.0.1 arch=x86_64
    curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/eb-staged-rebuild-${v}-${arch}-linux-musl"
    curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/SHA256SUMS"
    sha256sum --check --ignore-missing SHA256SUMS
    #+end_src
 
    #+begin_example
-   eb-staged-rebuild-1.0.0-x86_64-linux-musl: OK
+   eb-staged-rebuild-2.0.1-x86_64-linux-musl: OK
    #+end_example
 
 2. Check that the binary was built by the release workflow of the repository, from the tag:
 
    #+begin_src bash
-   gh attestation verify eb-staged-rebuild-1.0.0-x86_64-linux-musl --repo stackhands/eb-staged-rebuild
+   gh attestation verify eb-staged-rebuild-2.0.1-x86_64-linux-musl --repo stackhands/eb-staged-rebuild
    #+end_src
 
    #+begin_example
-   Loaded digest sha256:c5e0b9908d5835e6ab63e96d41247fec7a83c3a8ea465e4ab0c9a6fa72bb7489 for file://eb-staged-rebuild-1.0.0-x86_64-linux-musl
+   Loaded digest sha256:f148f6477d3e9d8d60a0a79615a051f15a241a08d14dd1f888bbe60b4327e859 for file://eb-staged-rebuild-2.0.1-x86_64-linux-musl
    Loaded 1 attestation from GitHub API
 
    The following policy criteria will be enforced:
@@ -52,9 +52,9 @@ All three run the same commands; [[file:../reference/compatibility.org][Compatib
 
    - Attestation #1
      - Build repo:..... stackhands/eb-staged-rebuild
-     - Build workflow:. .github/workflows/release.yml@refs/tags/v1.0.0
+     - Build workflow:. .github/workflows/release.yml@refs/tags/v2.0.1
      - Signer repo:.... stackhands/eb-staged-rebuild
-     - Signer workflow: .github/workflows/release.yml@refs/tags/v1.0.0
+     - Signer workflow: .github/workflows/release.yml@refs/tags/v2.0.1
    #+end_example
 
    =gh= prints this on a terminal; elsewhere only its exit status, 0, says that the check passed.
@@ -66,10 +66,10 @@ All three run the same commands; [[file:../reference/compatibility.org][Compatib
    #+end_src
 
    #+begin_example
-   eb-staged-rebuild 1.0.0
+   eb-staged-rebuild 2.0.1 (x86_64-linux-musl, safe, zig 0.17.1, 03b695e)
    #+end_example
 
-   The 1.0.0 binaries print the version alone; one built from a later commit also prints its target, build mode, Zig version and commit, as in the next step.
+   The version is followed by the target, build mode, Zig version and commit the binary was built from; the 1.0.0 binaries print the version alone.
 4. To build the binary yourself instead, clone the repository and build it with =-Drelease=true=, giving it the commit it is built from:
 
    #+begin_src bash
@@ -108,7 +108,7 @@ All three run the same commands; [[file:../reference/compatibility.org][Compatib
    #+end_src
 
    #+begin_example
-   eb-staged-rebuild 1.0.0
+   eb-staged-rebuild 2.0.1
    #+end_example
 
    Put =~/eb-staged-rebuild-venv/bin= on =PATH=, or link =eb-staged-rebuild= from there into =~/.local/bin=.
