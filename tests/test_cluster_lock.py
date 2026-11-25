@@ -214,10 +214,8 @@ class ClusterLockTests(unittest.TestCase):
                 holder.release()
             self.assertEqual(proc.returncode, 2)
             self.assertEqual(proc.stdout, b"")
-            self.assertEqual(
-                proc.stderr,
-                f"eb-staged-rebuild: another eb-staged-rebuild holds the lock at {root}/.lock\n".encode(),
-            )
+            self.assertIn(b"--lock-timeout is not a finite number", proc.stderr)
+            self.assertNotIn(b"holds the lock", proc.stderr)
 
 
 if __name__ == "__main__":

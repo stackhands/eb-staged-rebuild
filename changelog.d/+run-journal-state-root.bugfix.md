@@ -1,0 +1,1 @@
+`verify` and `resume` refuse a journal whose `state_root` is not the state root they were given. The refusal exits 2 with the same message in both front ends. Both commands write `verify.json` and resume under the given state root and ignore the one the journal records.

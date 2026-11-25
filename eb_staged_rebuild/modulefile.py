@@ -114,7 +114,11 @@ def generation_complete(path):
         return True
     meta = os.path.join(path, "easybuild")
     if is_real_dir(meta):
-        for name in os.listdir(meta):
+        try:
+            names = os.listdir(meta)
+        except OSError:
+            return False
+        for name in names:
             if name.endswith(".eb") and lstat_kind(os.path.join(meta, name)) == "file":
                 return True
     return False

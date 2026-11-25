@@ -914,6 +914,7 @@ class StateRootVariableTests(unittest.TestCase):
             for argv in (
                 ["status"],
                 ["status", "run1"],
+                ["list"],
                 ["retire", "--module-file", installed["demo/1"]["module"], "--dry-run"],
                 ["gc", "--dry-run"],
                 ["resume", "run1"],
@@ -922,6 +923,9 @@ class StateRootVariableTests(unittest.TestCase):
                     given = _main([argv[0], "--state-root", state, *argv[1:]])
                     self.assertEqual(given[0], 0, given)
                     self.assertEqual(_main(argv, env), given)
+            refused = _main(["verify", "--state-root", state, "run1"])
+            self.assertEqual(refused, (2, "", "eb-staged-rebuild: run run1 is complete; only a built run has a stage to verify\n"))
+            self.assertEqual(_main(["verify", "run1"], env), refused)
             self.assertEqual(_main(["rollback", "run1"], env)[0], 0)
             TransactionTests().assert_old_live(installed)
 

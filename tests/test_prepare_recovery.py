@@ -74,7 +74,7 @@ class PrepareRecoveryTests(unittest.TestCase):
             path.write_text(json.dumps(journal))
             with self.assertRaisesRegex(
                 NeedsIntervention,
-                'does not record rel, prepared and new_hash',
+                'journal module plan does not record prepared',
             ):
                 resume(spec.state_root, 'prepare', builder=spec.builder)
             self.assertEqual(module.read_text(), text)

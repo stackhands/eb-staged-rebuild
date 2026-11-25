@@ -1,0 +1,135 @@
+#+TITLE: The generations of an installation
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The generations of an installation
+
+The trees that the stable path of an installation, =software/NAME/VERSION=, has held and that are still on disk, as =list= prints them.
+Publishing a run exchanges its new tree with the live one, and keeps the tree it replaced at the run's hidden name, =software/NAME/.VERSION.RUN_ID=; rolling the run back exchanges them again, and keeps the tree it took out at that same name.
+Each tree that a run published holds =.eb-staged-rebuild-complete=, which names the run.
+A run's generation that was never published is not one of them.
+
+** list
+
+#+begin_src bash
+eb-staged-rebuild list --state-root /opt/site/.eb-staged-rebuild
+#+end_src
+
+#+begin_example
+Example/1.0-GCCcore-15.2.0  /opt/site/software/Example/1.0-GCCcore-15.2.0
+  live         2026-11-17T15:56:28Z  example-6  verify pass
+  replaced     2026-11-17T15:56:12Z  example-5  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-6
+  rolled back  2026-11-17T15:55:56Z  example-4  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-4
+  replaced     2026-11-17T15:55:38Z  example-userns  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-5
+  replaced     2026-11-17T15:55:34Z  example-robot  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-userns
+  replaced     2026-11-17T15:54:56Z  example-2  verify -  /opt/site/software/Example/.1.0-GCCcore-15.2.0.example-robot
+#+end_example
+
+For each installation that the run journals of the state root name, =list= prints its path in the software tree and its absolute path, then a line for each of its generations: the live one first, then the others, the most recently published first.
+Here the tree of =example-6= is live, and each tree that a later run replaced waits at the hidden name of that run: the tree of =example-5= at that of =example-6=, the tree of =example-userns= at that of =example-5=, and so on to the tree of =example-2=, which =example-robot= replaced.
+The tree of =example-4=, which its rollback took out, is at its own hidden name; the rollback had put the tree of =example-userns= back.
+=gc= had removed the older trees.
+Only =example-6= ran with =--verify=, so the other runs have no result of the checks.
+
+=list= takes no lock, and prints =no generations= for a state root without run journals.
+=docs/examples/site.sh= in the repository runs it as its case =list=, after the cases of the how-to guides.
+
+** The columns
+
+| Column    | What it holds                                                                                                |
+|-----------+--------------------------------------------------------------------------------------------------------------|
+| State     | What the tree is now, from the table below.                                                                  |
+| Published | When its run published it, in UTC; =-= for the tree from before the first run.                               |
+| Run       | The run that its =.eb-staged-rebuild-complete= names; =-= when it has none.                                  |
+| Verify    | =verify= and the result of the checks before publication that the run recorded, from the second table below. |
+| Path      | Where the tree is, for a tree that is not live.                                                              |
+
+| State          | The tree                                                                             |
+|----------------+--------------------------------------------------------------------------------------|
+| =live=         | is at the stable path.                                                               |
+| =replaced=     | is one that a later publication replaced; its run is =complete=.                     |
+| =rolled back=  | is one that its run's rollback took out; its run is =rolled_back=.                   |
+| =rolling back= | is one that an unfinished =rollback --to= is taking out; its run is =rolling_back=.  |
+| =original=     | was there before the first run, and has no =.eb-staged-rebuild-complete=.            |
+| =unknown=      | names a run whose journal is gone, or whose journal does not name this installation. |
+
+| Verify                | The run's journal records                                                       |
+|-----------------------+---------------------------------------------------------------------------------|
+| =pass=                | a generation that passed; the checks it skipped follow, as =(modules skipped)=. |
+| =forced (N problems)= | a generation that failed, and that =--force= published.                         |
+| =fail (N problems)=   | a generation that failed, without =--force=.                                    |
+| =-=                   | no result: a run that nothing checked, or the tree from before the first run.   |
+
+** Not listed
+
+- A hidden tree that =gc= removed.
+- A run's generation that was never published, which stays under =generations/=.
+- The new tree of a run that has not finished publishing it, which can wait at the run's hidden name while the run is =built= or =publishing=.
+- A journal entry without a software tree, a stable path or a hidden name.
+
+** What gc keeps
+
+=gc= prints a line =ACTION: PATH (REASON)= for each hidden tree that a run journal names and that is still on disk.
+The first row that applies decides:
+
+| Action   | Reason                             | When                                                                                                            |
+|----------+------------------------------------+-----------------------------------------------------------------------------------------------------------------|
+| =keep=   | =state STATE is kept=              | The run is not =complete= or =rolled_back=, nor a =failed= run that =--include-failed= takes.                   |
+| =keep=   | =a live module resolves inside it= | A module file that a journal names has its root inside the tree.                                                |
+| =keep=   | =kept by --keep N=                 | The tree is one of the =N= newest of its installation that a rollback can return to.                            |
+| =keep=   | =within grace (WHY)=               | The tree's grace period is not over.                                                                            |
+| =keep=   | =in use on this node: USE=         | With =--check-in-use=, a process or a mount of this machine uses the tree, as in the table of the next section. |
+| =remove= | =WHY=, or =WHY, beyond --keep N=   | None of the above; with =--dry-run=, =gc= prints the line and removes nothing.                                  |
+
+=WHY= is =previous live tree= for the tree that a =complete= run replaced, whose grace period starts when the run published, and =rolled-back candidate= for the tree that a rollback took out, whose grace period starts at the rollback.
+With =--include-failed=, the tree of a =failed= run that published nothing is a =failed candidate=, and its grace period starts at the run's last change.
+
+A run's generation, =<state-root>/generations/RUN_ID=, gets a line after the run's trees once each of them is settled: removed, or gone and past its grace period.
+Its reason is =generation of a complete run=, =generation of a rolled-back run= or, with =--include-failed=, =generation of a failed run= when =gc= removes it, and =a live module resolves inside it= or =in use on this node: USE= when it keeps it.
+A tree kept for any reason, =--keep N= and the in-use check included, keeps its run's generation too.
+The software directories that =retire= left in place come last, as =keep= or =manual=; =gc= never removes them.
+
+=--keep N= counts, for each installation, the trees that =list= shows as =replaced=, =original= or =unknown=, in the order of =list=: the trees that =rollback --to= can return to.
+A =rolled back= tree is not counted.
+The first =N= are kept however old they are, and every other tree is decided as without =--keep=, so =--keep= never removes a tree that =gc= alone would keep.
+=--keep 0= keeps none.
+
+*** The in-use check
+
+With =--check-in-use=, before it removes a tree or a generation, and before a =--dry-run= says that it would, =gc= looks in =/proc= of the machine it runs on for a use of it.
+Without it, =gc= reads nothing in =/proc=.
+It reads links and text only, and never opens or stats a file that it finds there, so it does not touch the filesystems those files are on.
+It prints the first use that it finds: the mounts of its own mount namespace first, then each process by its pid.
+
+| =USE=                                                | Found in                                                                            |
+|------------------------------------------------------+-------------------------------------------------------------------------------------|
+| =MOUNT is a mount point=                             | The mount table of =gc='s namespace: a mount at or inside the tree.                 |
+| =mounted at MOUNT=                                   | The same table: a bind mount of the tree, or of a directory in it.                  |
+| =mounted at MOUNT in the mount namespace of pid PID= | The mount table of another namespace, read through the first process that shows it. |
+| =pid PID runs a program in it=                       | =/proc/PID/exe=                                                                     |
+| =pid PID has its working directory in it=            | =/proc/PID/cwd=                                                                     |
+| =pid PID has its root directory in it=               | =/proc/PID/root=                                                                    |
+| =pid PID has a file open in it=                      | =/proc/PID/fd=                                                                      |
+| =pid PID maps a file in it=                          | =/proc/PID/maps=                                                                    |
+
+The paths of a process are compared with the real path of the tree, and a bind mount by its device and by the path of the mounted directory on that device.
+
+What the check cannot see, and only the grace period covers:
+
+- Other machines: a job on another node with a file open in the tree, or its working directory in it.
+- The processes that =gc= may not inspect: without root, those of every other user, which it skips without a word.
+  Run =gc= as root to include them.
+- A process in another mount namespace that reaches the tree by another path, such as a container that bound the whole software tree at another directory.
+  Its paths are its own, and its mount table shows a bind mount of the parent, not of the tree.
+- A use that starts after the check, which is a separate step from the removal.
+  Jobs are not given the hidden name of a tree, so a new use comes from a process that already has a way into it, such as its working directory or an open directory, or from someone who goes there by hand.
+
+** See also
+
+- [[file:cli.org][The eb-staged-rebuild command]], for =list= and =gc=
+- [[file:verify.org][The checks before publication]]
+- [[file:../howto/roll-back.org][Put the previous installation back]]
+- [[file:../howto/remove-old-trees.org][Remove the trees a rebuild left behind]]
+- [[file:../explanation/publication.org][How a rebuild is published]]
+- [[py:eb_staged_rebuild.generations.generations]]
+- [[py:eb_staged_rebuild.inuse.users]], the in-use check
