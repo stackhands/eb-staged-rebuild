@@ -8,9 +8,9 @@ const std = @import("std");
 const common = @import("zig_common");
 const admin = @import("admin.zig");
 const probe = @import("probe.zig");
-const pyfmt = @import("pyfmt.zig");
 
 const cli = common.cli;
+const pytext = common.pytext;
 const Allocator = std.mem.Allocator;
 
 const space = " \t\n\r\x0b\x0c";
@@ -21,7 +21,7 @@ var fixed: ?f64 = null;
 
 fn die(a: Allocator, comptime why: []const u8, raw: []const u8) noreturn {
     var quoted: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&quoted, a, raw) catch {
+    pytext.reprStr(&quoted, a, raw) catch {
         cli.err("eb-staged-rebuild: EB_STAGED_REBUILD_NOW is not a representable timestamp\n", .{});
         std.process.exit(2);
     };

@@ -105,6 +105,25 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
             handle.write(outbox_bytes)
         return state_root, run_id
 
+    def test_rollback_rejects_directory_outbox_with_same_message(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            state_root, run_id = self._write_fixture(root, b"{}")
+            outbox = os.path.join(state_root, "runs", run_id, "outbox.json")
+            os.unlink(outbox)
+            os.mkdir(outbox)
+
+            args = ("rollback", "--state-root", state_root, run_id)
+            proc = run_cli(*args)
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertEqual(proc.stdout, "")
+            self.assertIn("Is a directory", proc.stderr)
+
+            binary = run_cli_optional_binary(*args)
+            if binary is not None:
+                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+                self.assertEqual(binary.stdout, "")
+                self.assertEqual(binary.stderr, proc.stderr)
+
     def test_rollback_rejects_invalid_outbox_json_with_same_message(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             for outbox_bytes in (b"", b"{not json\n"):

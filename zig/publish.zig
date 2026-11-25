@@ -90,11 +90,19 @@ fn inline_(a: Allocator, out: *std.ArrayList(u8), v: Py, sort: bool) Allocator.E
 const fields = [_][]const u8{ "actor", "stack", "target" };
 const actions = [_][]const u8{ "install", "rebuild-inplace", "rebuild-bump" };
 
+fn mapConfigOpenError(err: anyerror) anyerror {
+    return switch (err) {
+        error.IsDir, error.NotRegularFile => error.InvalidArgument,
+        else => err,
+    };
+}
+
 /// load_config: the ledger configuration with its defaults and "path".
 pub fn loadConfig(a: Allocator, path_in: []const u8, why: *[]const u8) Error!Py {
     const path = admin.abspath(a, path_in);
     const f = fsx.openRegular(fsx.cwd, path, true) catch |err| {
-        why.* = try a.print("cannot read ledger config {s}: {s}", .{ path, main_mod.osError(a, err, path) });
+        const mapped = mapConfigOpenError(err);
+        why.* = try a.print("cannot read ledger config {s}: {s}", .{ path, main_mod.osError(a, mapped, path) });
         return error.Refused;
     };
     defer sys.close(f.fd);
@@ -525,7 +533,7 @@ fn append(a: Allocator, envp: common.proc.Envp, config: Py, record_path: []const
     const first = out[0 .. std.mem.findAny(u8, out, "\n\r") orelse out.len];
     const m = parseSummary(first) orelse {
         var rp: std.ArrayList(u8) = .empty;
-        try pyfmt.reprStr(&rp, a, lastChars(out, 500));
+        try common.pytext.reprStr(&rp, a, lastChars(out, 500));
         return publisherError(a, "eb-stack ledger append printed no receipt: {s}", .{rp.items});
     };
     const head_v = readJson(a, head) orelse return publisherError(a, "cannot read head {s}: not valid JSON", .{head});
@@ -589,4 +597,43 @@ test "isPositiveTimeout rejects non-finite and non-positive values" {
     try std.testing.expect(!isPositiveTimeout(.{ .float = -1.0 }));
     try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.nan(f64) }));
     try std.testing.expect(!isPositiveTimeout(.{ .float = std.math.inf(f64) }));
+}
+
+test "loadConfig reports EINVAL for non-regular paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const root = try fsx.mkdtemp(a, "/tmp", "publish-load-config-");
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+
+    const dir_path = try a.print("{s}/dir", .{root});
+    var zdir: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.mkdirat(fsx.cwd, (try sys.z(&zdir, dir_path)).ptr, 0o700)),
+    );
+
+    const fifo_path = try a.print("{s}/fifo", .{root});
+    var zfifo: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.mknodat(linux.AT.FDCWD, (try sys.z(&zfifo, fifo_path)).ptr, linux.S.IFIFO | 0o600, 0)),
+    );
+
+    const dir_link = try a.print("{s}/dir-link", .{root});
+    var ztarget: [sys.path_max:0]u8 = undefined;
+    var zlink: [sys.path_max:0]u8 = undefined;
+    try std.testing.expectEqual(
+        linux.E.SUCCESS,
+        linux.errno(linux.symlinkat((try sys.z(&ztarget, dir_path)).ptr, linux.AT.FDCWD, (try sys.z(&zlink, dir_link)).ptr)),
+    );
+
+    for ([_][]const u8{ dir_path, fifo_path, dir_link }) |p| {
+        var why: []const u8 = "";
+        try std.testing.expectError(error.Refused, loadConfig(a, p, &why));
+        const expected = try a.print("cannot read ledger config {s}: [Errno 22] Invalid argument: '{s}'", .{ p, p });
+        try std.testing.expectEqualStrings(expected, why);
+    }
+    try std.testing.expectEqual(error.SymLink, mapConfigOpenError(error.SymLink));
 }

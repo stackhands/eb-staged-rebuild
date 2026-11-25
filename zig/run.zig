@@ -1194,7 +1194,7 @@ fn normalizeBaseline(r: *R) E!void {
 fn reprOpt(a: Allocator, v: ?[]const u8) []const u8 {
     const x = v orelse return "None";
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, x) catch return x;
+    common.pytext.reprStr(&out, a, x) catch return x;
     return out.items;
 }
 
