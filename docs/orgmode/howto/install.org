@@ -6,6 +6,7 @@
 
 Install eb-staged-rebuild for the account that builds the site's software with EasyBuild: the static binary of a release, a binary built from source, or the Python package.
 All three run the same commands; [[file:../reference/compatibility.org][Compatibility]] lists where their output differs.
+The Python package alone carries the site hook file (=eb_staged_rebuild.site_hooks=) and the checksum list for a copied install (=eb_staged_rebuild.ship=); the binary has neither, and neither is a subcommand.
 
 ** Before you start
 

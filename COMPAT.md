@@ -13,6 +13,10 @@ the journals and the trees they leave, with timestamps and the sandbox command
 normalized, and, for whole runs, the sha256 of module text that names each
 fixture's own path.
 
+## Python-only modules
+
+`eb_staged_rebuild.site_hooks` (an EasyBuild hook file) and `eb_staged_rebuild.ship` (a checksum list, run as `python3 -m eb_staged_rebuild.ship`) exist only in the Python package. They are not subcommands of `eb-staged-rebuild`, and the Zig build has no counterpart for either.
+
 ## Where the Zig build differs on purpose
 
 | case | Python tool | Zig build |

@@ -28,7 +28,7 @@ Release bundles now include bash and zsh completion scripts with a man page prod
 
 ## Install
 
-Linux only. There are two builds of the same command-line tool; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference.
+Linux only. There are two builds of the `eb-staged-rebuild` command; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference. Two modules exist only in the Python package and have no Zig counterpart: `eb_staged_rebuild.site_hooks`, the EasyBuild hook file ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/add-a-site-hook.html)), and `eb_staged_rebuild.ship`, the checksum list for a copied install, run as `python3 -m eb_staged_rebuild.ship` ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/check-a-copied-install.html)). Neither is a subcommand, so the binary cannot run them.
 
 The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v2.0.1):
 
