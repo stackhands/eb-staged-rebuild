@@ -155,9 +155,17 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
             const after = a.print("{s}.exchange.after", .{step_prefix}) catch step_prefix;
             const synced = if (faults.fails(after)) injected(a, why, after) else syncParent(a, live, why);
             synced catch |err| {
-                // Undo the exchange before reporting the failure.
-                if (exchange(a, live, staged) != .SUCCESS)
+                // The exchange landed. Put the names back and flush that
+                // undo before reporting the failure, or a crash keeps the
+                // exchanged names after publish or rollback says it failed.
+                const undone = exchange(a, live, staged);
+                if (undone != .SUCCESS) {
+                    const text = a.print("[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(undone), strerror(undone) }) catch "swap failed";
+                    return fail(a, why, error.NeedsIntervention, "RENAME_EXCHANGE succeeded but its rollback failed for {s}: {s}", .{ live, text });
+                }
+                syncParent(a, live, why) catch {
                     return fail(a, why, error.NeedsIntervention, "RENAME_EXCHANGE succeeded but its rollback failed for {s}: {s}", .{ live, why.msg });
+                };
                 return err;
             };
             return .@"renameat2-exchange";
@@ -268,6 +276,26 @@ fn failingSync(path: []const u8) sys.Error!void {
     return atomic.fsyncDir(path);
 }
 
+var undo_flushes: usize = 0;
+
+fn failFirstFlush(path: []const u8) sys.Error!void {
+    undo_flushes += 1;
+    if (undo_flushes == 1) return error.Unexpected;
+    return atomic.fsyncDir(path);
+}
+
+fn failEveryFlush(_: []const u8) sys.Error!void {
+    return error.Unexpected;
+}
+
+var undo_exchanges: usize = 0;
+
+fn exchangeOnceThenDeny(first: [:0]const u8, second: [:0]const u8) linux.E {
+    undo_exchanges += 1;
+    if (undo_exchanges == 1) return realExchange(first, second);
+    return .PERM;
+}
+
 fn deniedExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
     return .PERM;
 }
@@ -315,6 +343,55 @@ test "an exchange whose sync fails is exchanged back" {
     try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     ops.* = .{};
     try expectOriginal(a, p);
+}
+
+test "an undone exchange is flushed and a failed undo is reported" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    defer ops.* = .{};
+
+    {
+        const p = try testPair(a, "undo-flush");
+        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+        undo_flushes = 0;
+        ops.* = .{};
+        ops.sync_dir = failFirstFlush;
+        var why: Why = .{};
+        try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+        try testing.expectEqual(@as(usize, 2), undo_flushes);
+        ops.* = .{};
+        try expectOriginal(a, p);
+    }
+    {
+        const p = try testPair(a, "undo-flush-fail");
+        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+        ops.* = .{};
+        ops.sync_dir = failEveryFlush;
+        var why: Why = .{};
+        try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+        const parent = std.fs.path.dirname(p.live).?;
+        try testing.expect(std.mem.indexOf(u8, why.msg, "RENAME_EXCHANGE succeeded but its rollback failed for ") != null);
+        try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
+        try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
+        ops.* = .{};
+        try expectOriginal(a, p);
+    }
+    {
+        const p = try testPair(a, "undo-exchange-fail");
+        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+        undo_exchanges = 0;
+        ops.* = .{};
+        ops.exchange = exchangeOnceThenDeny;
+        ops.sync_dir = failEveryFlush;
+        var why: Why = .{};
+        try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+        try testing.expect(std.mem.indexOf(u8, why.msg, "Operation not permitted") != null);
+        try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
+        ops.* = .{};
+        try testing.expectEqualStrings("new\n", try payload(a, p.live));
+        try testing.expectEqualStrings("old\n", try payload(a, p.staged));
+    }
 }
 
 test "an exchange error other than unsupported leaves live unchanged" {
