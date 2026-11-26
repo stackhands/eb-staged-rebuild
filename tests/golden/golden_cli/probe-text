@@ -1,0 +1,12 @@
+exit 0
+--- labels
+bwrap
+  version
+user.max_user_namespaces: 188824
+kernel.unprivileged_userns_clone: 1
+user-namespace sandbox: usable
+RENAME_EXCHANGE
+EasyBuild
+filesystem
+lock
+--- stderr

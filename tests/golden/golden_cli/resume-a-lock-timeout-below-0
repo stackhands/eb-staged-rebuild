@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: no journal at @WORK@/state/runs/r9/journal.json

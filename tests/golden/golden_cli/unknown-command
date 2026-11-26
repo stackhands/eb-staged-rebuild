@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild [-h] [--version]
+                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
+eb-staged-rebuild: error: argument command: invalid choice: 'bogus' (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'list', 'resolve')

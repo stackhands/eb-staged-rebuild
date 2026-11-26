@@ -1,0 +1,32 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
+                            [--grace-hours GRACE_HOURS] [--dry-run]
+                            [--lock-timeout LOCK_TIMEOUT]
+                            [--usage-log USAGE_LOG]
+                            [--eb-keep-logs EB_KEEP_LOGS]
+                            [--metrics-file PATH] [--include-failed] [--json]
+                            [--keep N] [--check-in-use]
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --grace-hours GRACE_HOURS
+  --dry-run
+  --lock-timeout LOCK_TIMEOUT
+  --usage-log USAGE_LOG
+                        usage log checked with eb-keep-logs used --require-
+                        none
+  --eb-keep-logs EB_KEEP_LOGS
+                        eb-keep-logs executable
+  --metrics-file PATH   atomically write Prometheus metrics after garbage
+                        collection
+  --include-failed      also remove the hidden trees and generation of a
+                        failed run that published nothing, after the grace
+                        period
+  --json                write collection actions as JSON
+  --keep N              keep each install path's N newest generations that
+                        rollback can switch back to
+  --check-in-use        keep a tree or generation that a process or a mount on
+                        this node uses
+--- stderr

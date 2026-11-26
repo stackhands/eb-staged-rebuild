@@ -1,0 +1,4 @@
+eb-staged-rebuild: module preflight: @ROOT@/eb --dry-run demo-1.eb --rebuild
+eb-staged-rebuild: run run1 backend installpath generation @ROOT@/state/generations/run1
+eb-staged-rebuild: running @ROOT@/eb --installpath-software=@ROOT@/state/generations/run1/software --installpath-modules=@ROOT@/state/generations/run1/modules demo-1.eb --rebuild
+eb-staged-rebuild: module tree is unreadable: @ROOT@/state/generations/run1/modules

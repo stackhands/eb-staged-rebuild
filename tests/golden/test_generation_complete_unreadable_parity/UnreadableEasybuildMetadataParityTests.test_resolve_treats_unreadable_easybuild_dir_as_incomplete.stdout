@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "kind": "file",
+  "path": "@TMP@/demo-1.lua",
+  "root": "@TMP@/software/demo/1",
+  "root_kind": "dir",
+  "syntax": "lua"
+}

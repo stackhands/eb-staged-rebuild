@@ -1,0 +1,17 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild rollback [-h] --state-root STATE_ROOT
+                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+                                  [--latest]
+                                  run_id
+
+positional arguments:
+  run_id                the run to roll back, unless --latest or --to is given
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --lock-timeout LOCK_TIMEOUT
+  --to GEN              roll back every run published over run GEN
+  --latest              roll back the newest complete run
+--- stderr

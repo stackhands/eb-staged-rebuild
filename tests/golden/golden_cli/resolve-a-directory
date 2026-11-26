@@ -1,0 +1,9 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "dir",
+  "path": "@WORK@/modules",
+  "root": null
+}
+--- stderr

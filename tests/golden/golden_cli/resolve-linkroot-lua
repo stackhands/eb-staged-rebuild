@@ -1,0 +1,11 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "file",
+  "path": "@WORK@/modules/linkroot.lua",
+  "root": "@WORK@/software/linkroot",
+  "root_kind": "symlink",
+  "syntax": "lua"
+}
+--- stderr

@@ -1,0 +1,1 @@
+eb-staged-rebuild: cannot read ledger config @ROOT@/ledger-fifo: [Errno 22] Invalid argument: '@ROOT@/ledger-fifo'

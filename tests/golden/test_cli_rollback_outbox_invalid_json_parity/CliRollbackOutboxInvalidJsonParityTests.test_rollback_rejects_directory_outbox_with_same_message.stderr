@@ -1,0 +1,1 @@
+eb-staged-rebuild: outbox cannot be read: @STATE@/runs/run1/outbox.json: [Errno 21] Is a directory: '@STATE@/runs/run1/outbox.json'

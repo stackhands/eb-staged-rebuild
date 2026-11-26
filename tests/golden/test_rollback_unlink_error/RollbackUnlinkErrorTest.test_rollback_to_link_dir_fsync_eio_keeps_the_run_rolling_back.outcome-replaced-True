@@ -1,0 +1,30 @@
+{
+  "again_rc": 0,
+  "final": [
+    "rolled_back",
+    "rolled_back"
+  ],
+  "final_link": "elsewhere.lua",
+  "final_module": true,
+  "final_run2_links": [
+    [
+      false,
+      "removed"
+    ]
+  ],
+  "link": "elsewhere.lua",
+  "module": true,
+  "payload": "new\n",
+  "rc": 2,
+  "run2_links": [
+    [
+      true,
+      "created"
+    ]
+  ],
+  "states": [
+    "rolling_back",
+    "rolled_back"
+  ],
+  "stderr": "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/tools/demo'\n"
+}

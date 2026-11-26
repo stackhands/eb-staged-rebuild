@@ -1,0 +1,7 @@
+exit 2
+--- stdout
+eb-staged-rebuild: module preflight: @SITE@/eb --dry-run demo-1.eb --rebuild
+--- stderr
+eb-staged-rebuild: the state root and live software tree are on different filesystems; place --state-root beside the software tree
+--- state
+builds=0 runs=no generations=no

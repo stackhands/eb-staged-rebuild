@@ -1,0 +1,12 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "error": "module file has no root assignment",
+  "kind": "file",
+  "path": "@WORK@/modules/noroot.lua",
+  "root": null,
+  "root_kind": null,
+  "syntax": null
+}
+--- stderr

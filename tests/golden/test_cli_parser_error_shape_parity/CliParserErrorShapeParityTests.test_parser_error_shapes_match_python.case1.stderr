@@ -1,0 +1,3 @@
+usage: eb-staged-rebuild [-h] [--version]
+                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
+eb-staged-rebuild: error: unrecognized arguments: --wat --bogus

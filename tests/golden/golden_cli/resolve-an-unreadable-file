@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: [Errno 13] Permission denied: '@WORK@/modules/unreadable.lua'

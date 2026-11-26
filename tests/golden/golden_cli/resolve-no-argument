@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild resolve [-h] module
+eb-staged-rebuild resolve: error: the following arguments are required: module

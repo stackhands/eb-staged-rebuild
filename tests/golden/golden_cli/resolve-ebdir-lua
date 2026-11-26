@@ -1,0 +1,11 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "file",
+  "path": "@WORK@/modules/ebdir.lua",
+  "root": "@WORK@/software/ebdir/1",
+  "root_kind": "dir",
+  "syntax": "lua"
+}
+--- stderr

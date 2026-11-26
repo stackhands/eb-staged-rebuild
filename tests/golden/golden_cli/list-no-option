@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild list [-h] --state-root STATE_ROOT
+eb-staged-rebuild list: error: the following arguments are required: --state-root

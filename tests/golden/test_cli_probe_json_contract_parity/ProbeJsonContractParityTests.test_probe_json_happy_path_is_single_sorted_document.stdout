@@ -1,0 +1,56 @@
+{
+  "bwrap": {
+    "installed": true,
+    "path": "/usr/bin/bwrap",
+    "reason": null,
+    "usable": true,
+    "version": "bubblewrap 0.13.1"
+  },
+  "easybuild": {
+    "bwrap_info_keys": null,
+    "eb": "missing-eb",
+    "found": false,
+    "framework_version": null,
+    "keys_source": null,
+    "legacy_layout_versions": [
+      "5.3.0",
+      "5.3.1"
+    ],
+    "path": null,
+    "reason": "missing-eb was not found on PATH. Install EasyBuild and put eb on PATH, as https://docs.easybuild.io/installation/ describes, or pass --eb with its path",
+    "stage_path_keys": null,
+    "version_text": null
+  },
+  "filesystem": {
+    "device": "/dev/mapper/cryptroot",
+    "fstype": "btrfs",
+    "mount": "/",
+    "path": "@PATH@"
+  },
+  "flock": {
+    "cross_node": "unmeasured",
+    "method": "flock",
+    "scope": "one kernel, the host that runs this process"
+  },
+  "rename_exchange": {
+    "device": "/dev/mapper/cryptroot",
+    "errno": null,
+    "error": null,
+    "flag": 2,
+    "fstype": "btrfs",
+    "mount": "/",
+    "ok": true,
+    "path": "@PATH@"
+  },
+  "user_namespaces": {
+    "max_user_namespaces": 188824,
+    "readable": true,
+    "unprivileged_userns_clone": 1
+  },
+  "userns_sandbox": {
+    "installed": true,
+    "path": "/usr/bin/unshare",
+    "reason": null,
+    "usable": true
+  }
+}

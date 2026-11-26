@@ -1,0 +1,12 @@
+eb-staged-rebuild: dry-run: no build, no module file written
+eb-staged-rebuild: backend: installpath
+eb-staged-rebuild: software: @ROOT@/software
+eb-staged-rebuild: modules: @ROOT@/modules
+eb-staged-rebuild: state root: @STATE@
+eb-staged-rebuild: bwrap usable: True (bubblewrap 0.13.1)
+eb-staged-rebuild: user.max_user_namespaces: 188824
+eb-staged-rebuild: renameat2 RENAME_EXCHANGE on btrfs: yes
+eb-staged-rebuild: easybuild: eb was not found on PATH. Install EasyBuild and put eb on PATH, as https://docs.easybuild.io/installation/ describes, or pass --eb with its path
+eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
+eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback
+eb-staged-rebuild: command: eb --installpath-software=@STATE@/generations/<run-id>/software --installpath-modules=@STATE@/generations/<run-id>/modules Demo-1.0.eb --rebuild

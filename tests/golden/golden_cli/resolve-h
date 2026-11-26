@@ -1,0 +1,10 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild resolve [-h] module
+
+positional arguments:
+  module
+
+options:
+  -h, --help  show this help message and exit
+--- stderr

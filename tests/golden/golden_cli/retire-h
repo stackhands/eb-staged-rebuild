@@ -1,0 +1,23 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild retire [-h] --state-root STATE_ROOT
+                                --module-file MODULE_FILE [--reason REASON]
+                                [--dry-run] [--usage-log USAGE_LOG]
+                                [--eb-keep-logs EB_KEEP_LOGS]
+                                [--lock-timeout LOCK_TIMEOUT]
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --module-file MODULE_FILE
+                        module file to retire
+  --reason REASON
+  --dry-run
+  --usage-log USAGE_LOG
+                        usage log checked with eb-keep-logs used --require-
+                        none
+  --eb-keep-logs EB_KEEP_LOGS
+                        eb-keep-logs executable
+  --lock-timeout LOCK_TIMEOUT
+                        seconds to wait for the lock (default: refuse at once)
+--- stderr

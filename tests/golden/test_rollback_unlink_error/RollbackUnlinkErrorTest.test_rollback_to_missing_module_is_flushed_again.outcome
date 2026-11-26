@@ -1,0 +1,42 @@
+{
+  "again_rc": 0,
+  "final": [
+    "rolled_back",
+    "rolled_back"
+  ],
+  "final_link": false,
+  "final_module": false,
+  "final_run2_links": [
+    [
+      false,
+      "removed"
+    ]
+  ],
+  "link": "@ROOT@/modules/all/demo/1.lua",
+  "module": false,
+  "payload": "new\n",
+  "rc": 2,
+  "retry_rc": 2,
+  "retry_run2_links": [
+    [
+      true,
+      "created"
+    ]
+  ],
+  "retry_states": [
+    "rolling_back",
+    "rolling_back"
+  ],
+  "retry_stderr": "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/all/demo'\n",
+  "run2_links": [
+    [
+      true,
+      "created"
+    ]
+  ],
+  "states": [
+    "rolling_back",
+    "rolling_back"
+  ],
+  "stderr": "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/all/demo'\n"
+}

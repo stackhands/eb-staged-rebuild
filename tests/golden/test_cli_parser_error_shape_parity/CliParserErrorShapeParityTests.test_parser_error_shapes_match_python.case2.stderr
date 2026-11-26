@@ -1,0 +1,6 @@
+usage: eb-staged-rebuild retire [-h] --state-root STATE_ROOT
+                                --module-file MODULE_FILE [--reason REASON]
+                                [--dry-run] [--usage-log USAGE_LOG]
+                                [--eb-keep-logs EB_KEEP_LOGS]
+                                [--lock-timeout LOCK_TIMEOUT]
+eb-staged-rebuild retire: error: the following arguments are required: --state-root, --module-file
