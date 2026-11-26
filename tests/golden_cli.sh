@@ -360,12 +360,22 @@ fixture "${site}"
 
 compare_cross_filesystem() {
     local label="run refuses a state root on another filesystem before the build"
-    if [ ! -d /dev/shm ] || [ "$(stat -c %d /dev/shm)" = "$(stat -c %d "${work}")" ]; then
-        echo "same ${label} (second filesystem not available)"
+    # The first writable directory on another device than the work directory.
+    local base='' candidate
+    for candidate in /dev/shm /var/tmp /tmp "${HOME:-}"; do
+        if [ -n "${candidate}" ] && [ -d "${candidate}" ] && [ -w "${candidate}" ] \
+            && [ "$(stat -c %d "${candidate}")" != "$(stat -c %d "${work}")" ]; then
+            base=${candidate}
+            break
+        fi
+    done
+    if [ -z "${base}" ]; then
+        echo "DIFF ${label}: no second filesystem among /dev/shm, /var/tmp, /tmp and HOME"
+        diffs=$((diffs + 1))
         return
     fi
     local other root=${site} state out=${work}/cross-filesystem builds runs generations
-    other=$(mktemp -d /dev/shm/esr-golden.XXXXXX)
+    other=$(mktemp -d "${base}/esr-golden.XXXXXX")
     state="${other}/state"
     env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
         "${TOOL_BIN}" run \
