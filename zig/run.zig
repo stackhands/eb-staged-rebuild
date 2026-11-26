@@ -1527,7 +1527,7 @@ fn lockRoot(r: *R) E!state.RootLock {
     };
 }
 
-const StatFs = extern struct {
+pub const StatFs = extern struct {
     fs_type: isize,
     block_size: isize,
     blocks: isize,

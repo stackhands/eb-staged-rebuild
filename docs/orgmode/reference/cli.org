@@ -359,4 +359,4 @@ When =kind= is not =file=, only =path=, =kind=, =complete= and =root= are printe
 - [[file:../howto/rebuild.org][Rebuild an installed module]]
 - [[file:../explanation/staging.org][Why a rebuild is staged and swapped in]]
 - [[file:configuration.org][Configuration files]], for =--ledger-config=
-- [[py:eb_staged_rebuild.cli.main]] and the rest of the [[file:api.org][API]]
+- [[py:eb_staged_rebuild.main]] and the rest of the [[file:api.org][API]]

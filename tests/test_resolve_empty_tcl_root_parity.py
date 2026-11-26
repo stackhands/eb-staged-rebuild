@@ -1,4 +1,4 @@
-"""Parity check for resolve output with an empty quoted Tcl root."""
+"""Resolve output with an empty quoted Tcl root."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class ResolveEmptyTclRootParityTests(unittest.TestCase):
@@ -17,24 +17,15 @@ class ResolveEmptyTclRootParityTests(unittest.TestCase):
             with open(module, "w", encoding="utf-8") as handle:
                 handle.write('set root ""\n')
 
-            py = run_cli("resolve", module)
-            self.assertEqual(py.returncode, 1, py.stdout + py.stderr)
-            self.assertEqual(py.stderr, "")
-            py_doc = json.loads(py.stdout)
-            py_doc.pop("path", None)
-            self.assertNotIn("error", py_doc)
-            self.assertEqual(py_doc["syntax"], "tcl")
-            self.assertEqual(py_doc["root"], "")
-
-            zig = run_cli_optional_binary("resolve", module)
-            if zig is None:
-                return
+            zig = run_cli("resolve", module)
             self.assertEqual(zig.returncode, 1, zig.stdout + zig.stderr)
             self.assertEqual(zig.stderr, "")
-            zig_doc = json.loads(zig.stdout)
-            zig_doc.pop("path", None)
-            self.assertNotIn("error", zig_doc)
-            self.assertEqual(py_doc, zig_doc)
+            doc = json.loads(zig.stdout)
+            doc.pop("path", None)
+            self.assertNotIn("error", doc)
+            self.assertEqual(doc["syntax"], "tcl")
+            self.assertEqual(doc["root"], "")
+            golden(self, "stdout", scrub(zig.stdout, ROOT=root))
 
 
 if __name__ == "__main__":

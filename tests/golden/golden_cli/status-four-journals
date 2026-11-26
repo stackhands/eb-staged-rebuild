@@ -1,0 +1,13 @@
+exit 0
+--- stdout
+r0  planned  backend=userns  modules=0/1
+  ['a', 1, None, 1.5, True]
+  built      z/9  live=/x retired=/y é
+r1  done  backend=bwrap  modules=1/2
+  all published
+  published  demo/1  live=/sw/demo/1 retired=/sw/demo/.1.old
+  pending    other/2  live=/sw/other/2 retired=None
+r2  retired  retire  /m/x/1.lua
+  software directory /sw/x/1
+r3  7  backend=None  modules=0/0
+--- stderr

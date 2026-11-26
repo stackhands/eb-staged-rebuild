@@ -1,0 +1,9 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "missing",
+  "path": "@WORK@/modules/nope.lua",
+  "root": null
+}
+--- stderr

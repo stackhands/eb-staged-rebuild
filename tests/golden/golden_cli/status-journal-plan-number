@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: journal modules_plan entry is not an object

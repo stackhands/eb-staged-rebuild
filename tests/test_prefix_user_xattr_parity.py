@@ -1,56 +1,29 @@
 """A user attribute the filesystem will not copy stops the prefix rewrite.
 
-Python patches ``setxattr`` so it returns ``ENOTSUP``. The release binary
-has no fault hook, so ``tests/xattr_enotsup.c`` is a one-file seccomp shim
-in front of ``setxattr``. Neither half mounts a filesystem.
+The release binary has no fault hook, so ``tests/xattr_enotsup.c`` is a
+one-file seccomp shim in front of ``setxattr`` that returns ``ENOTSUP``.
+The test mounts no filesystem.
 """
 
 from __future__ import annotations
 
-import errno
 import os
 import subprocess
 import tempfile
 import textwrap
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from eb_staged_rebuild.prefix import rewrite_tree
 from tests.support import _skip
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SHIM_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xattr_enotsup.c")
-_OLD = b"/state/generations/run1"
-_NEW = b"/stable"
 
 
 class PrefixUserXattrParityTests(unittest.TestCase):
     def test_refused_user_xattr_keeps_the_original_file(self) -> None:
-        self._python()
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
         self._binary(tool)
-
-    def _python(self) -> None:
-        root = tempfile.mkdtemp(prefix="xattr-py-")
-        self.addCleanup(self._rmtree, root)
-        path = os.path.join(root, "kept.txt")
-        original = b"prefix=" + _OLD + b"/software/demo\n"
-        with open(path, "wb") as handle:
-            handle.write(original)
-        os.setxattr(path, "user.ebsr", b"kept")
-
-        def refuse(_fd, _name, _value, _flags=0):
-            raise OSError(errno.ENOTSUP, "Operation not supported")
-
-        with patch("eb_staged_rebuild.prefix.os.setxattr", side_effect=refuse):
-            with self.assertRaises(OSError) as caught:
-                rewrite_tree(root, _OLD, _NEW)
-        self.assertEqual(caught.exception.errno, errno.ENOTSUP)
-        self.assertEqual(Path(path).read_bytes(), original)
-        self.assertEqual(os.getxattr(path, "user.ebsr"), b"kept")
 
     def _binary(self, tool: str) -> None:
         with tempfile.TemporaryDirectory(prefix="xattr-bin-") as root:

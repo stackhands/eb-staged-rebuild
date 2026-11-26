@@ -1,0 +1,8 @@
+{
+  "complete": false,
+  "kind": "file",
+  "path": "@ROOT@/empty.tcl",
+  "root": "",
+  "root_kind": null,
+  "syntax": "tcl"
+}

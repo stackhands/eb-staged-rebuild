@@ -3,25 +3,21 @@
 The staged install moves from its generation directory to the retired
 name under the live software tree. The source parent has to be flushed
 for the removal of the old name to be durable, and the destination
-parent for the new name. The destination was flushed. The source was
-not, so a flush error on the source parent used to be ignored and the
-run published.
+parent for the new name. A flush error on the source parent fails the run.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
-import sys
 import textwrap
 import unittest
 from types import SimpleNamespace
 
-from eb_staged_rebuild.atomicio import read_bytes
-from tests.support import _compile_fuse_faultfs, _fuse_ready, _run, _skip, run_cli, run_cli_optional_binary
+from tests.support import _compile_fuse_faultfs, _fuse_ready, _run, _skip, golden, run_cli, scrub
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _NOW = "1700000000.25"
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 
@@ -47,17 +43,14 @@ class StageSourceDirFsyncTests(unittest.TestCase):
         if not os.environ.get("TOOL_BIN"):
             _skip(self, "TOOL_BIN is unset")
         work = f"/tmp/stage-source-fsync-{os.getpid()}"
-        python = self._run("python", work)
-        binary = self._run("binary", work)
+        done = self._run(work)
         source = os.path.join(work, "mnt", "generations", "r1", "software", "demo")
-        for done in (python, binary):
-            detail = done.stdout + done.stderr
-            self.assertEqual(done.returncode, 2, detail)
-            self.assertIn(f"Input/output error: '{source}'", done.stderr)
-            self.assertEqual(done.payload, "old\n", detail)
-        self.assertEqual(python.returncode, binary.returncode)
-        self.assertEqual(python.stdout, binary.stdout)
-        self.assertEqual(python.stderr, binary.stderr)
+        detail = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 2, detail)
+        self.assertIn(f"Input/output error: '{source}'", done.stderr)
+        self.assertEqual(done.payload, "old\n", detail)
+        golden(self, "stdout", scrub(done.stdout, WORK=work))
+        golden(self, "stderr", scrub(done.stderr, WORK=work))
 
     def test_journals_are_the_same_bytes_under_the_test_clock(self) -> None:
         if os.geteuid() == 0:
@@ -68,18 +61,19 @@ class StageSourceDirFsyncTests(unittest.TestCase):
         if not os.environ.get("TOOL_BIN_TEST_OPS"):
             _skip(self, "TOOL_BIN_TEST_OPS is unset")
         work = f"/tmp/stage-source-fsync-bytes-{os.getpid()}"
-        python = self._run("python", work, clock=True)
-        binary = self._run("binary", work, clock=True)
-        self.assertEqual(python.returncode, 2, python.stdout + python.stderr)
-        self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-        self.assertEqual(python.stdout, binary.stdout)
-        self.assertEqual(python.stderr, binary.stderr)
-        self.assertIsInstance(python.journal, bytes)
-        self.assertEqual(python.journal, binary.journal)
-        self.assertIn(b'"created_at": 1700000000.25', python.journal)
-        self.assertIn(b'"updated_at": 1700000000.25', python.journal)
+        done = self._run(work, clock=True)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        golden(self, "stdout", scrub(done.stdout, WORK=work))
+        golden(self, "stderr", scrub(done.stderr, WORK=work))
+        self.assertIsInstance(done.journal, bytes)
+        journal = scrub(done.journal.decode("utf-8", "surrogateescape"), WORK=work)
+        # The module file's hash covers the work directory's name, which holds the pid.
+        journal = re.sub(r'"((?:new|old)_hash)": "[0-9a-f]{64}"', r'"\1": "HASH"', journal)
+        golden(self, "journal", journal)
+        self.assertIn(b'"created_at": 1700000000.25', done.journal)
+        self.assertIn(b'"updated_at": 1700000000.25', done.journal)
 
-    def _run(self, which: str, work: str, clock: bool = False) -> SimpleNamespace:
+    def _run(self, work: str, clock: bool = False) -> SimpleNamespace:
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -95,6 +89,8 @@ class StageSourceDirFsyncTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     #!/bin/sh
+                    # The probe's eb --version: no version, the same status on any sh.
+                    [ "$1" = --version ] && exit 1
                     for arg in "$@"; do
                       case "$arg" in
                         --installpath-software=*) sw="${arg#*=}" ;;
@@ -149,26 +145,16 @@ class StageSourceDirFsyncTests(unittest.TestCase):
                 "demo-1.eb",
             )
             if clock:
-                cli_env = {"EB_STAGED_REBUILD_NOW": _NOW}
-                if which == "python":
-                    done = _run([sys.executable, os.path.join(_REPO, "tests", "now_cli.py"), *args], cli_env)
-                else:
-                    tool = os.environ.get("TOOL_BIN_TEST_OPS")
-                    if not tool:
-                        self.fail("TOOL_BIN_TEST_OPS is unset")
-                    done = _run([tool, *args], cli_env)
-            elif which == "python":
-                done = run_cli(*args)
+                tool = os.environ.get("TOOL_BIN_TEST_OPS")
+                if not tool:
+                    self.fail("TOOL_BIN_TEST_OPS is unset")
+                done = _run([tool, *args], {"EB_STAGED_REBUILD_NOW": _NOW})
             else:
-                done = run_cli_optional_binary(*args)
-                if done is None:
-                    self.fail("TOOL_BIN is unset")
+                done = run_cli(*args)
             journal_path = os.path.join(mnt, "runs", "r1", "journal.json")
             if os.path.isfile(journal_path):
-                journal = read_bytes(journal_path)
                 with open(journal_path, "rb") as handle:
-                    if handle.read() != journal:
-                        self.fail("read_bytes and an rb read disagree")
+                    journal = handle.read()
         finally:
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
             if mounted.stderr is not None and not mounted.stderr.closed:

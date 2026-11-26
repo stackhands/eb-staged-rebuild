@@ -1,10 +1,9 @@
-"""test_acl_publication against the Zig test artifact.
+"""Publication and rollback of native ACL bytes against the Zig test artifact.
 
-The Python tests patch the descriptor xattr calls in process. The binary
-cannot be patched, so these run the test artifact built with -Dtest-ops
-(never a release), which emulates the same ACL models (zig/aclmodel.zig)
-and keeps their attributes in a store file. The assertions are the Python
-tests' assertions. Skipped unless TOOL_BIN_TEST_OPS names that artifact.
+The descriptor xattr calls cannot be patched in the binary, so these run the
+test artifact built with -Dtest-ops (never a release), which emulates the
+ACL models (zig/aclmodel.zig) and keeps their attributes in a store file.
+Skipped unless TOOL_BIN_TEST_OPS names that artifact.
 """
 
 import os

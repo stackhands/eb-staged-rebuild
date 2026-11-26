@@ -1,0 +1,8 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild list [-h] --state-root STATE_ROOT
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+--- stderr

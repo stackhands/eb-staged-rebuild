@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 
-from tests.support import implementations, run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
@@ -112,45 +112,32 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
             os.unlink(outbox)
             os.mkdir(outbox)
 
-            args = ("rollback", "--state-root", state_root, run_id)
-            proc = run_cli(*args)
-            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-            self.assertEqual(proc.stdout, "")
-            self.assertIn("Is a directory", proc.stderr)
-
-            binary = run_cli_optional_binary(*args)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-                self.assertEqual(binary.stdout, "")
-                self.assertEqual(binary.stderr, proc.stderr)
+            binary = run_cli("rollback", "--state-root", state_root, run_id)
+            self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stdout, "")
+            self.assertIn("Is a directory", binary.stderr)
+            golden(self, "stderr", scrub(binary.stderr, STATE=state_root, ROOT=root))
 
     def test_rollback_rejects_invalid_outbox_json_with_same_message(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             for outbox_bytes in (b"", b"{not json\n"):
                 state_root, run_id = self._write_fixture(root, outbox_bytes)
 
-                proc = run_cli("rollback", "--state-root", state_root, run_id)
-                self.assertEqual(proc.returncode, 2)
-                self.assertIn("outbox cannot be read:", proc.stderr)
-                self.assertIn("not valid JSON", proc.stderr)
-
-                binary = run_cli_optional_binary("rollback", "--state-root", state_root, run_id)
-                if binary is not None:
-                    self.assertEqual(binary.returncode, 2)
-                    self.assertIn("outbox cannot be read:", binary.stderr)
-                    self.assertIn("not valid JSON", binary.stderr)
+                binary = run_cli("rollback", "--state-root", state_root, run_id)
+                self.assertEqual(binary.returncode, 2)
+                self.assertIn("outbox cannot be read:", binary.stderr)
+                self.assertIn("not valid JSON", binary.stderr)
 
     def test_rollback_reads_the_outbox_under_the_state_root_it_was_given(self) -> None:
         """A journal state root of STATE/. is STATE, and the outbox is read under the spelling the caller gave."""
-        for implementation in implementations():
-            with self.subTest(tool=implementation.name), tempfile.TemporaryDirectory() as root:
-                state_root, run_id = self._write_fixture(root, b"{not json\n", recorded="{}/.")
-                outbox = os.path.join(state_root, "runs", run_id, "outbox.json")
-                proc = implementation.run("rollback", "--state-root", state_root, run_id)
-                self.assertEqual(
-                    (proc.returncode, proc.stdout, proc.stderr),
-                    (2, "", f"eb-staged-rebuild: outbox cannot be read: {outbox}: not valid JSON\n"),
-                )
+        with tempfile.TemporaryDirectory() as root:
+            state_root, run_id = self._write_fixture(root, b"{not json\n", recorded="{}/.")
+            outbox = os.path.join(state_root, "runs", run_id, "outbox.json")
+            proc = run_cli("rollback", "--state-root", state_root, run_id)
+            self.assertEqual(
+                (proc.returncode, proc.stdout, proc.stderr),
+                (2, "", f"eb-staged-rebuild: outbox cannot be read: {outbox}: not valid JSON\n"),
+            )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild status [-h] --state-root STATE_ROOT [--json] [run_id]
+
+positional arguments:
+  run_id
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --json                print one JSON document
+--- stderr

@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB]
+                               [--require-eb] [--json]
+eb-staged-rebuild probe: error: argument --path: expected one argument

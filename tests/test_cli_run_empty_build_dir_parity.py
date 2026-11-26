@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 class CliRunEmptyOptionParityTests(unittest.TestCase):
@@ -19,15 +19,9 @@ class CliRunEmptyOptionParityTests(unittest.TestCase):
             modules = f"{root}/modules"
             for flag, message in rows:
                 with self.subTest(flag=flag):
-                    argv = ("run", "--software", software, "--modules", modules, flag, "", "--", "demo.eb")
-                    proc = run_cli(*argv)
-                    self.assertEqual(proc.returncode, 2)
-                    self.assertIn(message, proc.stderr)
-
-                    binary = run_cli_optional_binary(*argv)
-                    if binary is not None:
-                        self.assertEqual(binary.returncode, 2)
-                        self.assertIn(message, binary.stderr)
+                    binary = run_cli("run", "--software", software, "--modules", modules, flag, "", "--", "demo.eb")
+                    self.assertEqual(binary.returncode, 2)
+                    self.assertIn(message, binary.stderr)
 
 
 if __name__ == "__main__":

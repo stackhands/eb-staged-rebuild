@@ -1,12 +1,11 @@
-"""verify, resume and rollback check each run journal once, where they load it, for both implementations.
+"""verify, resume and rollback check each run journal once, where they load it.
 
 Each test changes a journal in one way the commands must not act on. Then
 ``verify``, ``resume --verify`` and ``resume`` run on a built run, or
 ``rollback RUN_ID``, ``rollback --latest`` and ``rollback --to GEN`` on
 published ones; ``--latest`` and ``--to`` check every journal under
-``runs/`` before they choose. Both front ends refuse with exit 2 and the
-same message, before anything under the site is written. Runs the Python
-tool and the program TOOL_BIN names.
+``runs/`` before they choose. Each refuses with exit 2 and a message,
+before anything under the site is written. Runs the program TOOL_BIN names.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 -m unittest -v tests.test_run_journal_cli
 """
@@ -16,7 +15,8 @@ import os
 import shutil
 import unittest
 
-from tests.support import FAKE_LMOD, Site, sites, write
+from tests.support import FAKE_LMOD, write
+from tests.support import site as make_site
 
 LOCK_FILES = (".lock", ".lock.posix")
 
@@ -47,16 +47,15 @@ class RunJournalCliTests(unittest.TestCase):
         os.umask(self.previous_umask)
 
     def built(self):
-        """One site per front end whose run r1 is built and not yet verified."""
-        made = sites(self, Site, "run-journal-cli-")
-        for site in made:
-            prepare = os.path.join(site.root, "prepare")
-            write(prepare, "#!/bin/sh\nexit 42\n", 0o755)
-            stopped = site.run("--prepare", prepare, verify=False)
-            self.assertEqual(stopped.returncode, 42, stopped.stdout + stopped.stderr)
-            self.assertEqual(site.journal()["state"], "built")
-            write(prepare, "#!/bin/sh\nexit 0\n", 0o755)
-        return made
+        """A site whose run r1 is built and not yet verified."""
+        site = make_site(self, "run-journal-cli-")
+        prepare = os.path.join(site.root, "prepare")
+        write(prepare, "#!/bin/sh\nexit 42\n", 0o755)
+        stopped = site.run("--prepare", prepare, verify=False)
+        self.assertEqual(stopped.returncode, 42, stopped.stdout + stopped.stderr)
+        self.assertEqual(site.journal()["state"], "built")
+        write(prepare, "#!/bin/sh\nexit 0\n", 0o755)
+        return site
 
     def assert_refused(
         self, site, message, run_id="r1", commands=(["verify"], ["resume", "--verify"], ["resume"]), state_root=None, **env
@@ -77,94 +76,86 @@ class RunJournalCliTests(unittest.TestCase):
         write(site.journal_path(), json.dumps(journal, indent=2, sort_keys=True) + "\n")
 
     def test_a_run_id_that_is_not_a_plain_name(self):
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                for run_id in ("../state/runs/r1", ".", ".."):
-                    self.assert_refused(site, f"run id is not a plain name: '{run_id}'", run_id)
+        site = self.built()
+        for run_id in ("../state/runs/r1", ".", ".."):
+            self.assert_refused(site, f"run id is not a plain name: '{run_id}'", run_id)
 
     def test_a_journal_that_names_another_run(self):
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                shutil.copytree(os.path.join(site.state, "runs", "r1"), os.path.join(site.state, "runs", "r2"))
-                self.assert_refused(site, "journal run id does not match its directory", "r2")
-                self.edit(site, lambda journal: journal.pop("run_id"))
-                self.assert_refused(site, "journal run id does not match its directory")
-                self.edit(site, lambda journal: journal.update(run_id="../r1"))
-                self.assert_refused(site, "journal run id does not match its directory")
+        site = self.built()
+        shutil.copytree(os.path.join(site.state, "runs", "r1"), os.path.join(site.state, "runs", "r2"))
+        self.assert_refused(site, "journal run id does not match its directory", "r2")
+        self.edit(site, lambda journal: journal.pop("run_id"))
+        self.assert_refused(site, "journal run id does not match its directory")
+        self.edit(site, lambda journal: journal.update(run_id="../r1"))
+        self.assert_refused(site, "journal run id does not match its directory")
 
     def test_a_journal_that_describes_another_state_root(self):
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                elsewhere = os.path.join(site.root, "elsewhere")
-                shutil.copytree(site.state, elsewhere)
-                for recorded in (elsewhere, os.path.join(site.state, "runs"), "elsewhere"):
-                    with self.subTest(recorded=recorded):
-                        self.edit(site, lambda journal: journal.update(state_root=recorded))
-                        self.assert_refused(site, f"journal state root {recorded} is not {site.state}")
+        site = self.built()
+        elsewhere = os.path.join(site.root, "elsewhere")
+        shutil.copytree(site.state, elsewhere)
+        for recorded in (elsewhere, os.path.join(site.state, "runs"), "elsewhere"):
+            with self.subTest(recorded=recorded):
+                self.edit(site, lambda journal: journal.update(state_root=recorded))
+                self.assert_refused(site, f"journal state root {recorded} is not {site.state}")
 
     def test_a_journal_state_root_that_begins_with_two_slashes(self):
         """POSIX leaves a leading ``//`` to the system, so it is another state root, either way round."""
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                doubled = "/" + site.state
-                self.edit(site, lambda journal: journal.update(state_root=doubled))
-                self.assert_refused(site, f"journal state root {doubled} is not {site.state}")
-                self.edit(site, lambda journal: journal.update(state_root=site.state))
-                self.assert_refused(site, f"journal state root {site.state} is not {doubled}", state_root=doubled)
+        site = self.built()
+        doubled = "/" + site.state
+        self.edit(site, lambda journal: journal.update(state_root=doubled))
+        self.assert_refused(site, f"journal state root {doubled} is not {site.state}")
+        self.edit(site, lambda journal: journal.update(state_root=site.state))
+        self.assert_refused(site, f"journal state root {site.state} is not {doubled}", state_root=doubled)
 
     def test_a_state_root_that_begins_with_two_slashes(self):
         """The lock path keeps a leading ``//``, so a symbolic link is named as it was given."""
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                link = os.path.join(site.root, "link")
-                os.symlink(site.state, link)
-                self.assert_refused(
-                    site, f"state root is unsafe: /{link} is a symlink", commands=(["verify"],), state_root="/" + link
-                )
+        site = self.built()
+        link = os.path.join(site.root, "link")
+        os.symlink(site.state, link)
+        self.assert_refused(
+            site, f"state root is unsafe: /{link} is a symlink", commands=(["verify"],), state_root="/" + link
+        )
 
     def test_a_journal_without_a_field_the_commands_read(self):
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                original = site.journal()
-                for field in ("state_root", "software", "modules", "generation_root", "state", "backend"):
-                    for value in (None, "", 7):
-                        with self.subTest(field=field, value=value):
-                            self.edit(site, lambda journal: journal.update({field: value}))
-                            self.assert_refused(site, f"journal does not record {field}")
-                    self.edit(site, lambda journal: journal.pop(field))
+        site = self.built()
+        original = site.journal()
+        for field in ("state_root", "software", "modules", "generation_root", "state", "backend"):
+            for value in (None, "", 7):
+                with self.subTest(field=field, value=value):
+                    self.edit(site, lambda journal: journal.update({field: value}))
                     self.assert_refused(site, f"journal does not record {field}")
-                    self.edit(site, lambda journal: journal.update(original))
-                self.edit(site, lambda journal: journal.pop("modules_plan"))
-                self.assert_refused(site, "journal does not record modules_plan")
-                self.edit(site, lambda journal: journal.update(modules_plan={}))
-                self.assert_refused(site, "journal does not record modules_plan")
+            self.edit(site, lambda journal: journal.pop(field))
+            self.assert_refused(site, f"journal does not record {field}")
+            self.edit(site, lambda journal: journal.update(original))
+        self.edit(site, lambda journal: journal.pop("modules_plan"))
+        self.assert_refused(site, "journal does not record modules_plan")
+        self.edit(site, lambda journal: journal.update(modules_plan={}))
+        self.assert_refused(site, "journal does not record modules_plan")
 
     def test_a_module_plan_entry_without_a_field_the_commands_read(self):
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                original = site.journal()
-                for field in ("rel", "live_module", "prepared", "staged", "live_software", "retired"):
-                    for value in (None, "", ["x"]):
-                        with self.subTest(field=field, value=value):
-                            self.edit(site, lambda journal: journal["modules_plan"][0].update({field: value}))
-                            self.assert_refused(site, f"journal module plan does not record {field}")
-                    self.edit(site, lambda journal: journal.update(original))
-                for field in ("rel", "live_module", "prepared", "staged"):
-                    with self.subTest(field=field, value="absent"):
-                        self.edit(site, lambda journal: journal["modules_plan"][0].pop(field))
-                        self.assert_refused(site, f"journal module plan does not record {field}")
-                        self.edit(site, lambda journal: journal.update(original))
+        site = self.built()
+        original = site.journal()
+        for field in ("rel", "live_module", "prepared", "staged", "live_software", "retired"):
+            for value in (None, "", ["x"]):
+                with self.subTest(field=field, value=value):
+                    self.edit(site, lambda journal: journal["modules_plan"][0].update({field: value}))
+                    self.assert_refused(site, f"journal module plan does not record {field}")
+            self.edit(site, lambda journal: journal.update(original))
+        for field in ("rel", "live_module", "prepared", "staged"):
+            with self.subTest(field=field, value="absent"):
+                self.edit(site, lambda journal: journal["modules_plan"][0].pop(field))
+                self.assert_refused(site, f"journal module plan does not record {field}")
+                self.edit(site, lambda journal: journal.update(original))
 
 
     def test_with_lmod_a_journal_without_its_staged_module_tree(self):
         verifying = (["verify"], ["resume", "--verify"])
-        for site in self.built():
-            with self.subTest(tool=site.name):
-                original = site.journal()
-                for change in (lambda journal: journal.pop("stage_modules"), lambda journal: journal.update(stage_modules="")):
-                    self.edit(site, change)
-                    self.assert_refused(site, "journal does not record stage_modules", commands=verifying, LMOD_CMD=FAKE_LMOD)
-                    self.edit(site, lambda journal: journal.update(original))
+        site = self.built()
+        original = site.journal()
+        for change in (lambda journal: journal.pop("stage_modules"), lambda journal: journal.update(stage_modules="")):
+            self.edit(site, change)
+            self.assert_refused(site, "journal does not record stage_modules", commands=verifying, LMOD_CMD=FAKE_LMOD)
+            self.edit(site, lambda journal: journal.update(original))
 
 
 
@@ -176,13 +167,12 @@ class RollbackJournalCliTests(unittest.TestCase):
         os.umask(self.previous_umask)
 
     def published(self):
-        """One site per front end where runs r1, r2 and r3 published demo/1 in turn."""
-        made = sites(self, Site, "rollback-journal-cli-")
-        for site in made:
-            for run_id in ("r1", "r2", "r3"):
-                done = site.run(run_id=run_id, verify=False, FAKE_EB_PAYLOAD=f"{run_id}\n")
-                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        return made
+        """A site where runs r1, r2 and r3 published demo/1 in turn."""
+        site = make_site(self, "rollback-journal-cli-")
+        for run_id in ("r1", "r2", "r3"):
+            done = site.run(run_id=run_id, verify=False, FAKE_EB_PAYLOAD=f"{run_id}\n")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return site
 
     def edit(self, site, run_id, change):
         journal = site.journal(run_id)
@@ -201,55 +191,50 @@ class RollbackJournalCliTests(unittest.TestCase):
                 self.assertEqual(snapshot(site.root), before)
 
     def test_to_a_generation_that_is_not_a_plain_name(self):
-        for site in self.published():
-            with self.subTest(tool=site.name):
-                for gen in ("../state/runs/r1", ".", ".."):
-                    self.assert_refused(site, f"run id is not a plain name: '{gen}'", ["--to", gen])
+        site = self.published()
+        for gen in ("../state/runs/r1", ".", ".."):
+            self.assert_refused(site, f"run id is not a plain name: '{gen}'", ["--to", gen])
 
     def test_any_journal_that_names_another_run(self):
-        for site in self.published():
-            with self.subTest(tool=site.name):
-                copy = os.path.join(site.state, "runs", "r9")
-                shutil.copytree(os.path.join(site.state, "runs", "r3"), copy)
-                self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
-                for change in (lambda journal: journal.pop("run_id"), lambda journal: journal.update(run_id="../r3")):
-                    self.edit(site, "r9", change)
-                    self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
-                shutil.rmtree(copy)
-                self.edit(site, "r3", lambda journal: journal.update(run_id="r9"))
-                self.assert_refused(site, "journal run id does not match its directory")
+        site = self.published()
+        copy = os.path.join(site.state, "runs", "r9")
+        shutil.copytree(os.path.join(site.state, "runs", "r3"), copy)
+        self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
+        for change in (lambda journal: journal.pop("run_id"), lambda journal: journal.update(run_id="../r3")):
+            self.edit(site, "r9", change)
+            self.assert_refused(site, "journal run id does not match its directory", ["--latest"], ["--to", "r1"])
+        shutil.rmtree(copy)
+        self.edit(site, "r3", lambda journal: journal.update(run_id="r9"))
+        self.assert_refused(site, "journal run id does not match its directory")
 
     def test_to_looks_the_generation_up_by_its_directory(self):
-        for site in self.published():
-            with self.subTest(tool=site.name):
-                self.edit(site, "r1", lambda journal: journal.update(run_id="g1"))
-                self.assert_refused(site, "journal run id does not match its directory", ["--to", "g1"], ["--to", "r1"])
+        site = self.published()
+        self.edit(site, "r1", lambda journal: journal.update(run_id="g1"))
+        self.assert_refused(site, "journal run id does not match its directory", ["--to", "g1"], ["--to", "r1"])
 
     def test_any_journal_that_describes_another_state_root(self):
-        for site in self.published():
-            with self.subTest(tool=site.name):
-                elsewhere = os.path.join(site.root, "elsewhere")
-                for run_id in ("r1", "r3"):
-                    with self.subTest(journal=run_id):
-                        self.edit(site, run_id, lambda journal: journal.update(state_root=elsewhere))
-                        forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
-                        self.assert_refused(site, f"journal state root {elsewhere} is not {site.state}", *forms)
-                        self.edit(site, run_id, lambda journal: journal.update(state_root=site.state))
+        site = self.published()
+        elsewhere = os.path.join(site.root, "elsewhere")
+        for run_id in ("r1", "r3"):
+            with self.subTest(journal=run_id):
+                self.edit(site, run_id, lambda journal: journal.update(state_root=elsewhere))
+                forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
+                self.assert_refused(site, f"journal state root {elsewhere} is not {site.state}", *forms)
+                self.edit(site, run_id, lambda journal: journal.update(state_root=site.state))
 
     def test_any_journal_without_a_field_the_commands_read(self):
-        for site in self.published():
-            with self.subTest(tool=site.name):
-                for run_id in ("r1", "r3"):
-                    forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
-                    original = site.journal(run_id)
-                    with self.subTest(journal=run_id, field="backend"):
-                        self.edit(site, run_id, lambda journal: journal.pop("backend"))
-                        self.assert_refused(site, "journal does not record backend", *forms)
-                        self.edit(site, run_id, lambda journal: journal.update(original))
-                    with self.subTest(journal=run_id, field="live_software"):
-                        self.edit(site, run_id, lambda journal: journal["modules_plan"][0].update(live_software=""))
-                        self.assert_refused(site, "journal module plan does not record live_software", *forms)
-                        self.edit(site, run_id, lambda journal: journal.update(original))
+        site = self.published()
+        for run_id in ("r1", "r3"):
+            forms = (["--latest"], ["--to", "r1"]) + ((["r3"],) if run_id == "r3" else ())
+            original = site.journal(run_id)
+            with self.subTest(journal=run_id, field="backend"):
+                self.edit(site, run_id, lambda journal: journal.pop("backend"))
+                self.assert_refused(site, "journal does not record backend", *forms)
+                self.edit(site, run_id, lambda journal: journal.update(original))
+            with self.subTest(journal=run_id, field="live_software"):
+                self.edit(site, run_id, lambda journal: journal["modules_plan"][0].update(live_software=""))
+                self.assert_refused(site, "journal module plan does not record live_software", *forms)
+                self.edit(site, run_id, lambda journal: journal.update(original))
 
 
 if __name__ == "__main__":

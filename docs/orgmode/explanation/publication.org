@@ -44,7 +44,7 @@ Any other error from the exchange leaves both names as they were.
 The journal records which of the two each module got, as =swap_method=.
 With =--require-exchange=, an unavailable exchange is refused before the journal and build.
 The journal records that policy, and publication, recovery and rollback refuse an unsupported exchange instead of entering the ordinary-rename sequence.
-[[py:eb_staged_rebuild.swap.swap_directories]] and [[zig:eb-staged-rebuild.engine.run_mod.swap.swapDirectories]] do the exchange.
+[[zig:swap.swapDirectories]] does the exchange.
 
 *** The module file
 

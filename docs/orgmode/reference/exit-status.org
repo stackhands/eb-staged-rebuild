@@ -33,4 +33,4 @@ Pre-build refusals that exit 2 before touching the live tree include:
 
 - [[file:cli.org][The eb-staged-rebuild command]]
 - [[file:../howto/recover.org][Finish a run that failed or stopped]] and [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]], with the messages of each case
-- [[py:eb_staged_rebuild.cli.main]]
+- [[py:eb_staged_rebuild.main]]

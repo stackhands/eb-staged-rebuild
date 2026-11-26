@@ -9,7 +9,9 @@ build/
 .zig-cache/
 zig-out/
 zig-pkg/
-.differential-metadata/
+.golden-metadata/
+/eb_staged_rebuild/bin/
+*.egg-info/
 
 # Documentation build (docs-plan template): generated, never committed.
 /docs/build/
@@ -23,3 +25,6 @@ zig-pkg/
 /docs/**/__pycache__/
 /.pixi/
 /.lycheecache
+
+# Compiled launcher extension, built in place for the checkout tests.
+/eb_staged_rebuild/*.so

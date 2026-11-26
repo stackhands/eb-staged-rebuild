@@ -1,0 +1,9 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "symlink",
+  "path": "@WORK@/modules/link.lua",
+  "root": null
+}
+--- stderr

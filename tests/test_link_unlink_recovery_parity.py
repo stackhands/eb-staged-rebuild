@@ -1,4 +1,4 @@
-"""CLI parity when removing a created module link fails during recovery or rollback."""
+"""CLI behaviour when removing a created module link fails during recovery or rollback."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 _FAKE_EB = """#!/usr/bin/env python3
 import os
@@ -62,8 +62,8 @@ def _build_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
     return software, modules, state_root, fake_eb
 
 
-def _publish_run(runner, software: Path, modules: Path, state_root: Path, fake_eb: Path, run_id="r1", env=None):
-    return runner(
+def _publish_run(software: Path, modules: Path, state_root: Path, fake_eb: Path, run_id="r1", env=None):
+    return run_cli(
         "run",
         "--backend",
         "installpath",
@@ -89,15 +89,13 @@ def _journal(state_root: Path, run_id: str) -> dict:
 
 
 class LinkUnlinkRecoveryParityTests(unittest.TestCase):
-    def _assert_rollback_restores_on_unlink_error(self, runner) -> None:
+    def _assert_rollback_restores_on_unlink_error(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("permission checks are not meaningful as root")
         with tempfile.TemporaryDirectory(prefix="rollback-link-unlink-") as tmp:
             root = Path(tmp)
             software, modules, state_root, fake_eb = _build_fixture(root)
-            published = _publish_run(runner, software, modules, state_root, fake_eb)
-            if published is None:
-                self.skipTest("TOOL_BIN is unset")
+            published = _publish_run(software, modules, state_root, fake_eb)
             self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
 
             first_link = modules / "alpha" / "demo" / "1.lua"
@@ -107,11 +105,10 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
 
             locked_link.parent.chmod(0o555)
             try:
-                result = runner("rollback", "--state-root", str(state_root), "r1")
+                result = run_cli("rollback", "--state-root", str(state_root), "r1")
             finally:
                 locked_link.parent.chmod(0o755)
 
-            self.assertIsNotNone(result)
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertEqual(
                 result.stderr,
@@ -130,15 +127,13 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
             self.assertTrue(locked_link.is_symlink())
             self.assertTrue(all(link["created"] is True for link in journal["links_plan"]))
 
-    def _assert_resume_refuses_on_unlink_error(self, runner) -> None:
+    def _assert_resume_refuses_on_unlink_error(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("permission checks are not meaningful as root")
         with tempfile.TemporaryDirectory(prefix="resume-link-unlink-") as tmp:
             root = Path(tmp)
             software, modules, state_root, fake_eb = _build_fixture(root)
-            published = _publish_run(runner, software, modules, state_root, fake_eb)
-            if published is None:
-                self.skipTest("TOOL_BIN is unset")
+            published = _publish_run(software, modules, state_root, fake_eb)
             self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
 
             journal_file = state_root / "runs" / "r1" / "journal.json"
@@ -154,11 +149,10 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
             self.assertTrue(locked_link.is_symlink())
             locked_link.parent.chmod(0o555)
             try:
-                result = runner("resume", "--state-root", str(state_root), "r1")
+                result = run_cli("resume", "--state-root", str(state_root), "r1")
             finally:
                 locked_link.parent.chmod(0o755)
 
-            self.assertIsNotNone(result)
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertEqual(
                 result.stderr,
@@ -175,7 +169,7 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
                 "old\n",
             )
 
-    def _assert_rollback_to_retries_after_unlink_error(self, runner) -> None:
+    def _assert_rollback_to_retries_after_unlink_error(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("permission checks are not meaningful as root")
         with tempfile.TemporaryDirectory(prefix="rollback-to-link-unlink-") as tmp:
@@ -183,10 +177,8 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
             software, modules, state_root, fake_eb = _build_fixture(root)
             for run_id, links in (("r1", ""), ("r2", "tools/demo/1.lua"), ("r3", "tools/demo/1.lua")):
                 published = _publish_run(
-                    runner, software, modules, state_root, fake_eb, run_id, {"FAKE_EB_LINKS": links}
+                    software, modules, state_root, fake_eb, run_id, {"FAKE_EB_LINKS": links}
                 )
-                if published is None:
-                    self.skipTest("TOOL_BIN is unset")
                 self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
 
             locked_link = modules / "tools" / "demo" / "1.lua"
@@ -195,7 +187,7 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
 
             locked_link.parent.chmod(0o555)
             try:
-                refused = runner("rollback", "--state-root", str(state_root), "--to", "r1")
+                refused = run_cli("rollback", "--state-root", str(state_root), "--to", "r1")
             finally:
                 locked_link.parent.chmod(0o755)
 
@@ -213,7 +205,7 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
                 [(link["created"], link["status"]) for link in r2["links_plan"]], [(True, "created")]
             )
 
-            done = runner("rollback", "--state-root", str(state_root), "--to", "r1")
+            done = run_cli("rollback", "--state-root", str(state_root), "--to", "r1")
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertFalse(os.path.lexists(locked_link))
             r2 = _journal(state_root, "r2")
@@ -223,26 +215,26 @@ class LinkUnlinkRecoveryParityTests(unittest.TestCase):
             )
             self.assertIn(
                 "run r1 is already live",
-                runner("rollback", "--state-root", str(state_root), "--to", "r1").stdout,
+                run_cli("rollback", "--state-root", str(state_root), "--to", "r1").stdout,
             )
 
     def test_rollback_restores_published_tree_when_link_unlink_fails_python(self) -> None:
-        self._assert_rollback_restores_on_unlink_error(run_cli)
+        self._assert_rollback_restores_on_unlink_error()
 
     def test_rollback_restores_published_tree_when_link_unlink_fails_zig(self) -> None:
-        self._assert_rollback_restores_on_unlink_error(run_cli_optional_binary)
+        self._assert_rollback_restores_on_unlink_error()
 
     def test_resume_refuses_when_created_link_unlink_fails_python(self) -> None:
-        self._assert_resume_refuses_on_unlink_error(run_cli)
+        self._assert_resume_refuses_on_unlink_error()
 
     def test_resume_refuses_when_created_link_unlink_fails_zig(self) -> None:
-        self._assert_resume_refuses_on_unlink_error(run_cli_optional_binary)
+        self._assert_resume_refuses_on_unlink_error()
 
     def test_rollback_to_keeps_the_run_rolling_back_when_link_unlink_fails_python(self) -> None:
-        self._assert_rollback_to_retries_after_unlink_error(run_cli)
+        self._assert_rollback_to_retries_after_unlink_error()
 
     def test_rollback_to_keeps_the_run_rolling_back_when_link_unlink_fails_zig(self) -> None:
-        self._assert_rollback_to_retries_after_unlink_error(run_cli_optional_binary)
+        self._assert_rollback_to_retries_after_unlink_error()
 
 
 if __name__ == "__main__":

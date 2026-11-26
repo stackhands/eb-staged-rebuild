@@ -1,31 +1,11 @@
-"""retire: move a module file aside, roll it back, and let gc see the software directory."""
+"""retire through the binary: usage-log guard and a non-UTF-8 module path."""
 
 import os
+import sys
 import tempfile
 import unittest
-import sys
 
-from eb_staged_rebuild.engine import Spec, resume, rollback, run
-from eb_staged_rebuild.errors import NeedsIntervention, Refused
-from eb_staged_rebuild.faults import FaultInjector, InjectedCrash
-from eb_staged_rebuild.gc import collect
-from eb_staged_rebuild.journal import list_journals
-from eb_staged_rebuild.lockfile import FileLock
-from eb_staged_rebuild.paths import lstat_kind
-from eb_staged_rebuild.retire import retire
-from tests.support import PROBES, classic_install, installpath_builder, run_cli, run_cli_optional_binary
-
-GRACE = 144
-T0 = 1_700_000_000.0
-
-
-class Clock:
-    def __init__(self, now=T0):
-        self.now = now
-
-    def __call__(self):
-        self.now += 1
-        return self.now
+from tests.support import classic_install, golden, run_cli, scrub, write
 
 
 def _tree(root):
@@ -35,8 +15,7 @@ def _tree(root):
     os.makedirs(software)
     os.makedirs(modules)
     install, module, text = classic_install(software, modules, "demo/1", "v0\n", "all/demo/1.lua")
-    return software, modules, state, install, module, text
-
+    return state, install, module, text
 
 
 def _read(path):
@@ -44,367 +23,47 @@ def _read(path):
         return handle.read()
 
 
-def _class_links(modules, module):
-    """EasyBuild's absolute class link, a relative one, and a default link
-    beside the module file; and a class link to another version."""
-    links = {
-        os.path.join(modules, "tools", "demo", "1.lua"): module,
-        os.path.join(modules, "lib", "demo", "1.lua"): "../../all/demo/1.lua",
-        os.path.join(modules, "all", "demo", "default"): "1.lua",
-    }
-    other = os.path.join(modules, "tools", "demo", "2.lua")
-    for path, target in [*links.items(), (other, os.path.join(modules, "all", "demo", "2.lua"))]:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        os.symlink(target, path)
-    return links, other
-
-
-def _journal(state, run_id):
-    return [j for j in list_journals(state) if j["run_id"] == run_id][0]
-
 def _keep_logs_stub(root):
     script = os.path.join(root, "eb-keep-logs")
-    with open(script, "w", encoding="utf-8") as handle:
-        handle.write(
-            "#!/bin/sh\n"
-            f'exec "{sys.executable}" "{os.path.join(os.path.dirname(__file__), "fake_eb_keep_logs.py")}" "$@"\n'
-        )
-    os.chmod(script, 0o755)
+    write(
+        script,
+        "#!/bin/sh\n"
+        f'exec "{sys.executable}" "{os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eb_keep_logs.py")}" "$@"\n',
+        0o755,
+    )
     return script
 
 
 class RetireTests(unittest.TestCase):
-    def test_retire_moves_module_and_leaves_software(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, install, module, text = _tree(root)
-            inode = os.lstat(install).st_ino
-            result = retire(state, module, reason="published on cvmfs", clock=Clock())
-            self.assertEqual(result.returncode, 0)
-            self.assertFalse(os.path.lexists(module))
-            journal = _journal(state, result.run_id)
-            self.assertEqual(journal["state"], "retired")
-            self.assertEqual(journal["module_path"], module)
-            self.assertEqual(journal["software_dir"], install)
-            self.assertEqual(journal["reason"], "published on cvmfs")
-            self.assertIsNotNone(journal["retired_at"])
-            moved = journal["retired_path"]
-            self.assertTrue(moved.startswith(os.path.join(state, "retired") + os.sep))
-            self.assertTrue(moved.endswith(module.lstrip(os.sep)))
-            self.assertEqual(_read(moved), text)
-            self.assertEqual(os.lstat(install).st_ino, inode)
-            self.assertEqual(_read(os.path.join(install, "PAYLOAD")), "v0\n")
-
-    def test_dry_run_changes_nothing(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            result = retire(state, module, dry_run=True)
-            self.assertEqual(result.returncode, 0)
-            self.assertEqual(_read(module), text)
-            self.assertFalse(os.path.exists(state))
-
-    def test_dry_run_still_refuses(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, _module, _text = _tree(root)
-            with self.assertRaises(Refused):
-                retire(state, os.path.join(mods, "all"), dry_run=True)
-
-    def test_usage_log_refuses_retire_when_the_log_is_not_clear(self):
-        for mode in ("in-use", "error"):
-            with self.subTest(mode=mode):
-                with tempfile.TemporaryDirectory() as root:
-                    _sw, _mods, state, _install, module, text = _tree(root)
-                    keep_logs = _keep_logs_stub(root)
-                    usage = os.path.join(root, "usage.log")
-                    with open(usage, "w", encoding="utf-8") as handle:
-                        handle.write("{}\n")
-                    os.environ["FAKE_KEEP_LOGS_MODE"] = mode
-                    try:
-                        with self.assertRaises(Refused):
-                            retire(state, module, usage_log=usage, eb_keep_logs=keep_logs)
-                    finally:
-                        os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-                    self.assertEqual(_read(module), text)
-
     def test_usage_log_allows_retire_when_prefix_is_clear(self):
         with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, _text = _tree(root)
+            state, install, module, text = _tree(root)
             keep_logs = _keep_logs_stub(root)
             usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "clear"
-            try:
-                result = retire(state, module, usage_log=usage, eb_keep_logs=keep_logs, clock=Clock())
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            self.assertEqual(result.returncode, 0)
-            self.assertFalse(os.path.lexists(module))
-
-    def test_resume_refuses_a_retire_record(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            result = retire(state, module, clock=Clock())
-            with self.assertRaises(Refused) as ctx:
-                resume(state, result.run_id)
-            self.assertIn("retire record", str(ctx.exception))
-            self.assertFalse(os.path.lexists(module))
-            self.assertEqual(_read(_journal(state, result.run_id)["retired_path"]), text)
-
-    def test_rollback_puts_module_back(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            result = retire(state, module, clock=Clock())
-            back = rollback(state, result.run_id, clock=Clock(T0 + 100))
-            self.assertEqual(back.returncode, 0)
-            self.assertEqual(_read(module), text)
-            journal = _journal(state, result.run_id)
-            self.assertEqual(journal["state"], "rolled_back")
-            self.assertIsNotNone(journal["rolled_back_at"])
-            self.assertFalse(os.path.lexists(journal["retired_path"]))
-            again = rollback(state, result.run_id)
-            self.assertEqual(again.returncode, 0)
-            self.assertEqual(_read(module), text)
-
-    def test_rollback_refuses_to_overwrite_a_new_module_file(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, _text = _tree(root)
-            result = retire(state, module, clock=Clock())
-            with open(module, "w", encoding="utf-8") as handle:
-                handle.write('local root = "/elsewhere"\n')
-            with self.assertRaises(NeedsIntervention):
-                rollback(state, result.run_id)
-            self.assertEqual(_read(module), 'local root = "/elsewhere"\n')
-
-    def test_links_to_the_module_file_move_with_it_and_come_back(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, module, text = _tree(root)
-            links, other = _class_links(mods, module)
-            result = retire(state, module, clock=Clock())
-            journal = _journal(state, result.run_id)
-            plan = {link["live_path"]: link for link in journal["links_plan"]}
-            self.assertEqual(sorted(plan), sorted(links))
-            for path, target in links.items():
-                self.assertFalse(os.path.lexists(path))
-                self.assertEqual(plan[path]["target"], target)
-                self.assertEqual(plan[path]["status"], "retired")
-                self.assertEqual(os.readlink(plan[path]["retired_path"]), target)
-            self.assertTrue(os.path.islink(other))
-            rollback(state, result.run_id, clock=Clock(T0 + 100))
-            self.assertEqual(_read(module), text)
-            for path, target in links.items():
-                self.assertEqual(os.readlink(path), target)
-                self.assertEqual(_read(path), text)
-            journal = _journal(state, result.run_id)
-            self.assertEqual({link["status"] for link in journal["links_plan"]}, {"restored"})
-
-    def test_crash_between_links_rolls_back_every_link(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, module, text = _tree(root)
-            links, _other = _class_links(mods, module)
-            with self.assertRaises(InjectedCrash):
-                retire(state, module, faults=FaultInjector("retire.link:2"), clock=Clock())
-            self.assertEqual(_read(module), text)
-            self.assertEqual(sum(os.path.lexists(path) for path in links), len(links) - 1)
-            journal = list_journals(state)[0]
-            self.assertEqual(journal["state"], "retiring")
-            rollback(state, journal["run_id"])
-            for path, target in links.items():
-                self.assertEqual(os.readlink(path), target)
-
-    def test_rollback_refuses_to_overwrite_a_new_link(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, module, text = _tree(root)
-            links, _other = _class_links(mods, module)
-            result = retire(state, module, clock=Clock())
-            again = os.path.join(mods, "tools", "demo", "1.lua")
-            os.symlink("/elsewhere/1.lua", again)
-            with self.assertRaises(NeedsIntervention) as ctx:
-                rollback(state, result.run_id)
-            self.assertIn("exists again", str(ctx.exception))
-            self.assertEqual(os.readlink(again), "/elsewhere/1.lua")
-            self.assertEqual(_journal(state, result.run_id)["state"], "retired")
-            os.unlink(again)
-            rollback(state, result.run_id)
-            self.assertEqual(_read(module), text)
-            for path, target in links.items():
-                self.assertEqual(os.readlink(path), target)
-
-    def test_retire_again_after_rollback(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, _text = _tree(root)
-            clock = Clock()
-            first = retire(state, module, clock=clock)
-            rollback(state, first.run_id, clock=clock)
-            second = retire(state, module, clock=clock)
-            self.assertNotEqual(first.run_id, second.run_id)
-            self.assertFalse(os.path.lexists(module))
-
-    def test_refuses_already_retired(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, _text = _tree(root)
-            retire(state, module, clock=Clock())
-            with self.assertRaises(Refused) as ctx:
-                retire(state, module)
-            self.assertIn("already retired", str(ctx.exception))
-
-    def test_refuses_non_regular_files(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, module, _text = _tree(root)
-            link = os.path.join(mods, "all", "demo", "link.lua")
-            os.symlink(module, link)
-            for target in (link, os.path.join(mods, "all"), os.path.join(mods, "missing.lua")):
-                with self.assertRaises(Refused, msg=target):
-                    retire(state, target)
-            self.assertTrue(os.path.islink(link))
-            self.assertTrue(os.path.isfile(module))
-
-    def test_refuses_module_without_root(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, _install, _module, _text = _tree(root)
-            odd = os.path.join(mods, "odd.lua")
-            with open(odd, "w", encoding="utf-8") as handle:
-                handle.write('whatis("x")\n')
-            with self.assertRaises(Refused):
-                retire(state, odd)
-            self.assertTrue(os.path.isfile(odd))
-
-    def test_refuses_when_lock_is_held(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            lock = FileLock(state)
-            lock.acquire()
-            try:
-                with self.assertRaises(Refused) as ctx:
-                    retire(state, module)
-                self.assertIn("lock", str(ctx.exception))
-            finally:
-                lock.release()
-            self.assertEqual(_read(module), text)
-
-    def test_refuses_different_filesystem(self):
-        shm = "/dev/shm"
-        if not os.path.isdir(shm) or os.stat(shm).st_dev == os.stat(tempfile.gettempdir()).st_dev:
-            self.skipTest("no second filesystem available")
-        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory(dir=shm) as other:
-            _sw, _mods, _state, _install, module, text = _tree(root)
-            state = os.path.join(other, "state")
-            with self.assertRaises(Refused) as ctx:
-                retire(state, module)
-            self.assertIn("different filesystems", str(ctx.exception))
-            self.assertEqual(_read(module), text)
-            self.assertEqual(os.listdir(os.path.join(state, "retired")), [])
-
-    def test_crash_before_rename_leaves_module_and_rolls_back(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            with self.assertRaises(InjectedCrash):
-                retire(state, module, faults=FaultInjector("retire.rename"), clock=Clock())
-            self.assertEqual(_read(module), text)
-            journal = list_journals(state)[0]
-            self.assertEqual(journal["state"], "retiring")
-            with self.assertRaises(Refused):
-                retire(state, module)
-            back = rollback(state, journal["run_id"])
-            self.assertEqual(back.returncode, 0)
-            self.assertEqual(_read(module), text)
-
-    def test_crash_after_rename_rolls_back(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, _install, module, text = _tree(root)
-            with self.assertRaises(InjectedCrash):
-                retire(state, module, faults=FaultInjector("journal.retired.write"), clock=Clock())
-            self.assertFalse(os.path.lexists(module))
-            journal = list_journals(state)[0]
-            self.assertEqual(journal["state"], "retiring")
-            rollback(state, journal["run_id"])
-            self.assertEqual(_read(module), text)
-
-
-class RetireGcTests(unittest.TestCase):
-    def test_software_dir_outside_generations_is_reported_not_deleted(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, install, module, _text = _tree(root)
-            result = retire(state, module, clock=Clock())
-            retired_at = _journal(state, result.run_id)["retired_at"]
-            before = collect(state, GRACE, retired_at + 10)
-            item = [a for a in before if a["path"] == install][0]
-            self.assertEqual(item["action"], "keep")
-            self.assertIn("ready to remove by hand after", item["reason"])
-            after = collect(state, GRACE, retired_at + GRACE * 3600 + 1)
-            item = [a for a in after if a["path"] == install][0]
-            self.assertEqual(item["action"], "manual")
-            self.assertIn("ready to remove by hand after", item["reason"])
-            self.assertTrue(os.path.isdir(install))
-            self.assertTrue(os.path.isfile(os.path.join(install, "PAYLOAD")))
-
-    def test_rolled_back_retire_keeps_directory_referenced(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, _mods, state, install, module, _text = _tree(root)
-            clock = Clock()
-            result = retire(state, module, clock=clock)
-            rollback(state, result.run_id, clock=clock)
-            actions = collect(state, GRACE, clock.now + GRACE * 3600 * 2)
-            self.assertEqual([a for a in actions if a["action"] in ("remove", "manual")], [])
-
-    def test_directory_still_resolved_by_another_module_is_kept(self):
-        with tempfile.TemporaryDirectory() as root:
-            _sw, mods, state, install, module, text = _tree(root)
-            alias = os.path.join(mods, "all", "demo", "alias.lua")
-            with open(alias, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            result = retire(state, module, clock=Clock())
-            retired_at = _journal(state, result.run_id)["retired_at"]
-            # The alias is not tracked by a journal; retire it too, then restore it
-            # through a rolled-back retire so the tool tracks a live file.
-            second = retire(state, alias, clock=Clock(retired_at))
-            rollback(state, second.run_id, clock=Clock(retired_at))
-            actions = collect(state, GRACE, retired_at + GRACE * 3600 + 100)
-            item = [a for a in actions if a["path"] == install][0]
-            self.assertEqual(item["action"], "keep")
-            self.assertIn("live module", item["reason"])
-
-    def test_swapped_publish_then_retire_keeps_live_tree_and_drops_hidden_sibling(self):
-        with tempfile.TemporaryDirectory() as root:
-            software = os.path.join(root, "software")
-            modules = os.path.join(root, "modules")
-            state = os.path.join(root, "state")
-            os.makedirs(software)
-            os.makedirs(modules)
-            live, _module_path, _text = classic_install(software, modules, "demo/1", "v0\n", "all/demo/1.lua")
-            clock = Clock()
-            builder = installpath_builder([{"rel": "demo/1", "payload": "v1\n", "module_rel": "all/demo/1.lua"}])
-            spec = Spec(
-                software=software,
-                modules=modules,
-                state_root=state,
-                eb_args=["demo-1.eb"],
-                backend="installpath",
-                module_rels=["demo/1"],
-                builder=builder,
-                faults=FaultInjector(),
-                run_id="run1",
-                probes=PROBES,
-                clock=clock,
+            write(usage, "{}\n")
+            done = run_cli(
+                "retire",
+                "--state-root",
+                state,
+                "--module-file",
+                module,
+                "--usage-log",
+                usage,
+                "--eb-keep-logs",
+                keep_logs,
+                env={"FAKE_KEEP_LOGS_MODE": "clear"},
             )
-            self.assertEqual(run(spec).returncode, 0)
-            hidden = os.path.join(os.path.dirname(live), ".1.run1")
-            module = os.path.join(modules, "all", "demo", "1.lua")
-            self.assertEqual(_read(os.path.join(live, "PAYLOAD")), "v1\n")
-            self.assertTrue(os.path.isdir(hidden))
-            retired = retire(state, module, clock=clock)
-            retired_at = _journal(state, retired.run_id)["retired_at"]
-            early = collect(state, GRACE, retired_at + 10)
-            self.assertTrue(all(a["action"] == "keep" for a in early))
-            self.assertTrue(os.path.isdir(hidden))
-            self.assertTrue(os.path.isdir(live))
-            late = collect(state, GRACE, retired_at + GRACE * 3600 + 1)
-            self.assertIn(hidden, [a["path"] for a in late if a["action"] == "remove"])
-            self.assertFalse(os.path.exists(hidden))
-            manual = [a for a in late if a["path"] == live][0]
-            self.assertEqual(manual["action"], "manual")
-            self.assertTrue(os.path.isdir(live))
-            self.assertEqual(_read(os.path.join(live, "PAYLOAD")), "v1\n")
-            self.assertEqual(lstat_kind(module), "missing")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertFalse(os.path.lexists(module))
+            self.assertEqual(_read(os.path.join(install, "PAYLOAD")), "v0\n")
+            moved = [
+                os.path.join(directory, name)
+                for directory, _dirs, names in os.walk(os.path.join(state, "retired"))
+                for name in names
+            ]
+            self.assertEqual(len(moved), 1, moved)
+            self.assertTrue(moved[0].endswith(module.lstrip(os.sep)), moved[0])
+            self.assertEqual(_read(moved[0]), text)
 
 
 class RetireCliParityTests(unittest.TestCase):
@@ -416,16 +75,11 @@ class RetireCliParityTests(unittest.TestCase):
             with open(module, "w", encoding="utf-8") as handle:
                 handle.write('local root = "/x"\n')
 
-            py = run_cli("retire", "--state-root", state, "--module-file", module)
-            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
-            self.assertEqual(py.stdout, "")
-            self.assertIn("module path is not UTF-8 text", py.stderr)
-
-            zig = run_cli_optional_binary("retire", "--state-root", state, "--module-file", module)
-            if zig is not None:
-                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
-                self.assertEqual(zig.stdout, "")
-                self.assertEqual(zig.stderr, py.stderr)
+            done = run_cli("retire", "--state-root", state, "--module-file", module)
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+            self.assertEqual(done.stdout, "")
+            self.assertIn("module path is not UTF-8 text", done.stderr)
+            golden(self, "stderr", scrub(done.stderr, ROOT=root))
 
 
 if __name__ == "__main__":

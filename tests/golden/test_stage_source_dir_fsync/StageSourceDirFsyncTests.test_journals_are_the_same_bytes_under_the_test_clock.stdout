@@ -1,0 +1,3 @@
+eb-staged-rebuild: module preflight: @WORK@/fake-eb --dry-run demo-1.eb --rebuild
+eb-staged-rebuild: run r1 backend installpath generation @WORK@/mnt/generations/r1
+eb-staged-rebuild: running @WORK@/fake-eb --installpath-software=@WORK@/mnt/generations/r1/software --installpath-modules=@WORK@/mnt/generations/r1/modules demo-1.eb --rebuild

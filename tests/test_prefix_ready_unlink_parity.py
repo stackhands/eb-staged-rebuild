@@ -1,42 +1,26 @@
 """A failed unlink of a finished hard-link replacement refuses publication.
 
-The failure is the test artifact's prefix.ready.unlink step. The release
-binary does not read it. Python reaches the same step through
-tests/fail_cli.py.
+The failure is the test artifact's prefix.ready.unlink step, which the
+release binary does not read; TOOL_BIN_TEST_OPS names the test artifact.
 """
 
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from tests.support import _run, _skip
+
 _STEP = "prefix.ready.unlink"
-
-
-def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["PYTHONIOENCODING"] = "utf-8:strict"
-    env["PYTHONPATH"] = _REPO
-    env["EB_STAGED_REBUILD_FAIL_AT"] = _STEP
-    done = subprocess.run(argv, check=False, capture_output=True, env=env)
-    return subprocess.CompletedProcess(
-        argv,
-        done.returncode,
-        done.stdout.decode("utf-8", "surrogateescape"),
-        done.stderr.decode("utf-8", "surrogateescape"),
-    )
 
 
 class PrefixReadyUnlinkParityTests(unittest.TestCase):
     def test_ready_unlink_error_refuses_before_tree_publication(self) -> None:
-        self._run_one([sys.executable, os.path.join(_REPO, "tests", "fail_cli.py")])
         tool = os.environ.get("TOOL_BIN_TEST_OPS")
-        if tool:
-            self._run_one([tool])
+        if not tool:
+            _skip(self, "TOOL_BIN_TEST_OPS is unset")
+        self._run_one([tool])
 
     def _run_one(self, argv: list[str]) -> None:
         with tempfile.TemporaryDirectory(prefix="prefix-ready-unlink-") as root:
@@ -88,7 +72,8 @@ class PrefixReadyUnlinkParityTests(unittest.TestCase):
                     "r1",
                     "--",
                     "demo-1.eb",
-                ]
+                ],
+                {"EB_STAGED_REBUILD_FAIL_AT": _STEP},
             )
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertIn("Permission denied", result.stderr)

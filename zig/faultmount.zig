@@ -26,6 +26,7 @@ pub const Mount = struct {
             _ = linux.kill(self.pid, linux.SIG.KILL);
             var status: i32 = 0;
             _ = linux.waitpid(self.pid, &status, 0);
+            detach(self.a, self.mnt);
         }
         fsx.deleteTree(self.a, fsx.cwd, self.work) catch {};
     }
@@ -75,9 +76,18 @@ pub fn mount(a: Allocator, label: []const u8, fuse_dir: []const u8) !Mount {
     _ = linux.kill(child, linux.SIG.KILL);
     var status: i32 = 0;
     _ = linux.waitpid(child, &status, 0);
+    // A mount the wait missed outlives the killed daemon; detach it so it
+    // does not stay in mountinfo for later runs.
+    detach(a, mnt);
     std.debug.print("faultfs did not mount:\n{s}\n", .{readSmall(a, fuse_err)});
     fsx.deleteTree(a, fsx.cwd, work) catch {};
     return error.FuseTimeout;
+}
+
+/// Lazily unmount MNT, whatever state its daemon is in; errors are ignored.
+fn detach(a: Allocator, mnt: []const u8) void {
+    const umount = [_][]const u8{ "/usr/bin/fusermount3", "-u", "-z", mnt };
+    _ = exec(a, &umount, baseEnv(a) catch return, "/dev/null") catch {};
 }
 
 fn faultfsSource(a: Allocator) ![]u8 {
@@ -182,8 +192,16 @@ fn exitStatus(status: i32) !u8 {
 fn mounted(path: []const u8, buf: []u8) bool {
     const fd = sys.openat(fsx.cwd, "/proc/self/mountinfo", .{ .ACCMODE = .RDONLY }, 0) catch return false;
     defer sys.close(fd);
-    const n = linux.read(fd, buf.ptr, buf.len);
-    if (linux.errno(n) != .SUCCESS or n == 0) return false;
+    // procfs hands out mountinfo about one page per read, so read to EOF.
+    var n: usize = 0;
+    while (n < buf.len) {
+        const got = linux.read(fd, buf.ptr + n, buf.len - n);
+        if (linux.errno(got) == .INTR) continue;
+        if (linux.errno(got) != .SUCCESS) return false;
+        if (got == 0) break;
+        n += got;
+    }
+    if (n == 0) return false;
     var needle: [4096]u8 = undefined;
     const text = std.fmt.bufPrint(&needle, " {s} ", .{path}) catch return false;
     return std.mem.indexOf(u8, buf[0..n], text) != null;

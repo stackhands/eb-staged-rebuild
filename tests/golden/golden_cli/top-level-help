@@ -1,0 +1,29 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild [-h] [--version]
+                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
+
+Build EasyBuild software in a staged tree, then exchange the complete tree
+with the stable live directory.
+
+positional arguments:
+  {probe,run,resume,verify,rollback,gc,retire,status,list,resolve}
+    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
+                        EasyBuild
+    run                 build and atomically swap a staged tree
+    resume              continue a run after a crash
+    verify              check a built run's stage before it is published
+    rollback            switch back to the previous generation or a named one,
+                        or put a retired module file back
+    gc                  remove hidden retired siblings after the grace period
+    retire              move a module file out of the module tree after its
+                        package is published elsewhere
+    status              show run journals
+    list                show each install path's live tree and the generations
+                        kept beside it
+    resolve             print the install path a module file names
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
+--- stderr

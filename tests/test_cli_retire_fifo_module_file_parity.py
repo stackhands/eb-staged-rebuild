@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class CliRetireFifoModuleFileParityTests(unittest.TestCase):
@@ -15,18 +15,12 @@ class CliRetireFifoModuleFileParityTests(unittest.TestCase):
             fifo_path = os.path.join(root, "module.fifo")
             os.mkfifo(fifo_path)
 
-            proc = run_cli("retire", "--state-root", state_root, "--module-file", fifo_path)
-            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-            self.assertEqual(proc.stdout, "")
-            self.assertIn("is not a regular file (other)", proc.stderr)
+            binary = run_cli("retire", "--state-root", state_root, "--module-file", fifo_path)
+            self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stdout, "")
+            self.assertIn("is not a regular file (other)", binary.stderr)
             self.assertTrue(os.path.exists(fifo_path))
-
-            binary = run_cli_optional_binary("retire", "--state-root", state_root, "--module-file", fifo_path)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-                self.assertEqual(binary.stdout, "")
-                self.assertEqual(binary.stderr, proc.stderr)
-                self.assertTrue(os.path.exists(fifo_path))
+            golden(self, "stderr", scrub(binary.stderr, STATE=state_root, FIFO=fifo_path, ROOT=root))
 
 
 if __name__ == "__main__":

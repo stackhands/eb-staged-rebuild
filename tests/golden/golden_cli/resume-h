@@ -1,0 +1,18 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
+                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+                                [--force]
+                                run_id
+
+positional arguments:
+  run_id
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --lock-timeout LOCK_TIMEOUT
+  --verify              check the stage before the swap, as run --verify does
+  --force               with --verify, publish a stage that fails; the journal
+                        records it
+--- stderr

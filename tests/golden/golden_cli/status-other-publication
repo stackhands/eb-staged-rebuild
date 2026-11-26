@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: journal publication 'pointer' is not a directory swap

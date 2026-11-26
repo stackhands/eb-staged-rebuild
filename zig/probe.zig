@@ -5,6 +5,7 @@ const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
+const run_mod = @import("run.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -624,6 +625,46 @@ const MS_REMOUNT = 1 << 5;
 const MS_BIND = 1 << 12;
 const MS_REC = 1 << 14;
 const MS_PRIVATE = 1 << 18;
+const MS_NOSUID = 1 << 1;
+const MS_NODEV = 1 << 2;
+const MS_NOEXEC = 1 << 3;
+const MS_NOATIME = 1 << 10;
+const MS_NODIRATIME = 1 << 11;
+const MS_RELATIME = 1 << 21;
+
+// statfs f_flags bits, linux/statfs.h.
+const ST_NOSUID = 0x2;
+const ST_NODEV = 0x4;
+const ST_NOEXEC = 0x8;
+const ST_NOATIME = 0x400;
+const ST_NODIRATIME = 0x800;
+const ST_RELATIME = 0x1000;
+
+/// The mount(2) flags for the statfs FLAGS of a mount that a user namespace
+/// locks: a bind remount inside one that leaves any of them out fails with
+/// EPERM, so the read-only remount carries them over, as bwrap does.
+fn lockedMountFlags(flags: usize) u32 {
+    var out: u32 = 0;
+    if (flags & ST_NOSUID != 0) out |= MS_NOSUID;
+    if (flags & ST_NODEV != 0) out |= MS_NODEV;
+    if (flags & ST_NOEXEC != 0) out |= MS_NOEXEC;
+    if (flags & ST_NOATIME != 0) out |= MS_NOATIME;
+    if (flags & ST_NODIRATIME != 0) out |= MS_NODIRATIME;
+    if (flags & ST_RELATIME != 0) out |= MS_RELATIME;
+    return out;
+}
+
+test "the read-only remount keeps the flags a user namespace locks" {
+    try std.testing.expectEqual(@as(u32, 0), lockedMountFlags(0));
+    // /dev/shm on a common host: rw,nosuid,nodev,relatime.
+    try std.testing.expectEqual(@as(u32, MS_NOSUID | MS_NODEV | MS_RELATIME), lockedMountFlags(ST_NOSUID | ST_NODEV | ST_RELATIME));
+    try std.testing.expectEqual(
+        @as(u32, MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOATIME | MS_NODIRATIME | MS_RELATIME),
+        lockedMountFlags(ST_NOSUID | ST_NODEV | ST_NOEXEC | ST_NOATIME | ST_NODIRATIME | ST_RELATIME),
+    );
+    // ST_RDONLY (0x1) and the bits mount(2) has no lock for are not carried.
+    try std.testing.expectEqual(@as(u32, 0), lockedMountFlags(0x1 | 0x40 | 0x80));
+}
 
 fn mountRaw(source: ?[*:0]const u8, target: [*:0]const u8, flags: u32) linux.E {
     return linux.errno(linux.mount(source, target, null, flags, 0));
@@ -722,7 +763,12 @@ fn protect(a: Allocator, path_in: []const u8) ?[]const u8 {
     var zb: [sys.path_max:0]u8 = undefined;
     const z = sys.z(&zb, path) catch return "path too long";
     var e = mountRaw(z.ptr, z.ptr, MS_BIND | MS_REC);
-    if (e == .SUCCESS) e = mountRaw(z.ptr, z.ptr, MS_BIND | MS_REMOUNT | MS_RDONLY);
+    if (e != .SUCCESS) return a.print("mount {s}: {s}", .{ path, strerror(e) }) catch "mount failed";
+    var info: run_mod.StatFs = undefined;
+    const sr = linux.syscall2(.statfs, @intFromPtr(z.ptr), @intFromPtr(&info));
+    if (linux.errno(sr) != .SUCCESS) return a.print("statfs {s}: {s}", .{ path, strerror(linux.errno(sr)) }) catch "statfs failed";
+    const locked = lockedMountFlags(@bitCast(info.flags));
+    e = mountRaw(z.ptr, z.ptr, MS_BIND | MS_REMOUNT | MS_RDONLY | locked);
     if (e != .SUCCESS) return a.print("mount {s}: {s}", .{ path, strerror(e) }) catch "mount failed";
     return null;
 }

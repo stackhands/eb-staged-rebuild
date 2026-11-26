@@ -1,0 +1,11 @@
+exit 0
+--- stdout
+{
+  "complete": true,
+  "kind": "file",
+  "path": "@WORK@/modules/tcl",
+  "root": "@WORK@/software/stamp/1",
+  "root_kind": "dir",
+  "syntax": "tcl"
+}
+--- stderr

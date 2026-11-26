@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+demo/1  @WORK@/sw/demo/1
+  live         -                     -  verify -
+  replaced     2017-07-14T02:40:00Z  r5  verify fail (2 problems)  @WORK@/sw/demo/.1.r5
+  original     -                     -  verify -  @WORK@/sw/demo/.1.r6
+--- stderr

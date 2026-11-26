@@ -11,7 +11,7 @@ On a filesystem that exchanges two directories in one call, such as ext4, the pa
 The previous tree stays on disk under a hidden name until its grace period is over, and a rollback brings it back.
 Each run keeps a journal, so a build that failed or a machine that went down leaves a run to finish or to undo.
 It can also record every publication in a signed eb-stack ledger.
-The tool is a Python package that needs only the standard library, and a static Zig binary of the same program.
+The tool is a static Zig binary. A thin Python package carries it for =pip=, starts it for =python3 -m eb_staged_rebuild=, and adds the EasyBuild site hook file and a checksum list for a copied install.
 
 New here?
 [[file:tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]] rebuilds a stand-in installation in your home directory, without EasyBuild, and ends with the old installation back in place.

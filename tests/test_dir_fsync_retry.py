@@ -1,23 +1,20 @@
 """A retry flushes a directory whose earlier flush failed.
 
 The first attempt renames or unlinks, then the parent flush fails. The
-journal keeps the obligation. The next attempt used to see the rename
-or unlink already done and report success without flushing. It flushes
-again, and a second failure is still a failure.
+journal keeps the obligation. The next attempt flushes the parent again
+even though the rename or unlink is already done, and a second failure is
+still a failure.
 """
 
 from __future__ import annotations
 
-import errno
 import os
 import shutil
 import subprocess
 import textwrap
 import unittest
 
-from eb_staged_rebuild.atomicio import read_bytes
-from eb_staged_rebuild.engine import _remove_created_links
-from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, run_cli, run_cli_optional_binary
+from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, golden, run_cli, scrub
 
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 
@@ -43,74 +40,19 @@ class DirFsyncRetryTests(unittest.TestCase):
         if not os.environ.get("TOOL_BIN"):
             _skip(self, "TOOL_BIN is unset")
         work = f"/tmp/stage-fsync-retry-{os.getpid()}"
-        python = self._resume("python", work)
-        binary = self._resume("binary", work)
+        done = self._resume(work)
         source_suffix = "/generations/r1/software/demo"
-        for done in (python, binary):
-            detail = done["stdout"] + done["stderr"]
-            self.assertEqual(done["first"], 2, detail)
-            self.assertEqual(done["resume"], 2, detail)
-            self.assertIn(source_suffix, done["stderr"])
-            self.assertIn(b'"state": "built"', done["journal"])
-            self.assertNotIn(b'"state": "complete"', done["journal"])
-            self.assertEqual(done["payload"], "old\n", detail)
-        self.assertEqual(python["resume_stdout"], binary["resume_stdout"])
-        self.assertEqual(python["resume_stderr"], binary["resume_stderr"])
+        detail = done["stdout"] + done["stderr"]
+        self.assertEqual(done["first"], 2, detail)
+        self.assertEqual(done["resume"], 2, detail)
+        self.assertIn(source_suffix, done["stderr"])
+        self.assertIn(b'"state": "built"', done["journal"])
+        self.assertNotIn(b'"state": "complete"', done["journal"])
+        self.assertEqual(done["payload"], "old\n", detail)
+        golden(self, "resume_stdout", scrub(done["resume_stdout"], WORK=work))
+        golden(self, "resume_stderr", scrub(done["resume_stderr"], WORK=work))
 
-    def test_a_missing_created_link_is_flushed_again(self) -> None:
-        if os.geteuid() == 0:
-            _skip(self, "the filesystem is mounted by an unprivileged user")
-        reason = _fuse_ready()
-        if reason:
-            _skip(self, reason)
-        work = f"/tmp/link-fsync-retry-{os.getpid()}"
-        mnt = os.path.join(work, "mnt")
-        back = os.path.join(work, "back")
-        os.makedirs(os.path.join(back, "links"))
-        binary = os.path.join(work, "faultfs")
-        _compile_fuse_faultfs(_SRC, binary)
-        os.makedirs(mnt)
-        env = dict(os.environ)
-        env["FAULTFS_FSYNC_DIR"] = "/links"
-        env.pop("FAULTFS_FSYNC_DIR_SKIP", None)
-        mounted = subprocess.Popen(
-            [binary, back, mnt],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-        try:
-            _wait_mount(mnt, mounted)
-            parent = os.path.join(mnt, "links")
-            path = os.path.join(parent, "a.lua")
-            os.symlink("target", path)
-            journal = {
-                "links_plan": [
-                    {
-                        "rel": "links/a.lua",
-                        "live_path": path,
-                        "target": "target",
-                        "created": True,
-                        "status": "created",
-                    }
-                ]
-            }
-            for _ in range(2):
-                with self.assertRaises(OSError) as caught:
-                    _remove_created_links(journal)
-                self.assertEqual(caught.exception.errno, errno.EIO)
-                self.assertEqual(caught.exception.filename, parent)
-                self.assertTrue(journal["links_plan"][0]["created"])
-            self.assertFalse(os.path.lexists(path))
-        finally:
-            subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
-            if mounted.stderr is not None and not mounted.stderr.closed:
-                mounted.stderr.close()
-            mounted.wait(timeout=30)
-            shutil.rmtree(work, ignore_errors=True)
-
-    def _resume(self, which: str, work: str) -> dict:
+    def _resume(self, work: str) -> dict:
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -178,19 +120,10 @@ class DirFsyncRetryTests(unittest.TestCase):
                 "--",
                 "demo-1.eb",
             )
-            if which == "python":
-                first = run_cli(*args)
-                resumed = run_cli("resume", "--state-root", mnt, "r1")
-            else:
-                first = run_cli_optional_binary(*args)
-                resumed = run_cli_optional_binary("resume", "--state-root", mnt, "r1")
-                if first is None or resumed is None:
-                    self.fail("TOOL_BIN is unset")
-            journal_path = os.path.join(mnt, "runs", "r1", "journal.json")
-            journal = read_bytes(journal_path)
-            with open(journal_path, "rb") as handle:
-                if handle.read() != journal:
-                    self.fail("read_bytes and an rb read disagree")
+            first = run_cli(*args)
+            resumed = run_cli("resume", "--state-root", mnt, "r1")
+            with open(os.path.join(mnt, "runs", "r1", "journal.json"), "rb") as handle:
+                journal = handle.read()
         finally:
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
             if mounted.stderr is not None and not mounted.stderr.closed:

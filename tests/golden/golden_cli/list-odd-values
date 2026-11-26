@@ -1,0 +1,6 @@
+exit 0
+--- stdout
+demo/1  @WORK@/sw/demo/1
+  live         -                     -  verify -
+  original     -                     -  verify -  @WORK@/sw/demo/.1.r6
+--- stderr

@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class StatusBlackBoxExtraTests(unittest.TestCase):
@@ -30,11 +30,7 @@ class StatusBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
             self.assertEqual(proc.stdout, "")
             self.assertIn("no journal for missing-run", proc.stderr)
-            binary = run_cli_optional_binary("status", "--state-root", state_root, "missing-run")
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-                self.assertEqual(proc.stdout, binary.stdout)
-                self.assertEqual(proc.stderr, binary.stderr)
+            golden(self, "stderr", scrub(proc.stderr, STATE=state_root))
 
 
 if __name__ == "__main__":

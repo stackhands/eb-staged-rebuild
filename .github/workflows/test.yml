@@ -10,9 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  unit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  zig:
+    # The Zig build: its unit tests, then every test that runs the binary.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -20,61 +25,164 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
-      - name: ledger CLI
-        uses: ./.github/actions/pinned-ledger
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - run: zig fmt --check build.zig build.zig.zon zig
+      - name: fuse3 before the zig tests that compile faultfs
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config shellcheck bubblewrap
+      - run: zig build test --summary all
+      - run: zig build -Drelease=true
       - name: promtool 3.16.0
         uses: ./.github/actions/pinned-promtool
+      - name: ledger CLI
+        uses: ./.github/actions/pinned-ledger
+      - name: the release binary carries no test hooks
+        run: |
+          ! grep -aq EB_STAGED_REBUILD_ACL_MODEL zig-out/bin/eb-staged-rebuild
+          ! grep -aq EB_STAGED_REBUILD_FAIL_AT zig-out/bin/eb-staged-rebuild
+          ! grep -aq EB_STAGED_REBUILD_NOW zig-out/bin/eb-staged-rebuild
+          ! zig build -Dtest-ops -Drelease=true
+      - name: the -Dtest-ops test artifact
+        run: zig build -Dtest-ops
       - name: user namespaces for the userns backend
         # Ubuntu's AppArmor refuses them to unconfined programs such as unshare.
         run: |
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: build the _launch extension in place
+        run: python -m pip install setuptools && python setup.py build_ext --inplace
+      - name: tests against the release and test-ops binaries
+        run: |
+          python -m pip install jsonschema
+          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest discover -s tests -v
+      - name: build.zig.zon's version and -Dcommit reach --version
+        run: bash tests/build_version.sh
+      - run: shellcheck -S warning tests/golden_cli.sh tests/build_version.sh
+      - name: commands against the golden files
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/golden_cli.sh
+      - name: a run and a rollback killed at every step, then resumed
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/crash_matrix.py
+      - name: a run signalled while its build command runs
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/signal_harness.py
+      - name: publication access metadata
+        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/golden_metadata.py
+      - name: a run and a rollback failed at every step, against the test artifact
+        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
+
+  wheels:
+    # cibuildwheel builds the wheels in the manylinux2014 images: one abi3
+    # wheel from CPython 3.11 for every GIL CPython, and one wheel for each of
+    # the free-threaded 3.13t and 3.14t. Each carries the static binary, built
+    # for the same architecture.
+    name: wheels (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+          - arch: aarch64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
-      - name: zig binary for the tests that run both front ends
-        run: zig build -Drelease=true
-      - name: unit tests
+      - name: build the static binary the wheels carry
+        run: zig build -Drelease=true -Dtarget=${{ matrix.arch }}-linux-musl --prefix out
+      - uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084 # v3.4.1
+        with:
+          output-dir: dist
+      - name: the tag and contents of every wheel
+        run: |
+          python -m pip install --quiet auditwheel
+          ls dist
+          test "$(ls dist/*.whl | wc -l)" -eq 3
+          for wheel in dist/*.whl; do
+            python tools/check_wheel.py "$wheel"
+            auditwheel show "$wheel"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: dist/
+
+  wheel-install:
+    # The x86_64 wheels from the wheels job, installed on each CPython they
+    # serve and tested as installed: importing _launch keeps the GIL off on a
+    # free-threaded build, the entry points run the bundled binary, and calls
+    # from many threads agree.
+    needs: wheels
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11"
+            wheel-tag: cp311-abi3
+          - python-version: "3.12"
+            wheel-tag: cp311-abi3
+          - python-version: "3.14"
+            wheel-tag: cp311-abi3
+          - python-version: "3.13t"
+            wheel-tag: cp313-cp313t
+          - python-version: "3.14t"
+            wheel-tag: cp314-cp314t
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheels-x86_64
+          path: dist
+      - name: install the wheel in a clean environment
         env:
-          TOOL_BIN: ${{ github.workspace }}/zig-out/bin/eb-staged-rebuild
+          PYTHON: ${{ steps.python.outputs.python-path }}
+          WHEEL_TAG: ${{ matrix.wheel-tag }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          python -m pip install jsonschema
-          python -m unittest discover -s tests -v
-      - name: completion and manpage generation pass one
-        uses: stackhands/.github/.github/actions/parser-cli-assets@main
-        with:
-          pythonpath: .
-          parser_ref: eb_staged_rebuild.cli._parser
-          parser_module: eb_staged_rebuild.cli
-          parser_function: _parser
-          prog: eb-staged-rebuild
-          out_completions_dir: ${{ runner.temp }}/esr-cli-one/completions
-          out_man_dir: ${{ runner.temp }}/esr-cli-one/man
-          out_bash_file: eb-staged-rebuild.bash
-          out_zsh_file: _eb-staged-rebuild
-          out_man_file: eb-staged-rebuild.1
-      - name: completion and manpage generation pass two
-        uses: stackhands/.github/.github/actions/parser-cli-assets@main
-        with:
-          pythonpath: .
-          parser_ref: eb_staged_rebuild.cli._parser
-          parser_module: eb_staged_rebuild.cli
-          parser_function: _parser
-          prog: eb-staged-rebuild
-          out_completions_dir: ${{ runner.temp }}/esr-cli-two/completions
-          out_man_dir: ${{ runner.temp }}/esr-cli-two/man
-          out_bash_file: eb-staged-rebuild.bash
-          out_zsh_file: _eb-staged-rebuild
-          out_man_file: eb-staged-rebuild.1
-      - name: completion and manpage generation is reproducible
+          case "$PYTHON_VERSION" in
+            *t) "$PYTHON" -c "import sysconfig, sys; assert sysconfig.get_config_var('Py_GIL_DISABLED'), sys.version" ;;
+          esac
+          wheel=$(printf '%s\n' dist/*-"$WHEEL_TAG"-*.whl)
+          "$PYTHON" -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "$wheel"
+      - name: site_hooks, ship, the wrapper and _launch, against the installed package
         run: |
-          cmp "${RUNNER_TEMP}/esr-cli-one/completions/eb-staged-rebuild.bash" "${RUNNER_TEMP}/esr-cli-two/completions/eb-staged-rebuild.bash"
-          cmp "${RUNNER_TEMP}/esr-cli-one/completions/_eb-staged-rebuild" "${RUNNER_TEMP}/esr-cli-two/completions/_eb-staged-rebuild"
-          cmp "${RUNNER_TEMP}/esr-cli-one/man/eb-staged-rebuild.1" "${RUNNER_TEMP}/esr-cli-two/man/eb-staged-rebuild.1"
-          ls -1 "${RUNNER_TEMP}/esr-cli-one/completions" "${RUNNER_TEMP}/esr-cli-one/man"
-      - name: every test that imports the Python code has a TESTMAP.md row
-        run: python tests/check_testmap.py
+          cd "$RUNNER_TEMP"
+          export TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild"
+          "$TOOL_BIN" --version
+          "$RUNNER_TEMP/venv/bin/python" -m eb_staged_rebuild --version
+          cp -r "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/docs" "$RUNNER_TEMP/"
+          mkdir -p "$RUNNER_TEMP/zig-out/bin" && ln -s "$TOOL_BIN" "$RUNNER_TEMP/zig-out/bin/eb-staged-rebuild"
+          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_launch tests.test_free_threading tests.test_site_hooks tests.test_ship tests.test_wrapper
+      - name: the black-box command tests through the installed entry point
+        if: matrix.python-version == '3.14'
+        run: |
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install jsonschema
+          TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild" "$RUNNER_TEMP/venv/bin/python" -m unittest -v \
+            tests.test_cli_resolve_blackbox tests.test_cli_status_blackbox_extra tests.test_cli_resume_blackbox \
+            tests.test_cli_gc_blackbox_extra tests.test_cli_retire_blackbox tests.test_cli_rollback_blackbox_extra \
+            tests.test_cli_run_blackbox_extra tests.test_docs_json_output_format_contract tests.test_docs_resolve_json_stdout_contract
 
   integration:
     runs-on: ubuntu-latest
@@ -86,8 +194,6 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
-      - name: ledger CLI
-        uses: ./.github/actions/pinned-ledger
       - name: bubblewrap and Lmod
         run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl acl
       - name: user namespaces for the userns backend
@@ -101,33 +207,14 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
-      - name: promtool 3.16.0
-        uses: ./.github/actions/pinned-promtool
       - run: zig build -Drelease=true
-      - name: generate completion and manpage assets
-        uses: stackhands/.github/.github/actions/parser-cli-assets@main
-        with:
-          pythonpath: .
-          parser_ref: eb_staged_rebuild.cli._parser
-          parser_module: eb_staged_rebuild.cli
-          parser_function: _parser
-          prog: eb-staged-rebuild
-          out_completions_dir: zig-out/share/completions
-          out_man_dir: zig-out/share/man
-          out_bash_file: eb-staged-rebuild.bash
-          out_zsh_file: _eb-staged-rebuild
-          out_man_file: eb-staged-rebuild.1
-      - name: list generated cli assets
-        run: |
-          ls -1 zig-out/share/completions zig-out/share/man
-          test -s zig-out/share/man/eb-staged-rebuild.1
       - name: rebuild stagedemo with the binary
         env:
           EB_STAGED_REBUILD_INTEGRATION: "1"
           LMOD_CMD: /usr/share/lmod/lmod/libexec/lmod
         run: |
           export PATH="/usr/share/lmod/lmod/libexec:${PATH}"
-          TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_easybuild_integration tests.test_easybuild_integration_cli
+          TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_easybuild_integration_cli
 
   docs:
     # The scripts behind the documented output; docs.yml builds the site.
@@ -140,14 +227,20 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: shellcheck -S warning docs/examples/*.sh
-      - run: python -m pip install .
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - run: zig build -Drelease=true
       - name: the tutorial
-        run: bash docs/examples/tutorial.sh
+        run: |
+          export PATH="$PWD/zig-out/bin:${PATH}"
+          bash docs/examples/tutorial.sh
       - name: ledger CLI
         uses: ./.github/actions/pinned-ledger
       - name: bubblewrap and Lmod
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap lmod openssl acl
+        run: sudo apt-get install -y bubblewrap lmod openssl acl
       - name: EasyBuild 5.4.2
         run: python -m pip install easybuild-framework==5.4.2 easybuild-easyblocks==5.4.2 easybuild-easyconfigs==5.4.2
       - name: user namespaces for the userns backend
@@ -156,10 +249,6 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.17.1
-      - run: zig build -Drelease=true
       - name: the example site of the how-to guides, with the binary
         env:
           LMOD_CMD: /usr/share/lmod/lmod/libexec/lmod
@@ -170,81 +259,3 @@ jobs:
           sudo setfacl -b /opt/site
           export PATH="$PWD/zig-out/bin:/usr/share/lmod/lmod/libexec:${PATH}"
           bash docs/examples/site.sh all
-
-  zig:
-    # The Zig build: its unit tests, and the read-only commands compared
-    # with the Python tool.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # argparse's usage wrapping and choice quoting change between Python
-      # releases; the binary prints what Python 3.14 prints.
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.14"
-      # setup-zig checks the tarball's minisign signature against the Zig
-      # project's key.
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.17.1
-      - run: zig fmt --check build.zig build.zig.zon zig
-      - name: fuse3 before the zig tests that compile faultfs
-        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config
-      - run: zig build test --summary all
-      - run: zig build -Drelease=true
-      - name: promtool 3.16.0
-        uses: ./.github/actions/pinned-promtool
-      - name: the release binary carries no test hooks
-        run: |
-          ! grep -aq EB_STAGED_REBUILD_ACL_MODEL zig-out/bin/eb-staged-rebuild
-          ! grep -aq EB_STAGED_REBUILD_FAIL_AT zig-out/bin/eb-staged-rebuild
-          ! grep -aq EB_STAGED_REBUILD_NOW zig-out/bin/eb-staged-rebuild
-          ! zig build -Dtest-ops -Drelease=true
-      - name: the -Dtest-ops test artifact
-        run: zig build -Dtest-ops
-      - name: user namespaces for the user attribute parity test
-        # Ubuntu's AppArmor refuses user namespaces to unconfined programs.
-        run: |
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-      - name: Python unit discovery against the release and test-ops binaries
-        run: |
-          python -m pip install jsonschema
-          EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest discover -s tests -v
-      - name: build.zig.zon's version and -Dcommit reach --version
-        run: bash tests/build_version.sh
-      - run: shellcheck -S warning tests/differential.sh tests/build_version.sh
-      - name: parser error-shape parity against Python 3.14
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_cli_parser_error_shape_parity
-      - name: commands against the Python tool
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/differential.sh
-      - name: a run and a rollback killed at every step, then resumed
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/crash_matrix.py
-      - name: a run signalled while its build command runs
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/signal_harness.py
-      - name: ledger CLI
-        uses: ./.github/actions/pinned-ledger
-      - name: publication access metadata against the Python tool
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python tests/differential_metadata.py
-      - name: ACL publication and ready-unlink parity tests against the test artifact
-        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_acl_publication_cli tests.test_prefix_ready_unlink_parity
-      - name: generations, both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_generations_cli
-      - name: a run and a rollback failed at every step, against the test artifact
-        run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
-      - name: ledger append, recovery and idempotence against eb-stack, both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_eb_stack_cli
-      - name: the bounded ledger call through run, both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_ledger_bounded_cli
-      - name: metrics output and atomic failures against both implementations
-        run: TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python -m unittest -v tests.test_metrics_cli
-      - name: a user attribute the filesystem will not copy
-        run: EB_STAGED_REBUILD_REQUIRE_TESTS=1 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python -m unittest -v tests.test_prefix_user_xattr_parity

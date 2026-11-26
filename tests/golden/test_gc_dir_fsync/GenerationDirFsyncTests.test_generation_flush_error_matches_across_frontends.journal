@@ -1,0 +1,1 @@
+{"schema": 2, "publication": "directory-swap", "run_id": "r1", "state": "complete", "grace_hours": 0, "created_at": 1, "updated_at": 1, "modules_plan": [{"rel": "demo/1", "live_software": "@WORK@/mnt/software/demo/1", "retired": "@WORK@/mnt/software/demo/.1.old", "published_at": 1, "status": "published"}]}

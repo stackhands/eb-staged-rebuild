@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: @WORK@/modules/non-utf8.lua is not UTF-8 text

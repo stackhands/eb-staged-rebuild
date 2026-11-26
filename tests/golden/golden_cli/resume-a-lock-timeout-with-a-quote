@@ -1,0 +1,8 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
+                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+                                [--force]
+                                run_id
+eb-staged-rebuild resume: error: argument --lock-timeout: invalid float value: "a'b"

@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: journal does not record a directory swap; a generation-pointer plan is not applied

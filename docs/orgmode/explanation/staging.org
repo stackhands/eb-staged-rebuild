@@ -57,7 +57,7 @@ Until =gc= removes it, =rollback= exchanges it back, and =gc --keep N= keeps the
 =list= prints the trees kept beside each installation and the run that published each; [[file:../reference/generations.org][The generations of an installation]] describes its output.
 
 The run's id in the hidden name, and in the completion stamp =.eb-staged-rebuild-complete= that the run writes into its new tree, is how a resumed run tells the new tree from the old one; [[file:journal.org][What the journal records]] has the rest.
-[[py:eb_staged_rebuild.engine.run]] and [[zig:eb-staged-rebuild.engine.run]] run all of this in the two builds.
+[[zig:eb-staged-rebuild.engine.run]] runs all of this.
 
 ** What was considered and turned down
 

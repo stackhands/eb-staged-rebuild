@@ -1,0 +1,136 @@
+{
+  "backend": "installpath",
+  "created_at": 1700000000.25,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@WORK@/fake-eb",
+    "--installpath-software=@WORK@/mnt/generations/r1/software",
+    "--installpath-modules=@WORK@/mnt/generations/r1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@WORK@/fake-eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@WORK@/mnt/generations/r1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [],
+  "manifests": {
+    "demo/1": {
+      "device": HOST,
+      "entries": [
+        [
+          "PAYLOAD",
+          "file",
+          INO,
+          4,
+          "01d09d19c2139a46aebfb577780d123d7396e97201bc7ead210a2ebff8239dee"
+        ]
+      ],
+      "exists": true,
+      "inode": HOST,
+      "kind": "dir",
+      "symlink": false
+    }
+  },
+  "message": "",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@WORK@/mnt/modules",
+  "modules_plan": [
+    {
+      "backup": "@WORK@/mnt/runs/r1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@WORK@/mnt/modules/all/demo/1.lua",
+      "live_software": "@WORK@/mnt/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@WORK@/mnt/runs/r1/prepared/all/demo/1.lua",
+      "previous_root": "@WORK@/mnt/software/demo/1",
+      "published_at": null,
+      "rel": "all/demo/1.lua",
+      "retired": "@WORK@/mnt/software/demo/.1.r1",
+      "staged": "@WORK@/mnt/generations/r1/software/demo/1",
+      "status": "pending",
+      "swap_method": null
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": {
+      "installed": true,
+      "path": "/usr/bin/bwrap",
+      "reason": null,
+      "usable": true,
+      "version": "bubblewrap HOST"
+    },
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@WORK@/fake-eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@WORK@/fake-eb",
+      "reason": "eb --version exited 1",
+      "stage_path_keys": null,
+      "version_text": null
+    },
+    "filesystem": {
+      "device": "faultfs",
+      "fstype": "fuse.faultfs",
+      "mount": "@WORK@/mnt",
+      "path": "@WORK@/mnt/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "faultfs",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "fuse.faultfs",
+      "mount": "@WORK@/mnt",
+      "ok": true,
+      "path": "@WORK@/mnt/software"
+    },
+    "user_namespaces": {
+      "max_user_namespaces": HOST,
+      "readable": true,
+      "unprivileged_userns_clone": HOST
+    },
+    "userns_sandbox": {
+      "installed": true,
+      "path": "/usr/bin/unshare",
+      "reason": null,
+      "usable": true
+    }
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "run_id": "r1",
+  "schema": 2,
+  "skip_live_check": false,
+  "software": "@WORK@/mnt/software",
+  "stage_how": "installpath",
+  "stage_modules": "@WORK@/mnt/generations/r1/modules",
+  "stage_software": "@WORK@/mnt/generations/r1/software",
+  "state": "built",
+  "state_root": "@WORK@/mnt",
+  "updated_at": 1700000000.25
+}

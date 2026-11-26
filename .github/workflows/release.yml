@@ -1,9 +1,9 @@
 name: release
 # On a tag vX.Y.Z: build the static binaries, test each on its own
-# architecture against the Python tool, check that the release binary
-# carries no test hook and that its version matches the tag, and open a
-# draft release with the binaries, SHA256SUMS and build provenance
-# attestations.
+# architecture against the golden files, check that the release binary
+# carries no test hook and that its version matches the tag, build the
+# wheels that carry the binary, and open a draft release with the
+# binaries, the wheels, SHA256SUMS and build provenance attestations.
 on:
   push:
     tags: ["v*"]
@@ -24,8 +24,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # argparse's usage wrapping changes between Python releases; the
-      # binary prints what Python 3.14 prints.
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
@@ -55,33 +53,37 @@ jobs:
           if [ "${py}" != "${GITHUB_REF_NAME#v}" ]; then
             echo "versions: tag ${GITHUB_REF_NAME}, Python ${py}"; exit 1
           fi
-      - name: the release binary against the Python tool
+      - name: the release binary against the golden files
         run: |
+          python -m pip install jsonschema
           zig build -Dtest-ops
-          TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" bash tests/differential.sh
+          TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" bash tests/golden_cli.sh
           TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" python tests/crash_matrix.py
           TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" python tests/signal_harness.py
           TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
-          TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" python tests/differential_metadata.py
+          TOOL_BIN="$PWD/out/bin/eb-staged-rebuild" python tests/golden_metadata.py
       - name: package
         run: |
           mkdir dist
           cp out/bin/eb-staged-rebuild "dist/eb-staged-rebuild-${GITHUB_REF_NAME#v}-${{ matrix.arch }}-linux-musl"
-      - name: generate completion and manpage assets
-        uses: stackhands/.github/.github/actions/parser-cli-assets@main
+          cp -r out/share dist/share
+          ls -1 dist/share/completions dist/share/man
+      # The manylinux2014 images build one cp311-abi3 wheel and one wheel for
+      # each of cp313t and cp314t; auditwheel repair tags them manylinux. The
+      # static binary built above rides along as package data.
+      - name: wheels that carry the binary
+        uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084 # v3.4.1
         with:
-          pythonpath: .
-          parser_ref: eb_staged_rebuild.cli._parser
-          parser_module: eb_staged_rebuild.cli
-          parser_function: _parser
-          prog: eb-staged-rebuild
-          out_completions_dir: dist/share/completions
-          out_man_dir: dist/share/man
-          out_bash_file: eb-staged-rebuild.bash
-          out_zsh_file: _eb-staged-rebuild
-          out_man_file: eb-staged-rebuild.1
-      - name: list generated cli assets
-        run: ls -1 dist/share/completions dist/share/man
+          output-dir: dist
+      - name: check the wheels
+        run: |
+          python -m pip install --quiet auditwheel
+          test "$(ls dist/*.whl | wc -l)" -eq 3
+          for wheel in dist/*.whl; do
+            python tools/check_wheel.py "$wheel"
+            auditwheel show "$wheel"
+          done
+          ls -l dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bin-${{ matrix.arch }}
@@ -120,7 +122,7 @@ jobs:
             -czf "dist/eb-staged-rebuild-${GITHUB_REF_NAME#v}-share.tar.gz" share
           rm -r dist/share
           tar -tzf "dist/eb-staged-rebuild-${GITHUB_REF_NAME#v}-share.tar.gz"
-      - run: cd dist && sha256sum eb-staged-rebuild-* > SHA256SUMS && cat SHA256SUMS
+      - run: cd dist && sha256sum eb-staged-rebuild-* eb_staged_rebuild-*.whl > SHA256SUMS && cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*

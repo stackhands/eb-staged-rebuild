@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild status [-h] --state-root STATE_ROOT [--json] [run_id]
+eb-staged-rebuild status: error: the following arguments are required: --state-root

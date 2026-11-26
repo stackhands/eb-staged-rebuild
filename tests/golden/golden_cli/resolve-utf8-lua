@@ -1,0 +1,11 @@
+exit 1
+--- stdout
+{
+  "complete": false,
+  "kind": "file",
+  "path": "@WORK@/modules/utf8.lua",
+  "root": "/tmp/\u00e9t\u00e9",
+  "root_kind": "missing",
+  "syntax": "lua"
+}
+--- stderr
