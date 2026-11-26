@@ -57,13 +57,15 @@ settle() {
 }
 
 # hostfacts: what the probe reads from this host's kernel, file system and
-# bwrap. The stub bwrap's version, 0.11.0, stays.
+# bwrap, and the --version text of the /bin/false some cases give as eb
+# (GNU or uutils coreutils). The stub bwrap's version, 0.11.0, stays.
 hostfacts() {
     sed -E -e 's/(user\.max_user_namespaces|kernel\.unprivileged_userns_clone): [0-9]+/\1: HOST/' \
         -e 's/RENAME_EXCHANGE on [A-Za-z0-9_.]+:/RENAME_EXCHANGE on HOST:/' \
         -e '/bubblewrap 0\.11\.0/!s/(\(|"version": ")bubblewrap [0-9][0-9.]*/\1bubblewrap HOST/g' \
         -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
-        -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g'
+        -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g' \
+        -e 's#"version_text": "false \([^"]*"#"version_text": "HOST"#g'
 }
 
 # sandbox: the user-namespace sandbox command, as one line or as the items of

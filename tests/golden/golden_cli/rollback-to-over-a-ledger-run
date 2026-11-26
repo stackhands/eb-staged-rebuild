@@ -4897,7 +4897,7 @@ eb-staged-rebuild: journal does not record state_root
       "path": "/bin/false",
       "reason": "eb --version exited 1",
       "stage_path_keys": null,
-      "version_text": "false (GNU coreutils) 9.12\nCopyright (C) 2026 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>.\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\nWritten by Jim Meyering."
+      "version_text": "HOST"
     },
     "filesystem": {
       "device": "HOST",
