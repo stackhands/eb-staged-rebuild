@@ -51,6 +51,8 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: build the _launch extension in place
+        run: python -m pip install setuptools && python setup.py build_ext --inplace
       - name: tests against the release and test-ops binaries
         run: |
           python -m pip install jsonschema
@@ -69,11 +71,22 @@ jobs:
       - name: a run and a rollback failed at every step, against the test artifact
         run: TOOL_BIN_TEST_OPS="$PWD/zig-out/bin/eb-staged-rebuild-test-ops" python tests/fail_matrix.py
 
-  python:
-    # The Python package is the binary plus site_hooks and ship: build the
-    # wheel with the binary in it, install it, and test it as installed.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  wheels:
+    # cibuildwheel builds the wheels in the manylinux2014 images: one abi3
+    # wheel from CPython 3.11 for every GIL CPython, and one wheel for each of
+    # the free-threaded 3.13t and 3.14t. Each carries the static binary, built
+    # for the same architecture.
+    name: wheels (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-latest
+          - arch: aarch64
+            os: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,69 +97,91 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.17.1
-      - name: build the wheel
+      - name: build the static binary the wheels carry
+        run: zig build -Drelease=true -Dtarget=${{ matrix.arch }}-linux-musl --prefix out
+      - uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+        with:
+          output-dir: dist
+      - name: the tag and contents of every wheel
         run: |
-          python -m pip install build
-          python -m build --wheel --outdir dist
-          ls -l dist
-      - name: the wheel carries the binary
-        run: unzip -l dist/*.whl | grep -F eb_staged_rebuild/bin/eb-staged-rebuild
-      - name: the wheel is py3-none, carries no extension module and says it supports free threading
-        run: python tools/check_wheel.py dist/*.whl
+          python -m pip install --quiet auditwheel
+          ls dist
+          test "$(ls dist/*.whl | wc -l)" -eq 3
+          for wheel in dist/*.whl; do
+            python tools/check_wheel.py "$wheel"
+            auditwheel show "$wheel"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-${{ matrix.arch }}
+          path: dist/
+
+  wheel-install:
+    # The x86_64 wheels from the wheels job, installed on each CPython they
+    # serve and tested as installed: importing _launch keeps the GIL off on a
+    # free-threaded build, the entry points run the bundled binary, and calls
+    # from many threads agree.
+    needs: wheels
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.11"
+            wheel-tag: cp311-abi3
+          - python-version: "3.12"
+            wheel-tag: cp311-abi3
+          - python-version: "3.14"
+            wheel-tag: cp311-abi3
+          - python-version: "3.13t"
+            wheel-tag: cp313-cp313t
+          - python-version: "3.14t"
+            wheel-tag: cp314-cp314t
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        id: python
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wheels-x86_64
+          path: dist
       - name: install the wheel in a clean environment
+        env:
+          PYTHON: ${{ steps.python.outputs.python-path }}
+          WHEEL_TAG: ${{ matrix.wheel-tag }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl jsonschema
-      - name: site_hooks, ship and the wrapper, against the installed package
+          case "$PYTHON_VERSION" in
+            *t) "$PYTHON" -c "import sysconfig, sys; assert sysconfig.get_config_var('Py_GIL_DISABLED'), sys.version" ;;
+          esac
+          wheel=$(printf '%s\n' dist/*-"$WHEEL_TAG"-*.whl)
+          "$PYTHON" -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "$wheel" jsonschema
+      - name: site_hooks, ship, the wrapper and _launch, against the installed package
         run: |
           cd "$RUNNER_TEMP"
           export TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild"
-          "$RUNNER_TEMP/venv/bin/eb-staged-rebuild" --version
+          "$TOOL_BIN" --version
           "$RUNNER_TEMP/venv/bin/python" -m eb_staged_rebuild --version
           cp -r "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/docs" "$RUNNER_TEMP/"
           mkdir -p "$RUNNER_TEMP/zig-out/bin" && ln -s "$TOOL_BIN" "$RUNNER_TEMP/zig-out/bin/eb-staged-rebuild"
-          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_site_hooks tests.test_ship tests.test_wrapper tests.test_free_threading
+          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_launch tests.test_free_threading tests.test_site_hooks tests.test_ship tests.test_wrapper
       - name: the black-box command tests through the installed entry point
+        if: matrix.python-version == '3.14'
         run: |
           cd "$RUNNER_TEMP"
           TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild" "$RUNNER_TEMP/venv/bin/python" -m unittest -v \
             tests.test_cli_resolve_blackbox tests.test_cli_status_blackbox_extra tests.test_cli_resume_blackbox \
             tests.test_cli_gc_blackbox_extra tests.test_cli_retire_blackbox tests.test_cli_rollback_blackbox_extra \
             tests.test_cli_run_blackbox_extra tests.test_docs_json_output_format_contract tests.test_docs_resolve_json_stdout_contract
-
-  free-threading:
-    # The same wheel on a free-threaded CPython: it installs, importing it keeps
-    # the GIL off, and the package answers calls from many threads.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.13t", "3.14t"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python-version }}
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
-        with:
-          version: 0.17.1
-      - name: build the wheel
-        run: |
-          python -m pip install build
-          python -m build --wheel --outdir dist
-          python tools/check_wheel.py dist/*.whl
-      - name: install it and test it as installed
-        run: |
-          python -c "import sysconfig, sys; assert sysconfig.get_config_var('Py_GIL_DISABLED'), sys.version"
-          python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl
-          cd "$RUNNER_TEMP"
-          cp -r "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/docs" "$RUNNER_TEMP/"
-          export TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild"
-          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_free_threading tests.test_wrapper tests.test_site_hooks tests.test_ship
 
   integration:
     runs-on: ubuntu-latest
