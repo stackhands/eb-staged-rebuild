@@ -9,6 +9,7 @@ parent for the new name. A flush error on the source parent fails the run.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -65,7 +66,10 @@ class StageSourceDirFsyncTests(unittest.TestCase):
         golden(self, "stdout", scrub(done.stdout, WORK=work))
         golden(self, "stderr", scrub(done.stderr, WORK=work))
         self.assertIsInstance(done.journal, bytes)
-        golden(self, "journal", scrub(done.journal.decode("utf-8", "surrogateescape"), WORK=work))
+        journal = scrub(done.journal.decode("utf-8", "surrogateescape"), WORK=work)
+        # The module file's hash covers the work directory's name, which holds the pid.
+        journal = re.sub(r'"((?:new|old)_hash)": "[0-9a-f]{64}"', r'"\1": "HASH"', journal)
+        golden(self, "journal", journal)
         self.assertIn(b'"created_at": 1700000000.25', done.journal)
         self.assertIn(b'"updated_at": 1700000000.25', done.journal)
 
