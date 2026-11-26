@@ -332,7 +332,7 @@ def run_command(cmd, env, faults, step):
         if interrupted[0] is not None:
             _signal_group(child, signal.SIGTERM)
             deadline = time.monotonic() + 2
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and _group_running(child.pid):
                 time.sleep(min(0.02, max(0, deadline - time.monotonic())))
         # The unreaped leader reserves the process-group identifier. Stray
         # workers must not retain write access beyond command completion.

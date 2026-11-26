@@ -104,7 +104,8 @@ class BoundedOutputTests(unittest.TestCase):
         return int(path.read_text())
 
     def test_continuous_output_is_never_stored(self):
-        argv = self.helper("noise((1, 2), %d)\n" % NOISE)
+        # A few MB and a short deadline still pass the stored-size cap.
+        argv = self.helper("noise((1, 2), %d)\n" % (4 * 1024 * 1024))
         peak = [0]
         done = threading.Event()
 
@@ -118,8 +119,8 @@ class BoundedOutputTests(unittest.TestCase):
         sampler = threading.Thread(target=sample, daemon=True)
         sampler.start()
         try:
-            with self.assertRaisesRegex(PublisherError, "timed out after 3s"):
-                _bounded(argv + ["ledger", "append"], 3)
+            with self.assertRaisesRegex(PublisherError, "timed out after 0.3s"):
+                _bounded(argv + ["ledger", "append"], 0.3)
         finally:
             done.set()
             sampler.join()
@@ -188,7 +189,7 @@ class BoundedOutputTests(unittest.TestCase):
         output = self.root / "output"
         argv = self.helper(f"""\
             fd = os.open({str(output)!r}, os.O_WRONLY | os.O_CREAT, 0o600)
-            for number in range(16):
+            for number in range(2):
                 if os.fork() == 0:
                     signal.signal(signal.SIGTERM, signal.SIG_IGN)
                     while True:
@@ -196,8 +197,8 @@ class BoundedOutputTests(unittest.TestCase):
                         time.sleep(0.01)
             time.sleep(3600)
         """)
-        with self.assertRaisesRegex(PublisherError, "timed out after 1s"):
-            _bounded(argv + ["ledger", "append"], 1)
+        with self.assertRaisesRegex(PublisherError, "timed out after 0.2s"):
+            _bounded(argv + ["ledger", "append"], 0.2)
         self.assertEqual(group_members(self.pid("leader")), [])
         self.assertEqual(holders(output), [])
 

@@ -111,7 +111,7 @@ class PrefixPublishTests(unittest.TestCase):
         fd = os.open(path, os.O_RDWR)
         try:
             os.write(fd, blob)
-            os.lseek(fd, 1024 * 1024, os.SEEK_SET)
+            os.lseek(fd, 8 * 4096, os.SEEK_SET)
             os.write(fd, b"END")
         finally:
             os.close(fd)

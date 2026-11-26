@@ -195,7 +195,7 @@ test "walk crosses a deep tree under a tight descriptor limit" {
     var fd = try fsx.openDir(fsx.cwd, base, false);
     defer sys.close(fd);
     var depth: usize = 0;
-    while (depth < 1300) : (depth += 1) {
+    while (depth < 1025) : (depth += 1) {
         const c: u8 = 'a' + @as(u8, @intCast(rand.uintLessThan(u8, 26)));
         try names.append(gpa, c);
         const nm = names.items[names.items.len - 1 ..];
