@@ -164,7 +164,7 @@ jobs:
           esac
           wheel=$(printf '%s\n' dist/*-"$WHEEL_TAG"-*.whl)
           "$PYTHON" -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/python" -m pip install "$wheel" jsonschema
+          "$RUNNER_TEMP/venv/bin/python" -m pip install "$wheel"
       - name: site_hooks, ship, the wrapper and _launch, against the installed package
         run: |
           cd "$RUNNER_TEMP"
@@ -178,6 +178,7 @@ jobs:
         if: matrix.python-version == '3.14'
         run: |
           cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install jsonschema
           TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild" "$RUNNER_TEMP/venv/bin/python" -m unittest -v \
             tests.test_cli_resolve_blackbox tests.test_cli_status_blackbox_extra tests.test_cli_resume_blackbox \
             tests.test_cli_gc_blackbox_extra tests.test_cli_retire_blackbox tests.test_cli_rollback_blackbox_extra \
