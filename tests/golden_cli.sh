@@ -228,7 +228,7 @@ norm() {
         -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" \
         -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
         -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
-        -e 's#"device": [0-9]+#"device": HOST#' -e 's#^( {6})[0-9]{5,}(,?)$#\1INO\2#' \
+        -e 's#"(device|inode)": [0-9]+#"\1": HOST#' -e 's#^( {6})[0-9]{5,}(,?)$#\1INO\2#' \
         -e 's#pid [0-9]+ has a file open#pid PID has a file open#' |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
     # The sandbox command in a journal's eb_command list, one item per line.

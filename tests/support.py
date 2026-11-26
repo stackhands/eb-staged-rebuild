@@ -413,7 +413,7 @@ def scrub(text, **placeholders):
             if resolved != value:
                 text = text.replace(resolved, f"@{name}@")
     # A journal's snapshot records the device and inode numbers of the host.
-    text = re.sub(r'"device": [0-9]+', '"device": HOST', text)
+    text = re.sub(r'"(device|inode)": [0-9]+', r'"\1": HOST', text)
     return re.sub(r"^( {6,})[0-9]{5,}(,?)$", r"\1INO\2", text, flags=re.M)
 
 
