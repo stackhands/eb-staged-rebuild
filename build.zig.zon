@@ -10,6 +10,8 @@
         "build.zig",
         "build.zig.zon",
         "zig",
+        "share",
+        "eb_staged_rebuild/site_hooks.py",
         "LICENSE",
         "README.md",
     },

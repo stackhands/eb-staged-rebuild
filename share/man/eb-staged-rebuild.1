@@ -1,0 +1,342 @@
+.TH EB\-STAGED\-REBUILD "1" "2026\-11\-26" "eb\-staged\-rebuild" "eb\-staged\-rebuild Manual"
+.SH NAME
+eb\-staged\-rebuild
+.SH SYNOPSIS
+.B eb\-staged\-rebuild
+[-h] [--version] {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
+.SH DESCRIPTION
+Build EasyBuild software in a staged tree, then exchange the complete tree with the stable live directory.
+
+.SH
+POSITIONAL ARGUMENTS
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,probe\/\fR
+report bwrap, user namespaces, RENAME_EXCHANGE, and EasyBuild
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,run\/\fR
+build and atomically swap a staged tree
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,resume\/\fR
+continue a run after a crash
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,verify\/\fR
+check a built run's stage before it is published
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,rollback\/\fR
+switch back to the previous generation or a named one, or put a retired module file back
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,gc\/\fR
+remove hidden retired siblings after the grace period
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,retire\/\fR
+move a module file out of the module tree after its package is published elsewhere
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,status\/\fR
+show run journals
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,list\/\fR
+show each install path's live tree and the generations kept beside it
+.TP
+\fBeb\-staged\-rebuild\fR \fI\,resolve\/\fR
+print the install path a module file names
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild probe'\/\fR
+usage: eb\-staged\-rebuild probe [\-h] [\-\-path PATH] [\-\-no\-create] [\-\-eb EB]
+                               [\-\-require\-eb] [\-\-json]
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild probe'\/\fR
+.TP
+\fB\-\-path\fR \fI\,PATH\/\fR
+directory on the filesystem to probe (default: .)
+
+.TP
+\fB\-\-no\-create\fR
+refuse when \-\-path does not exist instead of creating it for the probe
+
+.TP
+\fB\-\-eb\fR \fI\,EB\/\fR
+
+.TP
+\fB\-\-require\-eb\fR
+refuse when the EasyBuild command is not available
+
+.TP
+\fB\-\-json\fR
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild run'\/\fR
+usage: eb\-staged\-rebuild run [\-h] [\-\-software SOFTWARE] [\-\-modules MODULES]
+                             [\-\-state\-root STATE_ROOT] [\-\-eb EB]
+                             [\-\-backend {auto,bwrap,userns,installpath}]
+                             [\-\-grace\-hours GRACE_HOURS] [\-\-dry\-run]
+                             [\-\-module NAME/VERSION] [\-\-run\-id RUN_ID]
+                             [\-\-lock\-timeout LOCK_TIMEOUT] [\-\-skip\-live\-check]
+                             [\-\-prepare PREPARE]
+                             [\-\-ledger\-config LEDGER_CONFIG] [\-\-build\-dir DIR]
+                             [\-\-min\-free\-bytes BYTES] [\-\-require\-exchange]
+                             [\-\-verify] [\-\-force]
+                             ...
+
+.TP
+\fBeb_args\fR
+easyconfig and eb options, after \-\-
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild run'\/\fR
+.TP
+\fB\-\-software\fR \fI\,SOFTWARE\/\fR
+live EASYBUILD_INSTALLPATH_SOFTWARE
+
+.TP
+\fB\-\-modules\fR \fI\,MODULES\/\fR
+live EASYBUILD_INSTALLPATH_MODULES
+
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+journal and stage root (default: <parent of software>/.eb\-staged\-rebuild)
+
+.TP
+\fB\-\-eb\fR \fI\,EB\/\fR
+EasyBuild executable
+
+.TP
+\fB\-\-backend\fR \fI\,{auto,bwrap,userns,installpath}\/\fR
+build isolation: auto tries bwrap, then a read\-only user namespace, then the
+unsandboxed install\-path fallback
+
+.TP
+\fB\-\-grace\-hours\fR \fI\,GRACE_HOURS\/\fR
+
+.TP
+\fB\-\-dry\-run\fR
+
+.TP
+\fB\-\-module\fR \fI\,NAME/VERSION\/\fR
+
+.TP
+\fB\-\-run\-id\fR \fI\,RUN_ID\/\fR
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+
+.TP
+\fB\-\-skip\-live\-check\fR
+
+.TP
+\fB\-\-prepare\fR \fI\,PREPARE\/\fR
+executable called with a directory\-swap context JSON before the live directory
+is exchanged
+
+.TP
+\fB\-\-ledger\-config\fR \fI\,LEDGER_CONFIG\/\fR
+JSON eb\-stack ledger configuration; started records precede the directory swap
+
+.TP
+\fB\-\-build\-dir\fR \fI\,DIR\/\fR
+scratch build directory passed to eb as \-\-buildpath
+
+.TP
+\fB\-\-min\-free\-bytes\fR \fI\,BYTES\/\fR
+refuse before the build unless the generation filesystem has at least BYTES
+available
+
+.TP
+\fB\-\-require\-exchange\fR
+refuse unless publication can use RENAME_EXCHANGE
+
+.TP
+\fB\-\-verify\fR
+check the stage before the swap, and do not publish one that fails
+
+.TP
+\fB\-\-force\fR
+with \-\-verify, publish a stage that fails; the journal records it
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild resume'\/\fR
+usage: eb\-staged\-rebuild resume [\-h] \-\-state\-root STATE_ROOT
+                                [\-\-lock\-timeout LOCK_TIMEOUT] [\-\-verify]
+                                [\-\-force]
+                                run_id
+
+.TP
+\fBrun_id\fR
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild resume'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+
+.TP
+\fB\-\-verify\fR
+check the stage before the swap, as run \-\-verify does
+
+.TP
+\fB\-\-force\fR
+with \-\-verify, publish a stage that fails; the journal records it
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild verify'\/\fR
+usage: eb\-staged\-rebuild verify [\-h] \-\-state\-root STATE_ROOT
+                                [\-\-lock\-timeout LOCK_TIMEOUT]
+                                STAGE
+
+.TP
+\fBSTAGE\fR
+the run id that names the stage
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild verify'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild rollback'\/\fR
+usage: eb\-staged\-rebuild rollback [\-h] \-\-state\-root STATE_ROOT
+                                  [\-\-lock\-timeout LOCK_TIMEOUT] [\-\-to GEN]
+                                  [\-\-latest]
+                                  run_id
+
+.TP
+\fBrun_id\fR
+the run to roll back, unless \-\-latest or \-\-to is given
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild rollback'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+
+.TP
+\fB\-\-to\fR \fI\,GEN\/\fR
+roll back every run published over run GEN
+
+.TP
+\fB\-\-latest\fR
+roll back the newest complete run
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild gc'\/\fR
+usage: eb\-staged\-rebuild gc [\-h] \-\-state\-root STATE_ROOT
+                            [\-\-grace\-hours GRACE_HOURS] [\-\-dry\-run]
+                            [\-\-lock\-timeout LOCK_TIMEOUT]
+                            [\-\-usage\-log USAGE_LOG]
+                            [\-\-eb\-keep\-logs EB_KEEP_LOGS]
+                            [\-\-metrics\-file PATH] [\-\-include\-failed] [\-\-json]
+                            [\-\-keep N] [\-\-check\-in\-use]
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild gc'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-grace\-hours\fR \fI\,GRACE_HOURS\/\fR
+
+.TP
+\fB\-\-dry\-run\fR
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+
+.TP
+\fB\-\-usage\-log\fR \fI\,USAGE_LOG\/\fR
+usage log checked with eb\-keep\-logs used \-\-require\-none
+
+.TP
+\fB\-\-eb\-keep\-logs\fR \fI\,EB_KEEP_LOGS\/\fR
+eb\-keep\-logs executable
+
+.TP
+\fB\-\-metrics\-file\fR \fI\,PATH\/\fR
+atomically write Prometheus metrics after garbage collection
+
+.TP
+\fB\-\-include\-failed\fR
+also remove the hidden trees and generation of a failed run that published
+nothing, after the grace period
+
+.TP
+\fB\-\-json\fR
+write collection actions as JSON
+
+.TP
+\fB\-\-keep\fR \fI\,N\/\fR
+keep each install path's N newest generations that rollback can switch back to
+
+.TP
+\fB\-\-check\-in\-use\fR
+keep a tree or generation that a process or a mount on this node uses
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild retire'\/\fR
+usage: eb\-staged\-rebuild retire [\-h] \-\-state\-root STATE_ROOT
+                                \-\-module\-file MODULE_FILE [\-\-reason REASON]
+                                [\-\-dry\-run] [\-\-usage\-log USAGE_LOG]
+                                [\-\-eb\-keep\-logs EB_KEEP_LOGS]
+                                [\-\-lock\-timeout LOCK_TIMEOUT]
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild retire'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-module\-file\fR \fI\,MODULE_FILE\/\fR
+module file to retire
+
+.TP
+\fB\-\-reason\fR \fI\,REASON\/\fR
+
+.TP
+\fB\-\-dry\-run\fR
+
+.TP
+\fB\-\-usage\-log\fR \fI\,USAGE_LOG\/\fR
+usage log checked with eb\-keep\-logs used \-\-require\-none
+
+.TP
+\fB\-\-eb\-keep\-logs\fR \fI\,EB_KEEP_LOGS\/\fR
+eb\-keep\-logs executable
+
+.TP
+\fB\-\-lock\-timeout\fR \fI\,LOCK_TIMEOUT\/\fR
+seconds to wait for the lock (default: refuse at once)
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild status'\/\fR
+usage: eb\-staged\-rebuild status [\-h] \-\-state\-root STATE_ROOT [\-\-json] [run_id]
+
+.TP
+\fBrun_id\fR
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild status'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.TP
+\fB\-\-json\fR
+print one JSON document
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild list'\/\fR
+usage: eb\-staged\-rebuild list [\-h] \-\-state\-root STATE_ROOT
+
+.SH OPTIONS \fI\,'eb\-staged\-rebuild list'\/\fR
+.TP
+\fB\-\-state\-root\fR \fI\,STATE_ROOT\/\fR
+
+.SH COMMAND \fI\,'eb\-staged\-rebuild resolve'\/\fR
+usage: eb\-staged\-rebuild resolve [\-h] module
+
+.TP
+\fBmodule\fR
+
+.SH OPTIONS
+.TP
+\fB\-\-version\fR
+show program's version number and exit
+
+.SH AUTHOR
+.nf
+Rohit Goswami
+.fi
+
+.SH DISTRIBUTION
+The latest version of eb\-staged\-rebuild may be downloaded from
+.UR https://github.com/stackhands/eb\-staged\-rebuild
+.UE
