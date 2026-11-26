@@ -2,7 +2,8 @@
 
 The wheel carries the binary under ``eb_staged_rebuild/bin``. ``python3 -m
 eb_staged_rebuild`` and the ``eb-staged-rebuild`` console script replace the
-Python process with it, so there is one implementation of every command.
+Python process with it through ``_launch``, a C extension over ``execv(2)``, so there
+is one implementation of every command.
 
 ``site_hooks`` (an EasyBuild hook file) and ``ship`` (a checksum list for a
 copied install) are the Python-only parts.
@@ -16,6 +17,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from . import _launch
 
 __version__ = "2.0.1"
 
@@ -69,5 +72,5 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execv(binary, [BINARY_NAME, *args])
-    return 0  # os.execv does not return
+    _launch.execv(binary, [BINARY_NAME, *args])
+    return 0  # _launch.execv does not return
