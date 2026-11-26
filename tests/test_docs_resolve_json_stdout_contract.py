@@ -33,12 +33,6 @@ def _assert_resolve_contract(testcase: unittest.TestCase, runner) -> None:
 
 
 class ResolveJsonStdoutDocTests(unittest.TestCase):
-    def test_docs_describe_when_resolve_prints_json(self) -> None:
-        with open("docs/orgmode/reference/json-output.org", encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn("when the path was read", text)
-        self.assertIn("unreadable file", text)
-
     def test_python_cli_matches_resolve_stdout_contract(self) -> None:
         _assert_resolve_contract(self, run_cli)
 

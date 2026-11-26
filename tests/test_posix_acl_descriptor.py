@@ -58,21 +58,18 @@ class PosixAclDescriptorTests(unittest.TestCase):
         os.setxattr(path, POSIX, value)
         return path, os.getxattr(path, POSIX)
 
-    def test_mask_wider_than_group_owner_round_trips_with_its_mode(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path, stored = self.module(directory, acl(6, 6, 4, 6, 0), 0o660)
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o660)
-            atomic_write(path, "new", None, "replace")
-            self.assertEqual(os.getxattr(path, POSIX), stored)
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o660)
-
-    def test_mask_narrower_than_group_owner_round_trips_with_its_mode(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path, stored = self.module(directory, acl(6, 6, 6, 4, 4), 0o644)
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
-            atomic_write(path, "new", None, "replace")
-            self.assertEqual(os.getxattr(path, POSIX), stored)
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o644)
+    def test_mask_on_either_side_of_the_group_owner_round_trips_with_its_mode(self):
+        rows = (
+            ("wider", acl(6, 6, 4, 6, 0), 0o660),
+            ("narrower", acl(6, 6, 6, 4, 4), 0o644),
+        )
+        for side, value, mode in rows:
+            with self.subTest(mask=side), tempfile.TemporaryDirectory() as directory:
+                path, stored = self.module(directory, value, mode)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
+                atomic_write(path, "new", None, "replace")
+                self.assertEqual(os.getxattr(path, POSIX), stored)
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), mode)
 
     def test_requested_mode_that_contradicts_the_mask_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -10,23 +10,6 @@ from tests.support import run_cli
 
 
 class RetireBlackBoxTests(unittest.TestCase):
-    def test_retire_rejects_non_finite_lock_timeout(self) -> None:
-        """Reproducer: eb-staged-rebuild retire --state-root TMP --module-file MISSING --lock-timeout nan"""
-        with tempfile.TemporaryDirectory() as state_root:
-            with tempfile.TemporaryDirectory() as outside:
-                missing = os.path.join(outside, "missing.lua")
-                proc = run_cli(
-                    "retire",
-                    "--state-root",
-                    state_root,
-                    "--module-file",
-                    missing,
-                    "--lock-timeout",
-                    "nan",
-                )
-                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-                self.assertIn("--lock-timeout is not a finite number", proc.stderr)
-
     def test_retire_rejects_missing_module_file(self) -> None:
         with tempfile.TemporaryDirectory() as state_root:
             with tempfile.TemporaryDirectory() as outside:

@@ -221,68 +221,43 @@ class EasyBuildIntegrationTests(unittest.TestCase):
         watcher.stop.set()
         watcher.join(timeout=5)
 
-    def test_installpath_backend_keeps_the_live_file(self):
-        with tempfile.TemporaryDirectory() as work:
-            prefix, src, ec, live, module = self._install_v1(work)
-            inode = os.lstat(live).st_ino
-            self._retarget(src, ec, "payload-v2\n")
-            watcher = Watcher(
-                os.path.join(live, "stagedemo-1.txt"),
-                {"payload-v1\n", "payload-v2\n"},
-            )
-            watcher.start()
-            try:
-                result = self._rebuild(prefix, ec, src, "installpath")
-            finally:
-                self.stop_watcher(watcher)
-            self.assertEqual(result.returncode, 0, result.message)
-            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
+    def test_backend_keeps_the_live_file(self):
+        from eb_staged_rebuild.probe import probe_bwrap, probe_userns_sandbox
 
-    def test_bwrap_backend_keeps_the_live_file(self):
-        from eb_staged_rebuild.probe import probe_bwrap
-
-        probe = probe_bwrap()
-        if not probe.get("usable"):
-            self.skipTest(f"bwrap is not usable here: {probe.get('reason')}")
-        with tempfile.TemporaryDirectory() as work:
-            prefix, src, ec, live, module = self._install_v1(work)
-            inode = os.lstat(live).st_ino
-            self._retarget(src, ec, "payload-v2\n")
-            watcher = Watcher(
-                os.path.join(live, "stagedemo-1.txt"),
-                {"payload-v1\n", "payload-v2\n"},
-            )
-            watcher.start()
-            try:
-                result = self._rebuild(prefix, ec, src, "bwrap")
-            finally:
-                self.stop_watcher(watcher)
-            self.assertEqual(result.returncode, 0, result.message)
-            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
-            self.assertFalse(os.path.islink(live))
-
-    def test_userns_backend_keeps_the_live_file(self):
-        from eb_staged_rebuild.probe import probe_userns_sandbox
-
-        probe = probe_userns_sandbox()
-        if not probe.get("usable"):
-            self.skipTest(f"the user-namespace sandbox is not usable here: {probe.get('reason')}")
-        with tempfile.TemporaryDirectory() as work:
-            prefix, src, ec, live, module = self._install_v1(work)
-            inode = os.lstat(live).st_ino
-            self._retarget(src, ec, "payload-v2\n")
-            watcher = Watcher(
-                os.path.join(live, "stagedemo-1.txt"),
-                {"payload-v1\n", "payload-v2\n"},
-            )
-            watcher.start()
-            try:
-                result = self._rebuild(prefix, ec, src, "userns")
-            finally:
-                self.stop_watcher(watcher)
-            self.assertEqual(result.returncode, 0, result.message)
-            self._assert_switched(live, module, inode, watcher, "payload-v2\n")
-            self.assertEqual(os.stat(os.path.join(live, "stagedemo-1.txt")).st_uid, os.getuid())
+        rows = (
+            ("installpath", None),
+            ("bwrap", "symlink"),
+            ("userns", "uid"),
+        )
+        for backend, extra in rows:
+            with self.subTest(backend=backend):
+                if backend == "bwrap":
+                    probe = probe_bwrap()
+                    if not probe.get("usable"):
+                        self.skipTest(f"bwrap is not usable here: {probe.get('reason')}")
+                elif backend == "userns":
+                    probe = probe_userns_sandbox()
+                    if not probe.get("usable"):
+                        self.skipTest(f"the user-namespace sandbox is not usable here: {probe.get('reason')}")
+                with tempfile.TemporaryDirectory() as work:
+                    prefix, src, ec, live, module = self._install_v1(work)
+                    inode = os.lstat(live).st_ino
+                    self._retarget(src, ec, "payload-v2\n")
+                    watcher = Watcher(
+                        os.path.join(live, "stagedemo-1.txt"),
+                        {"payload-v1\n", "payload-v2\n"},
+                    )
+                    watcher.start()
+                    try:
+                        result = self._rebuild(prefix, ec, src, backend)
+                    finally:
+                        self.stop_watcher(watcher)
+                    self.assertEqual(result.returncode, 0, result.message)
+                    self._assert_switched(live, module, inode, watcher, "payload-v2\n")
+                    if extra == "symlink":
+                        self.assertFalse(os.path.islink(live))
+                    elif extra == "uid":
+                        self.assertEqual(os.stat(os.path.join(live, "stagedemo-1.txt")).st_uid, os.getuid())
 
     def _rebuild_with_deps(self, backend, robot=False):
         """Rebuild the stagedemo/1 of _install_with_deps with no MODULEPATH, as a new login shell has."""

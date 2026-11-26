@@ -19,7 +19,24 @@ from tests.support import PROBES, classic_install, installpath_builder
 
 
 class HardKillTests(unittest.TestCase):
-    def test_sigkill_during_publish_fallback_resumes_once(self):
+    def test_sigkill_at_a_pause_point(self):
+        rows = (
+            ("swap:all/demo/1.lua.fallback.staged-to-live", self._sigkill_during_publish_fallback_resumes_once),
+            ("swap:all/demo/1.lua.exchange.after", self._sigkill_right_after_rename_exchange_resumes_to_published),
+            (
+                "rollback.swap:all/demo/1.lua.exchange.after",
+                self._sigkill_right_after_rollback_exchange_rolls_back_once,
+            ),
+            (
+                "rollback.swap:all/demo/1.lua.fallback.staged-to-live",
+                self._sigkill_during_rollback_fallback_is_idempotent,
+            ),
+        )
+        for pause, case in rows:
+            with self.subTest(pause=pause):
+                case()
+
+    def _sigkill_during_publish_fallback_resumes_once(self):
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")
             modules = os.path.join(root, "modules")
@@ -91,7 +108,7 @@ class HardKillTests(unittest.TestCase):
             self.assertEqual(again.returncode, 0, again.message)
             self.assertEqual(open(builds, encoding="utf-8").read(), "1")
 
-    def test_sigkill_right_after_rename_exchange_resumes_to_published(self):
+    def _sigkill_right_after_rename_exchange_resumes_to_published(self):
         # The exchange happened and the journal does not say so: the live
         # directory holds this run's tree and the retired name the old one.
         with tempfile.TemporaryDirectory() as root:
@@ -165,7 +182,7 @@ class HardKillTests(unittest.TestCase):
             with open(os.path.join(install, "PAYLOAD"), encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "v0\n")
 
-    def test_sigkill_right_after_rollback_exchange_rolls_back_once(self):
+    def _sigkill_right_after_rollback_exchange_rolls_back_once(self):
         # The rollback exchange happened and the journal does not say so; a
         # second rollback must not exchange the trees again.
         with tempfile.TemporaryDirectory() as root:
@@ -229,7 +246,7 @@ class HardKillTests(unittest.TestCase):
             with open(os.path.join(install, "PAYLOAD"), encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "v0\n")
 
-    def test_sigkill_during_rollback_fallback_is_idempotent(self):
+    def _sigkill_during_rollback_fallback_is_idempotent(self):
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")
             modules = os.path.join(root, "modules")

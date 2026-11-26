@@ -38,14 +38,12 @@ forks a child that exits at a fault point for a crash. Each row names the Zig te
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_listed_einval_acl_read_is_refused_not_treated_as_absent | zig-common `src/atomic_test.zig` test "a listed EINVAL read is refused, not treated as absent" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_unlisted_einval_does_not_weaken_eacces_or_eperm_probes | zig-common `src/atomic_test.zig` test "an unlisted EINVAL does not weaken EACCES or EPERM probes" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_unlisted_nfs4_family_einval_with_listed_posix_retains_posix_bytes | zig-common `src/atomic_test.zig` test "an unlisted NFSv4-family EINVAL with a listed POSIX ACL keeps the POSIX bytes" |
-| test_acl_probe_compatibility.AclProbeCompatibilityTests.test_unlisted_posix_einval_without_positive_model_is_refused | zig-common `src/atomic_test.zig` test "an unlisted POSIX EINVAL without a positive model is refused" |
-| test_acl_probe_compatibility.AclProbeCompatibilityTests.test_unlisted_nfs4_einval_without_listed_posix_is_refused | zig-common `src/atomic_test.zig` test "an unlisted NFSv4 EINVAL without a listed POSIX ACL is refused" |
+| test_acl_probe_compatibility.AclProbeCompatibilityTests.test_unlisted_einval_without_a_positive_model_is_refused | zig-common `src/atomic_test.zig` test "an unlisted POSIX EINVAL without a positive model is refused" and "an unlisted NFSv4 EINVAL without a listed POSIX ACL is refused" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_listed_nfs4_einval_is_refused | zig-common `src/atomic_test.zig` test "a listed NFSv4 EINVAL is refused" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_listed_gpfs_einval_is_refused | zig-common `src/atomic_test.zig` test "a listed GPFS EINVAL is refused" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_narrow_einval_guard_still_refuses_denied_nfs4_probe | zig-common `src/atomic_test.zig` test "the narrow EINVAL guard still refuses a denied NFSv4 probe" |
 | test_acl_probe_compatibility.AclProbeCompatibilityTests.test_narrow_einval_guard_still_refuses_changing_metadata | zig-common `src/atomic_test.zig` test "the narrow EINVAL guard still refuses changing metadata" |
-| test_posix_acl_descriptor.PosixAclDescriptorTests.test_mask_wider_than_group_owner_round_trips_with_its_mode | zig-common `src/atomic_test.zig` test "a mask wider than the group owner round-trips with its mode" |
-| test_posix_acl_descriptor.PosixAclDescriptorTests.test_mask_narrower_than_group_owner_round_trips_with_its_mode | zig-common `src/atomic_test.zig` test "a mask narrower than the group owner round-trips with its mode" |
+| test_posix_acl_descriptor.PosixAclDescriptorTests.test_mask_on_either_side_of_the_group_owner_round_trips_with_its_mode | zig-common `src/atomic_test.zig` tests "a mask wider than the group owner round-trips with its mode" and "a mask narrower than the group owner round-trips with its mode" |
 | test_posix_acl_descriptor.PosixAclDescriptorTests.test_requested_mode_that_contradicts_the_mask_is_refused | zig-common `src/atomic_test.zig` test "a requested mode that contradicts the mask is refused" |
 | test_posix_acl_descriptor.PosixAclDescriptorTests.test_acl_is_written_through_the_descriptor_after_ownership_and_mode | zig-common `src/atomic_test.zig` test "the ACL is written through the descriptor after ownership and mode" |
 | test_posix_acl_descriptor.PosixAclDescriptorTests.test_acl_removed_between_list_and_read_is_refused | zig-common `src/atomic_test.zig` test "an ACL removed between list and read is refused" |
@@ -211,9 +209,8 @@ rebuild command implemented by the Zig binary.
 | RetireTests.test_retire_moves_module_and_leaves_software | differential "retire" |
 | RetireTests.test_dry_run_changes_nothing | differential "retire --dry-run" |
 | RetireTests.test_dry_run_still_refuses | differential "retire --dry-run, a directory" |
-| RetireTests.test_usage_log_refuses_retire_when_prefix_is_in_use | differential "retire, --usage-log in use" |
+| RetireTests.test_usage_log_refuses_retire_when_the_log_is_not_clear | differential "retire, --usage-log in use", "retire, --usage-log helper failure" |
 | RetireTests.test_usage_log_allows_retire_when_prefix_is_clear | runs against `TOOL_BIN` |
-| RetireTests.test_usage_log_failure_refuses_without_retiring | differential "retire, --usage-log helper failure" |
 | RetireTests.test_resume_refuses_a_retire_record | differential "resume a retire record" |
 | RetireTests.test_rollback_puts_module_back | differential "rollback the retire", "rollback again" |
 | RetireTests.test_rollback_refuses_to_overwrite_a_new_module_file | differential "rollback over a new module file", "rollback after the new file is gone" |
@@ -270,8 +267,7 @@ The Python tests pass their own `rename` and `exchange_call`; the Zig tests repl
 |---|---|
 | ReferenceTests.test_unreadable_module_is_not_treated_as_unreferenced | differential "gc, an unreadable live module" (not as root) |
 | ReferenceTests.test_symlink_to_a_hidden_tree_keeps_it | differential "gc keeps within grace" (`kept/.3.0001`, named through the symlink `kept/alias`, is kept: a live module resolves inside it) |
-| ReferenceTests.test_usage_log_keeps_a_retired_tree | differential "gc, --usage-log keeps an in-use tree" |
-| ReferenceTests.test_usage_log_keeps_a_generation | runs against `TOOL_BIN` |
+| ReferenceTests.test_usage_log_keeps_a_referenced_path | differential "gc, --usage-log keeps an in-use tree"; the generation path runs against `TOOL_BIN` |
 | ReferenceTests.test_usage_log_failure_refuses_without_deleting | differential "gc, --usage-log helper failure" |
 
 ### tests/test_metrics.py
@@ -325,13 +321,10 @@ refuse), and the fake `eb` answers `--version` with `FAKE_EB_VERSION` and record
 
 | test | replacement |
 |---|---|
-| FakeEbTests.test_installpath_records_the_stable_prefix | differential "run, installpath, recorded prefix" |
-| FakeEbTests.test_bwrap_records_the_stable_prefix | differential "run, bwrap" |
-| FakeEbTests.test_installpath_swaps_the_staged_generation | differential "run, installpath" |
-| FakeEbTests.test_bwrap_swaps_the_staged_generation | differential "run, bwrap" |
+| FakeEbTests.test_backend_records_the_prefix_or_swaps_the_generation | differential "run, installpath, recorded prefix", "run, bwrap", "run, installpath" |
 | FakeEbTests.test_userns_records_the_stable_prefix | differential "run, userns" |
 | FakeEbTests.test_userns_build_mounts_live_trees_read_only_then_swaps | differential "run, userns" |
-| FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| FakeEbTests.test_userns_build_runs_eb_as_the_caller | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_backend_keeps_the_live_file |
 | FakeEbTests.test_eb_finds_the_live_module_files_on_modulepath | differential "run, MODULEPATH names the live module files" |
 | FakeEbTests.test_relative_trees_reach_easybuild_as_absolute_paths | differential "run, relative trees" |
 | FakeEbTests.test_userns_mounts_relative_trees_by_absolute_path | differential "run, userns, relative trees" |
@@ -422,9 +415,7 @@ site variables through CLI/docs tests and integration coverage.
 
 | test | replacement |
 |---|---|
-| EasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_backend_keeps_the_live_file |
-| EasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_bwrap_backend_keeps_the_live_file |
-| EasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_backend_keeps_the_live_file |
+| EasyBuildIntegrationTests.test_backend_keeps_the_live_file | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_backend_keeps_the_live_file (installpath, bwrap, userns) |
 | EasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_installpath_finds_a_dependency_in_the_live_tree |
 | EasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_userns_finds_a_dependency_in_the_live_tree |
 | EasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build | `tests/test_easybuild_integration_cli.py` CliEasyBuildIntegrationTests.test_robot_leaves_out_a_dependency_it_would_not_build |
@@ -460,10 +451,7 @@ site variables through CLI/docs tests and integration coverage.
 
 | test | replacement |
 |---|---|
-| HardKillTests.test_sigkill_during_publish_fallback_resumes_once | crash_matrix "fallback: run killed at swap:all/demo/1.lua.fallback.*" |
-| HardKillTests.test_sigkill_right_after_rename_exchange_resumes_to_published | crash_matrix "one module: run killed at swap:all/demo/1.lua.exchange.after" and "one module: run killed at swap:all/demo/1.lua.exchange.after, resumed, rolled back" |
-| HardKillTests.test_sigkill_right_after_rollback_exchange_rolls_back_once | crash_matrix "one module: rollback killed at rollback.swap:all/demo/1.lua.exchange.after" |
-| HardKillTests.test_sigkill_during_rollback_fallback_is_idempotent | crash_matrix "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
+| HardKillTests.test_sigkill_at_a_pause_point | crash_matrix "fallback: run killed at swap:all/demo/1.lua.fallback.*", "one module: run killed at swap:all/demo/1.lua.exchange.after", "one module: rollback killed at rollback.swap:all/demo/1.lua.exchange.after", "fallback: rollback killed at rollback.swap:all/demo/1.lua.fallback.*" |
 
 ### tests/test_command_lifecycle.py
 

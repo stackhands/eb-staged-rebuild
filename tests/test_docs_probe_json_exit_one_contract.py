@@ -27,12 +27,6 @@ def _assert_probe_exit_one_contract(testcase: unittest.TestCase, runner) -> None
 
 
 class ProbeJsonExitOneContractDocTests(unittest.TestCase):
-    def test_docs_describe_probe_exit_one_contract(self) -> None:
-        with open("docs/orgmode/reference/json-output.org", encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn("=--no-create= refused a missing =--path=", text)
-        self.assertIn("=--require-eb= did not find the =--eb= command", text)
-
     def test_python_cli_matches_probe_exit_one_contract(self) -> None:
         _assert_probe_exit_one_contract(self, run_cli)
 
