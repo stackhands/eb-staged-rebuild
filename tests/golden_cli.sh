@@ -49,7 +49,7 @@ settle() {
 
 # scrub: the scratch directory is a different path on every run.
 scrub() {
-    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g"
+    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g"
 }
 
 compare() {
@@ -223,7 +223,7 @@ compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 norm() {
     sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
         -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
-        -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${site}#@SITE@#g" -e "s#${work}#@WORK@#g" \
+        -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${site}#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" \
         -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
         -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" \
         -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
