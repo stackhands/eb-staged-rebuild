@@ -43,7 +43,7 @@ What =resume= does follows from the state:
 
 A run that a preparation program, directory preparation, or a pending ledger record stopped stays =built=, and =resume= runs that step again.
 The state changes to =publishing= only after every directory is ready for the swap.
-[[py:eb_staged_rebuild.engine.resume]] and [[zig:eb-staged-rebuild.engine.run_mod.resumeRun]] decide.
+[[zig:run_mod.resumeRun]] decides.
 
 *** Which tree is which
 

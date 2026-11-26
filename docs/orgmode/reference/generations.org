@@ -131,5 +131,3 @@ What the check cannot see, and only the grace period covers:
 - [[file:../howto/roll-back.org][Put the previous installation back]]
 - [[file:../howto/remove-old-trees.org][Remove the trees a rebuild left behind]]
 - [[file:../explanation/publication.org][How a rebuild is published]]
-- [[py:eb_staged_rebuild.generations.generations]]
-- [[py:eb_staged_rebuild.inuse.users]], the in-use check

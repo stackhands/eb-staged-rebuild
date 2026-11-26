@@ -60,4 +60,3 @@ These make a command stop or fail on purpose, for the crash and fail tests; leav
 
 - [[file:cli.org][The eb-staged-rebuild command]]
 - [[file:../explanation/isolation.org][How a build is kept off the live tree]]
-- [[py:eb_staged_rebuild.builders.child_env]]

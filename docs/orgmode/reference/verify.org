@@ -109,4 +109,3 @@ Then comes =eb-staged-rebuild: verify RUN_ID: RESULT (elf N, references N, modul
 - [[file:files.org][Files]]
 - [[file:../howto/verify-a-stage.org][Check a rebuild before it goes live]]
 - [[file:../explanation/publication.org][How a rebuild is published]]
-- [[py:eb_staged_rebuild.verify.verify_stage]]

@@ -52,4 +52,3 @@ cat /opt/site/etc/ledger.json
 
 - [[file:../howto/record-in-a-ledger.org][Record each rebuild in a signed ledger]]
 - [[file:../explanation/ledger.org][What the ledger records]]
-- [[py:eb_staged_rebuild.ledger_adapter.load_config]]
