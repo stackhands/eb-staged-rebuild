@@ -37,7 +37,7 @@ typedef struct user_regs_struct regs_t;
 #define REG_A3(r) ((r)->r10)
 #define REG_RET(r) ((r)->rax)
 #elif defined(__aarch64__)
-typedef struct user_pt_regs regs_t;
+typedef struct user_regs_struct regs_t;
 #define REG_NR(r) ((long)(r)->regs[8])
 #define REG_A0(r) ((r)->regs[0])
 #define REG_A1(r) ((r)->regs[1])
@@ -233,6 +233,7 @@ static void poison(pid_t pid, regs_t *regs) {
     regs->orig_rax = SYS_getpid;
     if (set_regs(pid, regs) < 0) _exit(1);
 #else
+    (void)regs;
     int nr = SYS_getpid;
     struct iovec iov = {&nr, sizeof nr};
     if (ptrace(PTRACE_SETREGSET, pid, (void *)NT_ARM_SYSTEM_CALL, &iov) < 0) _exit(1);
