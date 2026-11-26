@@ -5,6 +5,7 @@ import ctypes
 import fcntl
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -411,7 +412,9 @@ def scrub(text, **placeholders):
             resolved = os.path.realpath(value)
             if resolved != value:
                 text = text.replace(resolved, f"@{name}@")
-    return text
+    # A journal's snapshot records the device and inode numbers of the host.
+    text = re.sub(r'"device": [0-9]+', '"device": HOST', text)
+    return re.sub(r"^( {6,})[0-9]{5,}(,?)$", r"\1INO\2", text, flags=re.M)
 
 
 def golden(case, part, text):
