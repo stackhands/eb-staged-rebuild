@@ -9,6 +9,10 @@ without `--ledger-config`) is in it. The Python package `eb_staged_rebuild`
 stays as a thin layer: its wheel carries the binary, and
 `python3 -m eb_staged_rebuild` and the console script replace the Python
 process with the binary, with the same arguments, exit status and streams.
+The replacement is `execv(2)` in the `eb_staged_rebuild._launch` C extension.
+The wheels are platform wheels: `cp311-abi3` for CPython 3.11 and later with
+the GIL, `cp313t` and `cp314t` for the free-threaded builds. The earlier
+pure-Python releases had no compiled part and installed on any platform.
 
 ## The Python parts that stay
 

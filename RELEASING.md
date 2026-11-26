@@ -9,8 +9,9 @@ It refuses a release binary that contains a test hook
 (`EB_STAGED_REBUILD_ACL_MODEL`, `EB_STAGED_REBUILD_FAIL_AT`, `EB_STAGED_REBUILD_NOW`), a build that
 accepts `-Dtest-ops` with `-Drelease`, a binary whose `--version` names
 another version or commit, and a tag that disagrees with the version of
-the Python package (`eb_staged_rebuild.__version__`). It builds one wheel per
-architecture with the binary inside, and opens a draft release with the
+the Python package (`eb_staged_rebuild.__version__`). It builds the wheels for each
+architecture with cibuildwheel in the manylinux2014 image (one `cp311-abi3`, one
+`cp313t`, one `cp314t`, each carrying the binary), and opens a draft release with the
 binaries, the wheels, an archive of `share/` (completions, man page),
 `SHA256SUMS` and build provenance attestations.
 

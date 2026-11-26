@@ -28,7 +28,7 @@ Release archives carry the bash and zsh completion scripts and the man page that
 
 ## Install
 
-Linux only. The `eb-staged-rebuild` command is one static Zig binary. The Python package `eb_staged_rebuild` is a thin layer over it: the wheel carries the binary, and `python3 -m eb_staged_rebuild` and the `eb-staged-rebuild` console script replace the Python process with it, so there is one implementation of every command. The package also holds the two Python-only parts: `eb_staged_rebuild.site_hooks`, the EasyBuild hook file ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/add-a-site-hook.html)), and `eb_staged_rebuild.ship`, the checksum list for a copied install, run as `python3 -m eb_staged_rebuild.ship` ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/check-a-copied-install.html)). Neither is a subcommand of the binary.
+Linux only. The `eb-staged-rebuild` command is one static Zig binary. The Python package `eb_staged_rebuild` is a thin layer over it: the wheel carries the binary, and `python3 -m eb_staged_rebuild` and the `eb-staged-rebuild` console script replace the Python process with it through `eb_staged_rebuild._launch`, a small C extension that calls `execv(2)`, so there is one implementation of every command. The package also holds the two Python-only parts: `eb_staged_rebuild.site_hooks`, the EasyBuild hook file ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/add-a-site-hook.html)), and `eb_staged_rebuild.ship`, the checksum list for a copied install, run as `python3 -m eb_staged_rebuild.ship` ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/check-a-copied-install.html)). Neither is a subcommand of the binary.
 
 The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v2.0.1):
 
@@ -43,7 +43,7 @@ eb-staged-rebuild --version
 
 `gh attestation verify FILE --repo stackhands/eb-staged-rebuild` checks the build provenance. To build it yourself, Zig 0.17.1: `zig build -Drelease=true`.
 
-The Python package, Python 3.11 or newer, no third-party dependencies. Building the wheel runs `zig build -Drelease=true`; `EB_STAGED_REBUILD_BINARY=/path/to/eb-staged-rebuild` bundles a binary already built instead:
+The Python package, Python 3.11 or newer, no third-party dependencies. The release has wheels for x86_64 and aarch64 Linux (glibc 2.17 or newer): `cp311-abi3` for every CPython from 3.11 with the GIL, and `cp313t` and `cp314t` for the free-threaded builds, which install no abi3 wheel. `pip` picks the one that fits. The extension uses only the stable ABI on a GIL CPython and declares free-threading support on the others. Installing from a clone compiles the extension, so it needs a C compiler and the Python headers; the build runs `zig build -Drelease=true`, and `EB_STAGED_REBUILD_BINARY=/path/to/eb-staged-rebuild` bundles a binary already built instead:
 
 ```bash
 python3 -m pip install .

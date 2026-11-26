@@ -28,8 +28,15 @@ The release commit gathers them into =CHANGELOG.md=; [[https://github.com/stackh
 With Zig 0.17.1 and Python 3.11 or newer, from the top of the repository, =zig build test= runs the unit tests of the Zig build and =zig build -Drelease=true= builds the binary. The Python tests then run it:
 
 #+begin_src bash
+python3 -m pip install setuptools
+python3 setup.py build_ext --inplace
 TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python3 -m unittest discover -s tests
 #+end_src
+
+The tests import =eb_staged_rebuild= from the checkout, and the package needs its C extension =_launch=: =python3 setup.py build_ext --inplace= compiles it into =eb_staged_rebuild/=.
+Run it again for each Python you test with, and after a change to =_launch.c=.
+On a free-threaded Python it builds a plain extension; on any other it builds against the limited API.
+=tools/check_wheel.py= checks a built wheel: the =cp311-abi3= wheel carries one =_launch.abi3.so=, the =cp313t= and =cp314t= wheels one =_launch.cpython-31Xt-*.so=, and each carries the binary and the Free Threading classifier. =--local= also accepts the =linux_ARCH= platform tag of a wheel built outside a manylinux image; CI does not use it.
 
 The ledger tests need =openssl= on =PATH= and an eb-stack 0.7.0 binary in =EB_STACK_BIN=, the one =.github/actions/pinned-ledger= builds; without it the tests that need it skip.
 =EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration_cli.py=, which rebuilds a package with EasyBuild 5.4.2 and Lmod: with it set, a missing =eb= or Lmod fails the tests, and the bubblewrap case skips where =bwrap= does not run.

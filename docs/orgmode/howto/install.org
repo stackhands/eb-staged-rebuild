@@ -100,7 +100,7 @@ The Python package also carries the site hook file (=eb_staged_rebuild.site_hook
    #+end_example
 
    That is the checksum =SHA256SUMS= gives for =eb-staged-rebuild-1.0.0-x86_64-linux-musl=.
-5. To install the Python package instead, install it into a virtual environment, from the clone of step 4 and in its directory. The build runs =zig build -Drelease=true= and puts the binary in the wheel; =EB_STAGED_REBUILD_BINARY=PATH= bundles a binary already built:
+5. To install the Python package instead, install it into a virtual environment, from the clone of step 4 and in its directory. The build compiles the =_launch= C extension (a C compiler and the Python headers) and runs =zig build -Drelease=true=, which puts the binary in the wheel; =EB_STAGED_REBUILD_BINARY=PATH= bundles a binary already built:
 
    #+begin_src bash
    python3 -m venv ~/eb-staged-rebuild-venv
