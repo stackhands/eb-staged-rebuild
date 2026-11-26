@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=70.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,14 +12,14 @@ license = {text = "MIT"}
 authors = [{name = "Rohit Goswami", email = "rgoswami@ieee.org"}]
 dependencies = []
 
-[project.optional-dependencies]
-docs = [
-    "shtab==1.7.2",
-    "argparse-manpage==4.6",
-]
-
 [project.scripts]
-eb-staged-rebuild = "eb_staged_rebuild.cli:main"
+eb-staged-rebuild = "eb_staged_rebuild:main"
 
 [tool.setuptools.packages.find]
 include = ["eb_staged_rebuild*"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+eb_staged_rebuild = ["bin/eb-staged-rebuild"]
