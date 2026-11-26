@@ -31,6 +31,7 @@ The importable Python modules of the old implementation (`eb_staged_rebuild.engi
 | `--lock-timeout` and `--grace-hours` | Python `float()`, which also takes underscores and non-ASCII digits | ASCII decimal and exponent forms |
 | a lock wait longer than about 49 days | waits that long | capped at 2^32 ms |
 | the user-namespace probe | `unshare ... python3 -m eb_staged_rebuild.userns_sandbox --probe` | `unshare ... <this binary> __userns-sandbox --probe` |
+| the live-tree snapshot a journal records | an in-process function, no command | the hidden helper `__snapshot PATH`, which prints it as JSON; it is not part of the public command line |
 | `\d` in `eb-stack ledger append` receipts | any Unicode decimal digit | ASCII digits only |
 | an operating-system error with no fixed text in the Zig build | `[Errno N] strerror: 'PATH'` | `ErrorName: 'PATH'` (`[Errno N] ...` for ENOENT, EACCES, EISDIR, ENOTDIR, ELOOP, EEXIST, ENOSPC, EROFS) |
 | a failed release of the state-root lock after a refusal or another error under the lock | the release's `OSError` from `lockfile.py:146` or `:153` replaces the first error as it leaves `finally: lock.release()` (`engine.py:1459`, `:1545`, `:1566`, `:1661`, `retire.py:249`, `gc.py:432`), so the message is `[Errno N] strerror` | the first error is reported and the failed release is dropped (`zig/rootlock.zig` `releaseAfterError`); a refusal that exits at once leaves the release to process exit; after a command that succeeded both report the release's `[Errno N] strerror`, exit 2 |
