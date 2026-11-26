@@ -3,6 +3,7 @@ exit 0
 bwrap
   version
 user.max_user_namespaces: HOST
+kernel.unprivileged_userns_clone: label|absent
 user-namespace sandbox: usable
 RENAME_EXCHANGE
 EasyBuild
