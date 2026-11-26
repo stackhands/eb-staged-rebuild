@@ -1,19 +1,15 @@
 """EB_STAGED_REBUILD_NOW is a test clock.
 
-Only tests/now_cli.py and the -Dtest-ops artifact read it. A value the
-run id cannot record is refused before the command, with the same text
-from either frontend. The installed tools leave it unread.
+Only the -Dtest-ops artifact reads it. A value the run id cannot record
+is refused before the command. The installed binary leaves it unread.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import unittest
 
-from tests.support import _run, _skip
-
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from tests.support import _run, _skip, golden
 
 
 class TestClockTests(unittest.TestCase):
@@ -30,28 +26,22 @@ class TestClockTests(unittest.TestCase):
         )
         for value, phrase in cases:
             env = {"EB_STAGED_REBUILD_NOW": value}
-            python = _run([sys.executable, os.path.join(_REPO, "tests", "now_cli.py")], env)
             binary = _run([tool], env)
-            detail = f"{value}\npython {python.returncode} {python.stderr!r}\nbinary {binary.returncode} {binary.stderr!r}"
-            self.assertEqual(python.returncode, 2, detail)
+            detail = f"{value}\nbinary {binary.returncode} {binary.stderr!r}"
             self.assertEqual(binary.returncode, 2, detail)
-            self.assertEqual(python.stdout, "", detail)
             self.assertEqual(binary.stdout, "", detail)
-            self.assertEqual(python.stderr, binary.stderr, detail)
-            self.assertIn(phrase, python.stderr, detail)
-            self.assertIn(repr(value), python.stderr, detail)
-            self.assertNotIn("Traceback", python.stderr)
-            self.assertNotIn("OverflowError", python.stderr)
-            self.assertNotIn("panic", python.stderr)
+            golden(self, f"stderr-{value}", binary.stderr)
+            self.assertIn(phrase, binary.stderr, detail)
+            self.assertIn(repr(value), binary.stderr, detail)
+            self.assertNotIn("Traceback", binary.stderr)
+            self.assertNotIn("OverflowError", binary.stderr)
+            self.assertNotIn("panic", binary.stderr)
 
     def test_installed_frontends_ignore_the_clock(self) -> None:
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        commands = (
-            [sys.executable, "-m", "eb_staged_rebuild.cli", "--version"],
-            [tool, "--version"],
-        )
+        commands = ([tool, "--version"],)
         for argv in commands:
             plain = _run(argv)
             poisoned = _run(argv, {"EB_STAGED_REBUILD_NOW": "1e308"})

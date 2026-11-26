@@ -1,20 +1,19 @@
 """A sealed install directory that rejects chmod stops publication.
 
 The directory is reported without a write bit, and chmod returns
-EPERM. Creating a file there still succeeds, which is what let the
-binary write the completion stamp after ignoring the chmod.
+EPERM. Creating a file there still succeeds, so a tool that ignored
+the chmod would write the completion stamp; the refusal has to stop
+publication first.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 import textwrap
 import unittest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
@@ -29,20 +28,14 @@ class SealedDirChmodTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        python = self._run("python")
         binary = self._run(tool)
-        detail_py = python.stdout + python.stderr
         detail_bin = binary.stdout + binary.stderr
-        self.assertEqual(python.returncode, 2, detail_py)
         self.assertEqual(binary.returncode, 2, detail_bin)
-        self.assertIn("Operation not permitted", detail_py)
         self.assertIn("Operation not permitted", detail_bin)
-        self.assertIn("LIVE old", detail_py)
         self.assertIn("LIVE old", detail_bin)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
-        label = "python" if tool == "python" else "zig"
-        with tempfile.TemporaryDirectory(prefix=f"sealed-chmod-{label}-") as work:
+        with tempfile.TemporaryDirectory(prefix="sealed-chmod-zig-") as work:
             mnt = os.path.join(work, "mnt")
             back = os.path.join(work, "back")
             os.makedirs(os.path.join(back, "software", "demo", "1"))
@@ -86,13 +79,9 @@ class SealedDirChmodTests(unittest.TestCase):
             )
             try:
                 _wait_mount(self, mnt, mounted)
-                run_env = dict(os.environ)
-                run_env["PYTHONPATH"] = _REPO
-                run_env["PYTHONIOENCODING"] = "utf-8:strict"
-                argv = [sys.executable, "-m", "eb_staged_rebuild"] if tool == "python" else [tool]
                 done = subprocess.run(
                     [
-                        *argv,
+                        tool,
                         "run",
                         "--software",
                         os.path.join(mnt, "software"),
@@ -113,7 +102,6 @@ class SealedDirChmodTests(unittest.TestCase):
                     ],
                     check=False,
                     capture_output=True,
-                    env=run_env,
                     timeout=60,
                 )
                 live = os.path.join(mnt, "software", "demo", "1", "PAYLOAD")

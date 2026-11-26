@@ -5,17 +5,14 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
-from tests.support import _program, _python314, _skip, classic_install
+from tests.support import _program, _skip, classic_install, golden, scrub
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FAKE = os.path.join(_REPO, "tests", "fake_eb.py")
-
-
-def _scrub(text, root):
-    return text.replace(root, "ROOT")
 
 
 def _payload(root):
@@ -42,9 +39,6 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
     def setUp(self):
         if not os.environ.get("TOOL_BIN"):
             _skip(self, "TOOL_BIN is unset")
-        self.python = _python314()
-        if self.python is None:
-            _skip(self, "python3.14 is not installed")
         self.program = _program(self, "eb-fs-fail-rollback-unlink")
 
     def _layout(self):
@@ -58,7 +52,7 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         classic_install(software, modules, "demo/1", "old\n", "all/demo/1.lua")
         eb = os.path.join(root, "eb")
         with open(eb, "w", encoding="utf-8") as handle:
-            handle.write(f"#!/bin/sh\nexec {self.python} {_FAKE} \"$@\"\n")
+            handle.write(f'#!/bin/sh\nexec "{sys.executable}" "{_FAKE}" "$@"\n')
         os.chmod(eb, stat.S_IRWXU)
         run_args = [
             "run",
@@ -84,8 +78,6 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         ]
         back_args = ["rollback", "--state-root", state, "--lock-timeout", "0", "run1"]
         env = {
-            "PYTHONPATH": _REPO,
-            "PYTHONIOENCODING": "utf-8:strict",
             "LANG": "C.UTF-8",
             "FAKE_EB_VERSION": "5.4.2",
             "FAKE_EB_PAYLOAD": "new\n",
@@ -113,51 +105,37 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         # With `replaced`, another symlink takes the place of run1's class
         # link before the rollback, and a clean rollback runs afterwards.
         tool = os.environ["TOOL_BIN"]
-        py_root, py_env, py_run, py_back = self._layout()
-        zig_root, zig_env, zig_run, zig_back = self._layout()
-        self._publish([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_run)
-        self._publish([tool], zig_root, zig_env, zig_run)
+        root, env, run, back = self._layout()
+        self._publish([tool], root, env, run)
         if replaced:
-            for root in (py_root, zig_root):
-                link = os.path.join(root, "modules", "tools", "demo", "1.lua")
-                os.unlink(link)
-                os.symlink("elsewhere.lua", link)
-        py = self._traced(
-            [self.python, "-m", "eb_staged_rebuild.cli", *py_back], py_root, py_env, errno, op, nth, needle
-        )
-        zig = self._traced([tool, *zig_back], zig_root, zig_env, errno, op, nth, needle)
-        py_err = _scrub(py.stderr, py_root)
-        zig_err = _scrub(zig.stderr, zig_root)
-        self.assertEqual(py.returncode, zig.returncode, py_err + "\n---\n" + zig_err)
-        self.assertEqual(py_err, zig_err)
-        self.assertEqual(_payload(py_root), _payload(zig_root))
-        self.assertEqual(_state(py_root), _state(zig_root))
-        if not replaced:
-            return None
-        outcomes = []
-        for argv, root, env, back, done, err in (
-            ([self.python, "-m", "eb_staged_rebuild.cli"], py_root, py_env, py_back, py, py_err),
-            ([tool], zig_root, zig_env, zig_back, zig, zig_err),
-        ):
             link = os.path.join(root, "modules", "tools", "demo", "1.lua")
-            outcome = {
-                "rc": done.returncode,
-                "stderr": err,
-                "state": _state(root),
-                "message": _journal(root, "run1").get("message"),
-                "links": _links(root, "run1"),
-                "link": os.readlink(link),
-                "payload": _payload(root),
-            }
-            again = subprocess.run(argv + back, cwd=root, env=env, capture_output=True, text=True, check=False)
-            outcome["again_rc"] = again.returncode
-            outcome["final"] = _state(root)
-            outcome["final_links"] = _links(root, "run1")
-            outcome["final_link"] = os.readlink(link)
-            outcome["final_payload"] = _payload(root)
-            outcomes.append(outcome)
-        self.assertEqual(outcomes[0], outcomes[1])
-        return outcomes[1]
+            os.unlink(link)
+            os.symlink("elsewhere.lua", link)
+        zig = self._traced([tool, *back], root, env, errno, op, nth, needle)
+        zig_err = scrub(zig.stderr, ROOT=root)
+        if not replaced:
+            golden(self, "returncode", f"{zig.returncode}\n")
+            golden(self, "stderr", zig_err)
+            golden(self, "payload", _payload(root))
+            golden(self, "state", f"{_state(root)}\n")
+            return None
+        link = os.path.join(root, "modules", "tools", "demo", "1.lua")
+        outcome = {
+            "rc": zig.returncode,
+            "stderr": zig_err,
+            "state": _state(root),
+            "message": _journal(root, "run1").get("message"),
+            "links": _links(root, "run1"),
+            "link": os.readlink(link),
+            "payload": _payload(root),
+        }
+        again = subprocess.run([tool] + back, cwd=root, env=env, capture_output=True, text=True, check=False)
+        outcome["again_rc"] = again.returncode
+        outcome["final"] = _state(root)
+        outcome["final_links"] = _links(root, "run1")
+        outcome["final_link"] = os.readlink(link)
+        outcome["final_payload"] = _payload(root)
+        return outcome
 
     def test_unlink_eio_keeps_the_published_tree(self):
         self._compare(5, "unlink", 1, "modules/tools/demo/1.lua")
@@ -212,8 +190,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         failed = self._traced(back, root, env, 5, "fsync", 1, needle)
         outcome = {
             "rc": failed.returncode,
-            "stderr": _scrub(failed.stderr, root),
-            "link": _scrub(os.readlink(link), root) if os.path.islink(link) else os.path.lexists(link),
+            "stderr": scrub(failed.stderr, ROOT=root),
+            "link": scrub(os.readlink(link), ROOT=root) if os.path.islink(link) else os.path.lexists(link),
             "module": os.path.lexists(module),
             "states": [_state(root, run_id) for run_id in ("run2", "run3")],
             "run2_links": _links(root, "run2"),
@@ -221,14 +199,14 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         if retry_fsync:
             retry = self._traced(back, root, env, 5, "fsync", 1, needle)
             outcome["retry_rc"] = retry.returncode
-            outcome["retry_stderr"] = _scrub(retry.stderr, root)
+            outcome["retry_stderr"] = scrub(retry.stderr, ROOT=root)
             outcome["retry_states"] = [_state(root, run_id) for run_id in ("run2", "run3")]
             outcome["retry_run2_links"] = _links(root, "run2")
         again = subprocess.run(back, cwd=root, env=env, capture_output=True, text=True, check=False)
         outcome["again_rc"] = again.returncode
         outcome["final"] = [_state(root, run_id) for run_id in ("run2", "run3")]
         outcome["final_run2_links"] = _links(root, "run2")
-        outcome["final_link"] = _scrub(os.readlink(link), root) if os.path.islink(link) else os.path.lexists(link)
+        outcome["final_link"] = scrub(os.readlink(link), ROOT=root) if os.path.islink(link) else os.path.lexists(link)
         outcome["final_module"] = os.path.lexists(module)
         outcome["payload"] = _payload(root)
         return outcome
@@ -238,9 +216,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         # another entry in its place, which it keeps.
         for replaced, link in ((False, False), (True, "elsewhere.lua")):
             with self.subTest(replaced=replaced):
-                py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], replaced=replaced)
                 zig = self._rollback_to([os.environ["TOOL_BIN"]], replaced=replaced)
-                self.assertEqual(py, zig)
+                golden(self, f"outcome-replaced-{replaced}", json.dumps(zig, indent=2, sort_keys=True) + "\n")
                 self.assertEqual(zig["rc"], 2)
                 self.assertEqual(
                     zig["stderr"],
@@ -259,9 +236,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         # run2 created the module file, so rollback --to removes it. Its
         # directory flush fails twice; the retry that finds the file gone
         # still flushes before the runs are rolled back.
-        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True, module_gone=True)
         zig = self._rollback_to([os.environ["TOOL_BIN"]], retry_fsync=True, module_gone=True)
-        self.assertEqual(py, zig)
+        golden(self, "outcome", json.dumps(zig, indent=2, sort_keys=True) + "\n")
         self.assertEqual(zig["rc"], 2)
         self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/all/demo'\n")
         self.assertFalse(zig["module"])
@@ -280,9 +256,8 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         self.assertEqual(zig["payload"], "new\n")
 
     def test_rollback_to_missing_link_is_flushed_again(self):
-        py = self._rollback_to([self.python, "-m", "eb_staged_rebuild.cli"], retry_fsync=True)
         zig = self._rollback_to([os.environ["TOOL_BIN"]], retry_fsync=True)
-        self.assertEqual(py, zig)
+        golden(self, "outcome", json.dumps(zig, indent=2, sort_keys=True) + "\n")
         self.assertEqual(zig["retry_rc"], 2)
         self.assertEqual(
             zig["retry_stderr"],

@@ -128,16 +128,9 @@ def _inside(tool: str) -> int:
         handle.write("old\n")
     with open(os.path.join(mnt, "modules", "all", "demo", "1.lua"), "w", encoding="utf-8") as handle:
         handle.write(f'local root = "{live}"\n')
-    env = dict(os.environ)
-    env["PYTHONPATH"] = _REPO
-    env["PYTHONIOENCODING"] = "utf-8:strict"
-    if tool == "python":
-        argv = [sys.executable, "-m", "eb_staged_rebuild"]
-    else:
-        argv = [tool]
     done = subprocess.run(
         [
-            *argv,
+            tool,
             "run",
             "--software",
             os.path.join(mnt, "software"),
@@ -158,7 +151,6 @@ def _inside(tool: str) -> int:
         ],
         check=False,
         capture_output=True,
-        env=env,
         timeout=_TIMEOUT,
     )
     visible = os.path.join(mnt, kept_rel)
@@ -185,23 +177,16 @@ class PrefixUserXattrParityTests(unittest.TestCase):
         problem = _namespace_problem()
         if problem:
             _skip(self, problem)
-        python = self._run("python")
         binary = self._run(tool)
-        detail_py = python.stdout + python.stderr
         detail_bin = binary.stdout + binary.stderr
-        self.assertEqual(python.returncode, 2, detail_py)
         self.assertEqual(binary.returncode, 2, detail_bin)
-        self.assertIn("Operation not supported", python.stderr, detail_py)
         self.assertIn("Operation not supported", binary.stderr, detail_bin)
-        self.assertIn("user.ebsr", python.stdout, detail_py)
         self.assertIn("user.ebsr", binary.stdout, detail_bin)
-        self.assertIn("generations/r1", python.stdout, detail_py)
         self.assertIn("generations/r1", binary.stdout, detail_bin)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
         env = dict(os.environ)
         env["PYTHONPATH"] = _REPO
-        env["PYTHONIOENCODING"] = "utf-8:strict"
         try:
             done = subprocess.run(
                 [

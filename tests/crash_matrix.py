@@ -1,11 +1,12 @@
 """Kill a run at every step it reaches, resume it, and compare the outcome.
 
-For each fault step a run of the Python tool reaches, the Python tool and
-the program named by TOOL_BIN each run on a fresh copy of one fixture, are
-paused at that step (EB_STAGED_REBUILD_PAUSE_AT), killed with SIGKILL, and
-resumed. Both must leave the same live tree, the same module file and the
-same journal state; a run must end either with the old tree untouched or
-fully published. The same is done for rollback of a complete run.
+For each fault step a run reaches (tests/golden/crash_matrix/steps.json), the
+program named by TOOL_BIN runs on a fresh copy of one fixture, is paused at
+that step (EB_STAGED_REBUILD_PAUSE_AT), killed with SIGKILL, and resumed. It
+must leave the live tree, the module file and the journal state that
+tests/golden/crash_matrix/results.json records; a run must end either with
+the old tree untouched or fully published. The same is done for rollback of
+a complete run. RECORD=1 rewrites results.json.
 
 Six fixtures: one module; two modules (lib/1 and app/1); one module
 whose build leaves the installation and module tree read-only, which is
@@ -40,10 +41,7 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
-sys.path.insert(0, REPO)
-
-from eb_staged_rebuild.engine import Spec, _tree_run_id, rollback, run  # noqa: E402
-from eb_staged_rebuild.faults import FaultInjector  # noqa: E402
+GOLDEN = os.path.join(REPO, "tests", "golden", "crash_matrix")
 
 FALLBACK = ("live-to-hold", "staged-to-live", "hold-to-staged")
 
@@ -98,14 +96,6 @@ class Fixture:
             args += ["--module", rel]
         return args + ["--", "demo-1.eb"]
 
-    def spec(self, root, faults=None, run_id="r1"):
-        return Spec(
-            software=f"{root}/software", modules=f"{root}/modules", state_root=f"{root}/state",
-            eb_args=["demo-1.eb"], backend="installpath", eb_executable=f"{root}/eb",
-            module_rels=list(self.rels), run_id=run_id, faults=faults,
-            prepare_executable=f"{root}/prepare" if self.prepare else None, verify=self.verify,
-        )
-
 
 ONE = Fixture("one module", ["demo/1"])
 TWO = Fixture("two modules", ["lib/1", "app/1"])
@@ -151,54 +141,28 @@ def builds(root):
         return sum(1 for line in handle if any(arg.startswith("--installpath-software=") for arg in json.loads(line)))
 
 
-def with_env(extra, fn):
-    saved = {key: os.environ.get(key) for key in extra}
-    os.environ.update(extra)
+def golden_steps(name):
+    """The fault steps the golden list names for NAME, in the order a command reaches them."""
+    with open(os.path.join(GOLDEN, "steps.json"), encoding="utf-8") as handle:
+        return json.load(handle)[name]
+
+
+def tree_run_id(path):
+    """The run id in the completion stamp of the tree at PATH, or None."""
     try:
-        return fn()
-    finally:
-        for key, value in saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        with open(os.path.join(path, ".eb-staged-rebuild-complete"), encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return value.get("run_id") if isinstance(value, dict) else None
 
 
-def steps_reached(fixture):
-    """Every fault step one Python run reaches, in order."""
-    root = tempfile.mkdtemp(prefix="crash-steps-")
-    try:
-        fixture.build(root)
-        faults = FaultInjector()
-        result = with_env(fixture.env(root), lambda: run(fixture.spec(root, faults)))
-        assert result.returncode == 0, result
-        return list(dict.fromkeys(faults.reached))
-    finally:
-        remove(root)
-
-
-def steps_rollback(fixture):
-    """Every fault step one Python rollback reaches."""
-    root = tempfile.mkdtemp(prefix="crash-rbsteps-")
-    try:
-        fixture.build(root)
-        assert with_env(fixture.env(root), lambda: run(fixture.spec(root))).returncode == 0
-        faults = FaultInjector()
-        assert rollback(f"{root}/state", "r1", faults=faults).returncode == 0
-        return list(dict.fromkeys(faults.reached))
-    finally:
-        remove(root)
-
-
-def command(impl):
-    if impl == "py":
-        return [sys.executable, "-m", "eb_staged_rebuild"]
+def command():
     return [os.environ["TOOL_BIN"]]
 
 
 def env_for(fixture, root, step, ready):
     env = dict(os.environ)
-    env["PYTHONPATH"] = REPO
     env.update(fixture.env(root))
     if step:
         env["EB_STAGED_REBUILD_PAUSE_AT"] = step
@@ -207,11 +171,11 @@ def env_for(fixture, root, step, ready):
     return env
 
 
-def kill_at(impl, fixture, args, step, root):
+def kill_at(fixture, args, step, root):
     """Start the command, wait until it pauses at `step`, then SIGKILL it."""
     ready = os.path.join(root, "ready")
     proc = subprocess.Popen(
-        command(impl) + args, env=env_for(fixture, root, step, ready), cwd=root,
+        command() + args, env=env_for(fixture, root, step, ready), cwd=root,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     deadline = time.monotonic() + 60
@@ -229,10 +193,10 @@ def kill_at(impl, fixture, args, step, root):
     return "killed"
 
 
-def finish(impl, fixture, args, root, **extra):
+def finish(fixture, args, root, **extra):
     env = env_for(fixture, root, None, "")
     env.update(extra)
-    return subprocess.run(command(impl) + args, env=env, cwd=root, capture_output=True, text=True).returncode
+    return subprocess.run(command() + args, env=env, cwd=root, capture_output=True, text=True).returncode
 
 
 def journal_file(root, run_id):
@@ -282,13 +246,34 @@ def outcome(fixture, root, run_id):
     return info
 
 
+RECORDED = {}
+
+
+def settled(label, result, name="results.json"):
+    """Whether RESULT is what the golden file NAME holds for LABEL; with RECORD=1, keep it for the file."""
+    seen = json.loads(json.dumps(result))
+    if os.environ.get("RECORD") == "1":
+        RECORDED.setdefault(name, {})[label] = seen
+        return True
+    with open(os.path.join(GOLDEN, name), encoding="utf-8") as handle:
+        expected = json.load(handle)
+    return expected.get(label) == seen
+
+
+def write_recorded():
+    """With RECORD=1, write the golden files the run collected."""
+    for name, labels in RECORDED.items():
+        with open(os.path.join(GOLDEN, name), "w", encoding="utf-8") as handle:
+            json.dump(labels, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+
+
 def compare(label, fixture, results, kind, must_pause=False, method=None, prepare_runs=1, one_build=False):
-    if results["py"] != results["zig"]:
+    if not settled(label, results):
         print(f"DIFF {label}")
-        for impl in ("py", "zig"):
-            print(f"     {impl}: {results[impl]}")
+        print(f"     got: {results}")
         return 1
-    final = results["py"]
+    final = results
     published = ("complete", ["published"] * len(fixture.rels))
     if kind == "run":
         # Published in full, or untouched when no journal was written.
@@ -317,21 +302,19 @@ def compare(label, fixture, results, kind, must_pause=False, method=None, prepar
     return 0
 
 
-def each_impl(prefix, body):
-    results = {}
-    for impl in ("py", "zig"):
-        root = tempfile.mkdtemp(prefix=f"{prefix}-{impl}-")
-        try:
-            results[impl] = body(impl, root)
-        finally:
-            remove(root)
-    return results
+def fresh(prefix, body):
+    """BODY run on a fresh directory, which is removed afterwards."""
+    root = tempfile.mkdtemp(prefix=f"{prefix}-")
+    try:
+        return body(root)
+    finally:
+        remove(root)
 
 
 def run_matrix(fixture):
     failures = 0
     total_extra = []
-    steps = steps_reached(fixture)
+    steps = golden_steps(f"{fixture.name}: run")
     # The policy's success is durable once journal.prepared is renamed into
     # place; a kill after prepare.invoke and up to that rename reruns it.
     rerun = set()
@@ -340,43 +323,43 @@ def run_matrix(fixture):
         start = steps.index("prepare.invoke") + 1
         rerun = set(steps[start:steps.index("journal.prepared.rename", start) + 1])
     for step in steps:
-        def body(impl, root):
+        def body(root):
             fixture.build(root)
-            how = kill_at(impl, fixture, fixture.run_args(root, "r1"), step, root)
-            rc = finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
+            how = kill_at(fixture, fixture.run_args(root, "r1"), step, root)
+            rc = finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
             return {"kill": how, "resume_rc": rc, **outcome(fixture, root, "r1")}
         failures += compare(
-            f"{fixture.name}: run killed at {step}", fixture, each_impl("crash", body), "run",
+            f"{fixture.name}: run killed at {step}", fixture, fresh("crash", body), "run",
             prepare_runs=2 if step in rerun else 1, one_build=step in built,
         )
         if step.endswith(".exchange.after"):
             # Killed after the exchange, resumed to published, then rolled back.
-            def back(impl, root):
+            def back(root):
                 fixture.build(root)
-                how = kill_at(impl, fixture, fixture.run_args(root, "r1"), step, root)
-                assert finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root) == 0
-                rc = finish(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
+                how = kill_at(fixture, fixture.run_args(root, "r1"), step, root)
+                assert finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root) == 0
+                rc = finish(fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
                 return {"kill": how, "rollback_rc": rc, **outcome(fixture, root, "r1")}
             failures += compare(
                 f"{fixture.name}: run killed at {step}, resumed, rolled back", fixture,
-                each_impl("crash-back", back), "rollback", must_pause=True,
+                fresh("crash-back", back), "rollback", must_pause=True,
             )
             total_extra.append(1)
-    rollback_steps = steps_rollback(fixture)
+    rollback_steps = golden_steps(f"{fixture.name}: rollback")
     for step in rollback_steps:
-        def body(impl, root):
+        def body(root):
             fixture.build(root)
-            assert finish(impl, fixture, fixture.run_args(root, "r1"), root) == 0
-            how = kill_at(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], step, root)
+            assert finish(fixture, fixture.run_args(root, "r1"), root) == 0
+            how = kill_at(fixture, ["rollback", "--state-root", f"{root}/state", "r1"], step, root)
             resume_rc = None
             if step.startswith("journal.restore:") and step.endswith(".write"):
-                resume_rc = finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
-            rc = finish(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
+                resume_rc = finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
+            rc = finish(fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
             return {"kill": how, "resume_rc": resume_rc, "rollback_rc": rc, **outcome(fixture, root, "r1")}
-        results = each_impl("crash-rb", body)
+        results = fresh("crash-rb", body)
         failures += compare(f"{fixture.name}: rollback killed at {step}", fixture, results, "rollback")
         if step.startswith("journal.restore:") and step.endswith(".write"):
-            if any(results[impl]["resume_rc"] != 2 for impl in ("py", "zig")):
+            if results["resume_rc"] != 2:
                 print(f"BAD  {fixture.name}: resume reports rollback killed at {step}: {results}")
                 failures += 1
     return failures, len(steps) + len(rollback_steps) + len(total_extra)
@@ -387,39 +370,39 @@ def fallback_matrix():
     fixture = ONE
     failures = total = 0
 
-    def published_by_fallback(impl, root):
+    def published_by_fallback(root):
         fixture.build(root)
-        assert kill_at(impl, fixture, fixture.run_args(root, "r1"), "build.start", root) == "killed"
+        assert kill_at(fixture, fixture.run_args(root, "r1"), "build.start", root) == "killed"
         without_exchange(root, "r1")
 
-    def complete(impl, root):
-        published_by_fallback(impl, root)
-        rc = finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
+    def complete(root):
+        published_by_fallback(root)
+        rc = finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
         return {"kill": "killed", "resume_rc": rc, **outcome(fixture, root, "r1")}
 
-    failures += compare("fallback: run published", fixture, each_impl("crash-fb", complete), "run", method="rename-fallback")
+    failures += compare("fallback: run published", fixture, fresh("crash-fb", complete), "run", method="rename-fallback")
     total += 1
     for rel in fixture.rels:
         for name in FALLBACK:
             step = f"swap:all/{rel}.lua.fallback.{name}"
 
-            def body(impl, root):
-                published_by_fallback(impl, root)
-                how = kill_at(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], step, root)
-                rc = finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
+            def body(root):
+                published_by_fallback(root)
+                how = kill_at(fixture, ["resume", "--state-root", f"{root}/state", "r1"], step, root)
+                rc = finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root)
                 return {"kill": how, "resume_rc": rc, **outcome(fixture, root, "r1")}
-            failures += compare(f"fallback: run killed at {step}", fixture, each_impl("crash-fb", body), "run", must_pause=True, method="rename-fallback")
+            failures += compare(f"fallback: run killed at {step}", fixture, fresh("crash-fb", body), "run", must_pause=True, method="rename-fallback")
             total += 1
 
             rb_step = f"rollback.{step}"
 
-            def rb_body(impl, root):
-                published_by_fallback(impl, root)
-                assert finish(impl, fixture, ["resume", "--state-root", f"{root}/state", "r1"], root) == 0
-                how = kill_at(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], rb_step, root)
-                rc = finish(impl, fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
+            def rb_body(root):
+                published_by_fallback(root)
+                assert finish(fixture, ["resume", "--state-root", f"{root}/state", "r1"], root) == 0
+                how = kill_at(fixture, ["rollback", "--state-root", f"{root}/state", "r1"], rb_step, root)
+                rc = finish(fixture, ["rollback", "--state-root", f"{root}/state", "r1"], root)
                 return {"kill": how, "rollback_rc": rc, **outcome(fixture, root, "r1")}
-            failures += compare(f"fallback: rollback killed at {rb_step}", fixture, each_impl("crash-fb", rb_body), "rollback", must_pause=True)
+            failures += compare(f"fallback: rollback killed at {rb_step}", fixture, fresh("crash-fb", rb_body), "rollback", must_pause=True)
             total += 1
     return failures, total
 
@@ -439,24 +422,6 @@ def retire_fixture(root):
 OVER = ("r1", "r2", "r3")
 
 
-def steps_rollback_to(fixture, fallback):
-    """Every fault step one Python rollback --to r1 reaches over r2 and r3."""
-    root = tempfile.mkdtemp(prefix="crash-tosteps-")
-    try:
-        fixture.build(root)
-        for run_id in OVER:
-            spec = fixture.spec(root, run_id=run_id)
-            env = dict(fixture.env(root), FAKE_EB_MODULE_NOTE=run_id)
-            assert with_env(env, lambda: run(spec)).returncode == 0
-        if fallback:
-            without_exchange(root, OVER[-1])
-        faults = FaultInjector()
-        assert rollback(f"{root}/state", to="r1", faults=faults).returncode == 0
-        return list(dict.fromkeys(faults.reached))
-    finally:
-        remove(root)
-
-
 def trees(fixture, root):
     """The run marker of every live and hidden tree of each install path."""
     found = {}
@@ -464,7 +429,7 @@ def trees(fixture, root):
         name = rel.split("/")[0]
         parent = os.path.join(root, "software", name)
         for entry in sorted(os.listdir(parent)):
-            found[f"{name}/{entry}"] = _tree_run_id(os.path.join(parent, entry))
+            found[f"{name}/{entry}"] = tree_run_id(os.path.join(parent, entry))
     return found
 
 
@@ -503,14 +468,14 @@ def to_expected(fixture):
     return trees_after, states
 
 
-def published_over(impl, fixture, root, fallback, relinked=False):
+def published_over(fixture, root, fallback, relinked=False):
     """Publish r1, r2 and r3, each with its own module file; r1's module files.
 
     With relinked, r1's class links are removed before r2, which makes them.
     """
     fixture.build(root)
     for run_id in OVER:
-        assert finish(impl, fixture, fixture.run_args(root, run_id), root, FAKE_EB_MODULE_NOTE=run_id) == 0
+        assert finish(fixture, fixture.run_args(root, run_id), root, FAKE_EB_MODULE_NOTE=run_id) == 0
         if run_id == "r1":
             modules = module_texts(fixture, root)
             if relinked:
@@ -529,38 +494,21 @@ def rollback_to_matrix(fixture, fallback=False):
     label = fixture.name + (", rename fallback" if fallback else "")
     expected, states = to_expected(fixture)
     failures = total = 0
-    for step in steps_rollback_to(fixture, fallback):
-        def body(impl, root):
-            modules = published_over(impl, fixture, root, fallback)
+    for step in golden_steps(f"{label}: rollback --to"):
+        def body(root):
+            modules = published_over(fixture, root, fallback)
             args = ["rollback", "--state-root", f"{root}/state", "--to", "r1"]
-            how = kill_at(impl, fixture, args, step, root)
-            rc = finish(impl, fixture, args, root)
+            how = kill_at(fixture, args, step, root)
+            rc = finish(fixture, args, root)
             return {"kill": how, "rollback_rc": rc, "published_modules": modules, **to_outcome(fixture, root)}
-        results = each_impl("crash-to", body)
-        final = results["py"]
-        ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["rollback_rc"] == 0
+        results = fresh("crash-to", body)
+        final = results
+        ok = settled(f"{label}: rollback --to killed at {step}", results) and final["kill"] == "killed" and final["rollback_rc"] == 0
         ok = ok and final["trees"] == expected and final["states"] == states
         ok = ok and final["modules"] == final["published_modules"]
         failures += report(f"{label}: rollback --to killed at {step}", results, ok)
         total += 1
     return failures, total
-
-
-def retire_steps():
-    """Fault steps one Python retire reaches, then one rollback of it."""
-    from eb_staged_rebuild.retire import retire
-
-    root = tempfile.mkdtemp(prefix="crash-retire-steps-")
-    try:
-        retire_fixture(root)
-        faults = FaultInjector()
-        result = retire(f"{root}/state", f"{root}/modules/all/demo/1.lua", faults=faults)
-        assert result.returncode == 0, result
-        back = FaultInjector()
-        assert rollback(f"{root}/state", result.run_id, faults=back).returncode == 0
-        return list(dict.fromkeys(faults.reached)), list(dict.fromkeys(back.reached))
-    finally:
-        remove(root)
 
 
 def retire_outcome(root):
@@ -598,37 +546,37 @@ def retire_matrix():
     back.
     """
     original = 'local root = "W/software/demo/1"\nsetenv("EBROOTDEMO", root)\n'
-    steps, rollback_steps = retire_steps()
+    retire_list, rollback_list = golden_steps("retire: retire"), golden_steps("retire: rollback")
     failures = total = 0
     retire_args = lambda root: [  # noqa: E731
         "retire", "--state-root", f"{root}/state", "--module-file", f"{root}/modules/all/demo/1.lua",
     ]
-    for step in steps:
-        def body(impl, root):
+    for step in retire_list:
+        def body(root):
             retire_fixture(root)
-            how = kill_at(impl, ONE, retire_args(root), step, root)
+            how = kill_at(ONE, retire_args(root), step, root)
             run_id = retire_run_id(root)
-            again = finish(impl, ONE, retire_args(root), root) if run_id else None
-            back = finish(impl, ONE, ["rollback", "--state-root", f"{root}/state", run_id], root) if run_id else None
+            again = finish(ONE, retire_args(root), root) if run_id else None
+            back = finish(ONE, ["rollback", "--state-root", f"{root}/state", run_id], root) if run_id else None
             return {"kill": how, "again_rc": again, "rollback_rc": back, **retire_outcome(root)}
-        results = each_impl("crash-retire", body)
-        final = results["py"]
-        ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["module"] == original
+        results = fresh("crash-retire", body)
+        final = results
+        ok = settled(f"retire killed at {step}", results) and final["kill"] == "killed" and final["module"] == original
         ok = ok and final["links"] == RETIRE_LINKS
         ok = ok and (final["again_rc"] in (None, 2)) and set(final["states"]) <= {"rolled_back"}
         failures += report(f"retire killed at {step}", results, ok)
         total += 1
-    for step in rollback_steps:
-        def body(impl, root):
+    for step in rollback_list:
+        def body(root):
             retire_fixture(root)
-            assert finish(impl, ONE, retire_args(root), root) == 0
+            assert finish(ONE, retire_args(root), root) == 0
             run_id = retire_run_id(root)
-            how = kill_at(impl, ONE, ["rollback", "--state-root", f"{root}/state", run_id], step, root)
-            back = finish(impl, ONE, ["rollback", "--state-root", f"{root}/state", run_id], root)
+            how = kill_at(ONE, ["rollback", "--state-root", f"{root}/state", run_id], step, root)
+            back = finish(ONE, ["rollback", "--state-root", f"{root}/state", run_id], root)
             return {"kill": how, "rollback_rc": back, **retire_outcome(root)}
-        results = each_impl("crash-retire-rb", body)
-        final = results["py"]
-        ok = results["py"] == results["zig"] and final["kill"] == "killed" and final["module"] == original
+        results = fresh("crash-retire-rb", body)
+        final = results
+        ok = settled(f"retire rollback killed at {step}", results) and final["kill"] == "killed" and final["module"] == original
         ok = ok and final["links"] == RETIRE_LINKS
         ok = ok and final["rollback_rc"] == 0 and final["states"] == ["rolled_back"]
         failures += report(f"retire rollback killed at {step}", results, ok)
@@ -638,12 +586,10 @@ def retire_matrix():
 
 def report(label, results, ok):
     if ok:
-        print(f"same {label}: {results['py'].get('states')}")
+        print(f"same {label}: {results.get('states')}")
         return 0
-    word = "DIFF" if results["py"] != results["zig"] else "BAD "
-    print(f"{word} {label}")
-    for impl in ("py", "zig"):
-        print(f"     {impl}: {results[impl]}")
+    print(f"BAD  {label}")
+    print(f"     got: {results}")
     return 1
 
 
@@ -662,6 +608,7 @@ def main():
         failures, total = failures + f, total + t
     f, t = retire_matrix()
     failures, total = failures + f, total + t
+    write_recorded()
     print(f"{total - failures} of {total} cases match")
     return 1 if failures else 0
 

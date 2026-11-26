@@ -1,4 +1,4 @@
-"""CLI parity when a generation's easybuild metadata directory is unreadable."""
+"""CLI behaviour when a generation's easybuild metadata directory is unreadable."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 _FAKE_EB = """#!/usr/bin/env python3
 import os
@@ -31,7 +31,7 @@ os.chmod(meta, 0)
 """
 
 
-def _run_unreadable_staged_case(testcase: unittest.TestCase, runner) -> None:
+def _run_unreadable_staged_case(testcase: unittest.TestCase) -> None:
     with tempfile.TemporaryDirectory(prefix="run-unreadable-meta-") as tmp:
         software = os.path.join(tmp, "software")
         modules = os.path.join(tmp, "modules", "all")
@@ -51,7 +51,7 @@ def _run_unreadable_staged_case(testcase: unittest.TestCase, runner) -> None:
         staged = os.path.join(state, "generations", "unreadable-meta", "software", "demo", "1")
         meta = os.path.join(staged, "easybuild")
         try:
-            done = runner(
+            done = run_cli(
                 "run",
                 "--software",
                 software,
@@ -102,15 +102,14 @@ class UnreadableEasybuildMetadataParityTests(unittest.TestCase):
 
             os.chmod(meta, 0)
             try:
-                py_done = run_cli("resolve", module)
-                zig_done = run_cli_optional_binary("resolve", module)
+                done = run_cli("resolve", module)
             finally:
                 os.chmod(meta, 0o700)
 
-            self.assertEqual(py_done.returncode, 1, py_done.stdout + py_done.stderr)
-            self.assertEqual(py_done.stderr, "")
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertEqual(done.stderr, "")
             self.assertEqual(
-                json.loads(py_done.stdout),
+                json.loads(done.stdout),
                 {
                     "complete": False,
                     "kind": "file",
@@ -120,17 +119,12 @@ class UnreadableEasybuildMetadataParityTests(unittest.TestCase):
                     "syntax": "lua",
                 },
             )
-            if zig_done is not None:
-                self.assertEqual(zig_done.returncode, 1, zig_done.stdout + zig_done.stderr)
-                self.assertEqual(py_done.stdout, zig_done.stdout)
-                self.assertEqual(py_done.stderr, zig_done.stderr)
+            golden(self, "stdout", scrub(done.stdout, TMP=tmp))
 
     def test_run_fails_journal_when_staged_easybuild_dir_is_unreadable(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores directory read permissions")
-        _run_unreadable_staged_case(self, run_cli)
-        if run_cli_optional_binary("--help") is not None:
-            _run_unreadable_staged_case(self, run_cli_optional_binary)
+        _run_unreadable_staged_case(self)
 
 
 if __name__ == "__main__":

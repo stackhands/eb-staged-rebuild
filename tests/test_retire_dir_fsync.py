@@ -1,8 +1,8 @@
 """A directory flush that fails after a retire rename stops the command.
 
 The module file is renamed into the state root, and the directories of
-that rename are flushed afterwards. Python raises. The binary ignored
-the flushes, recorded the retire, and exited 0.
+that rename are flushed afterwards. A failed flush stops the command
+before it records the retire.
 """
 
 from __future__ import annotations
@@ -11,10 +11,8 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import unittest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
@@ -29,24 +27,16 @@ class RetireDirFsyncTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        python = self._run("python")
         binary = self._run(tool)
-        detail_py = python.stdout + python.stderr
         detail_bin = binary.stdout + binary.stderr
-        self.assertEqual(python.returncode, 2, detail_py)
         self.assertEqual(binary.returncode, 2, detail_bin)
-        self.assertIn("Input/output error", detail_py)
         self.assertIn("Input/output error", detail_bin)
-        self.assertIn("JOURNAL retiring", detail_py)
         self.assertIn("JOURNAL retiring", detail_bin)
-        self.assertIn("LIVE absent", detail_py)
         self.assertIn("LIVE absent", detail_bin)
-        self.assertNotIn("left in place", detail_py)
         self.assertNotIn("left in place", detail_bin)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
-        label = "python" if tool == "python" else "zig"
-        work = f"/tmp/retire-dir-fsync-{os.getpid()}-{label}"
+        work = f"/tmp/retire-dir-fsync-{os.getpid()}-zig"
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -78,15 +68,10 @@ class RetireDirFsyncTests(unittest.TestCase):
             with open(os.path.join(install, "PAYLOAD"), "w", encoding="utf-8") as handle:
                 handle.write("old\n")
             state = os.path.join(mnt, "state")
-            run_env = dict(os.environ)
-            run_env["PYTHONPATH"] = _REPO
-            run_env["PYTHONIOENCODING"] = "utf-8:strict"
-            argv = [sys.executable, "-m", "eb_staged_rebuild"] if tool == "python" else [tool]
             done = subprocess.run(
-                [*argv, "retire", "--state-root", state, "--module-file", module],
+                [tool, "retire", "--state-root", state, "--module-file", module],
                 check=False,
                 capture_output=True,
-                env=run_env,
                 timeout=60,
             )
             live = "present" if os.path.lexists(module) else "absent"

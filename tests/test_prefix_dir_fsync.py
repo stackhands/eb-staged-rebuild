@@ -2,9 +2,8 @@
 
 The install directory is flushed once while the build is recorded.
 The next flush has to make the rewritten file's directory entry
-durable before that name points at the new inode. Python raises.
-The binary used to ignore the flush after the rename and publish
-the generation anyway.
+durable before that name points at the new inode; a failure there
+refuses publication.
 """
 
 from __future__ import annotations
@@ -12,11 +11,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import textwrap
 import unittest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
@@ -31,22 +28,15 @@ class PrefixDirFsyncTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        python = self._run("python")
         binary = self._run(tool)
-        detail_py = python.stdout + python.stderr
         detail_bin = binary.stdout + binary.stderr
-        self.assertEqual(python.returncode, 2, detail_py)
         self.assertEqual(binary.returncode, 2, detail_bin)
-        self.assertIn("Input/output error", detail_py)
         self.assertIn("Input/output error", detail_bin)
-        self.assertIn("LIVE old", detail_py)
         self.assertIn("LIVE old", detail_bin)
-        self.assertIn("generations/r1", detail_py)
         self.assertIn("generations/r1", detail_bin)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
-        label = "python" if tool == "python" else "zig"
-        work = f"/tmp/dir-fsync-{os.getpid()}-{label}"
+        work = f"/tmp/dir-fsync-{os.getpid()}-zig"
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -94,13 +84,9 @@ class PrefixDirFsyncTests(unittest.TestCase):
             _wait_mount(self, mnt, mounted)
             with open(os.path.join(mnt, "modules", "all", "demo", "1.lua"), "w", encoding="utf-8") as handle:
                 handle.write(f'local root = "{mnt}/software/demo/1"\n')
-            run_env = dict(os.environ)
-            run_env["PYTHONPATH"] = _REPO
-            run_env["PYTHONIOENCODING"] = "utf-8:strict"
-            argv = [sys.executable, "-m", "eb_staged_rebuild"] if tool == "python" else [tool]
             done = subprocess.run(
                 [
-                    *argv,
+                    tool,
                     "run",
                     "--software",
                     os.path.join(mnt, "software"),
@@ -121,7 +107,6 @@ class PrefixDirFsyncTests(unittest.TestCase):
                 ],
                 check=False,
                 capture_output=True,
-                env=run_env,
                 timeout=60,
             )
             live = os.path.join(mnt, "software", "demo", "1", "PAYLOAD")

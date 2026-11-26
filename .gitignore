@@ -9,7 +9,9 @@ build/
 .zig-cache/
 zig-out/
 zig-pkg/
-.differential-metadata/
+.golden-metadata/
+/eb_staged_rebuild/bin/
+*.egg-info/
 
 # Documentation build (docs-plan template): generated, never committed.
 /docs/build/

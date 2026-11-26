@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.support import _program, _python314, classic_install
+from tests.support import _program, _python314, classic_install, golden, scrub, tool_bin
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FAKE = os.path.join(_REPO, "tests", "fake_eb.py")
@@ -117,18 +117,12 @@ class ModuleWalkEintrTest(unittest.TestCase):
         return root, staged, got, recorded
 
     def test_an_unreadable_module_directory_refuses_the_run(self):
-        root, staged, python, recorded = self._refused_run([self.python, "-m", "eb_staged_rebuild.cli"])
-        self.assertEqual(python.returncode, 2, python.stdout + python.stderr)
-        self.assertTrue(python.stdout.endswith(f"eb-staged-rebuild: module tree is unreadable: {staged}\n"), python.stdout)
+        root, staged, got, recorded = self._refused_run([tool_bin()])
+        self.assertEqual(got.returncode, 2, got.stdout + got.stderr)
+        self.assertTrue(got.stdout.endswith(f"eb-staged-rebuild: module tree is unreadable: {staged}\n"), got.stdout)
         self.assertEqual(recorded, "failed")
-        tool = os.environ.get("TOOL_BIN")
-        if not tool:
-            return
-        zig_root, _zig_staged, binary, zig_recorded = self._refused_run([tool])
-        self.assertEqual(binary.returncode, python.returncode, binary.stdout + binary.stderr)
-        self.assertEqual(binary.stdout.replace(zig_root, "ROOT"), python.stdout.replace(root, "ROOT"))
-        self.assertEqual(binary.stderr.replace(zig_root, "ROOT"), python.stderr.replace(root, "ROOT"))
-        self.assertEqual(zig_recorded, recorded)
+        golden(self, "stdout", scrub(got.stdout, ROOT=root))
+        golden(self, "stderr", scrub(got.stderr, ROOT=root))
 
     def _tree(self):
         root = tempfile.mkdtemp(prefix="walk-sibling-")

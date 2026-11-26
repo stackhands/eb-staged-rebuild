@@ -1,8 +1,7 @@
 """A failed release of the state-root lock, injected at the fcntl or flock call.
 
-After a command that succeeded, both front ends exit 2 with the OSError
-text and no path. After a refusal under the lock the binary keeps the
-refusal; Python's ``finally: lock.release()`` replaces it with the OSError.
+After a command that succeeded, the binary exits 2 with the OSError text and
+no path. After a refusal under the lock the binary keeps the refusal.
 """
 
 import json
@@ -40,7 +39,7 @@ class LockReleaseErrorTest(unittest.TestCase):
         if not os.environ.get("TOOL_BIN"):
             _skip(self, "TOOL_BIN is unset")
         self.program = _program(self, "eb-fs-fail-lock-release")
-        self.fronts = (("python", [sys.executable, "-m", "eb_staged_rebuild.cli"]), ("binary", [os.environ["TOOL_BIN"]]))
+        self.front = [os.environ["TOOL_BIN"]]
 
     def _layout(self):
         root = tempfile.mkdtemp(prefix="lock-release-")
@@ -55,8 +54,6 @@ class LockReleaseErrorTest(unittest.TestCase):
             handle.write(f"#!/bin/sh\nexec {sys.executable} {_FAKE} \"$@\"\n")
         os.chmod(eb, stat.S_IRWXU)
         env = {
-            "PYTHONPATH": _REPO,
-            "PYTHONIOENCODING": "utf-8:strict",
             "LANG": "C.UTF-8",
             "FAKE_EB_VERSION": "5.4.2",
             "FAKE_EB_PAYLOAD": "new\n",
@@ -84,27 +81,23 @@ class LockReleaseErrorTest(unittest.TestCase):
         return done.returncode, done.stdout.replace(root, "ROOT"), done.stderr.replace(root, "ROOT")
 
     def _each(self, before, command, check):
-        """Run COMMAND under each injected release failure in each front end.
+        """Run COMMAND under each injected release failure.
 
-        BEFORE prepares a fresh layout; CHECK sees the outcomes, Python's
-        first, and the layouts they left. The lock is free afterwards: a
-        gc with --lock-timeout 0 takes it.
+        BEFORE prepares a fresh layout; CHECK sees the outcome and the layout
+        it left. The lock is free afterwards: a gc with --lock-timeout 0 takes it.
         """
+        front = self.front
         for op, needle in _RELEASES:
             with self.subTest(op=op):
-                outcomes, roots = [], []
-                for _name, front in self.fronts:
-                    root, env, state, run = self._layout()
-                    before(front, root, env, state, run)
-                    outcomes.append(self._traced(command(front, state, run), root, env, op, needle))
-                    roots.append(root)
-                    self._plain([*front, "gc", "--state-root", state, "--lock-timeout", "0"], root, env)
-                check(outcomes, roots)
+                root, env, state, run = self._layout()
+                before(front, root, env, state, run)
+                outcome = self._traced(command(front, state, run), root, env, op, needle)
+                self._plain([*front, "gc", "--state-root", state, "--lock-timeout", "0"], root, env)
+                check(outcome, root)
 
     def test_gc_reports_the_failed_release_and_prints_no_actions(self):
-        def check(outcomes, _roots):
-            self.assertEqual(outcomes[0], outcomes[1])
-            self.assertEqual(outcomes[1], (2, "", _EIO))
+        def check(outcome, _root):
+            self.assertEqual(outcome, (2, "", _EIO))
 
         self._each(
             lambda *_: None,
@@ -113,21 +106,17 @@ class LockReleaseErrorTest(unittest.TestCase):
         )
 
     def test_run_reports_the_failed_release_after_publishing(self):
-        def check(outcomes, roots):
-            self.assertEqual(outcomes[0][0::2], outcomes[1][0::2])
-            self.assertEqual(outcomes[1][0::2], (2, _EIO))
-            for root in roots:
-                self.assertEqual(_journal(root)["state"], "complete")
-                self.assertEqual(_payload(root), "new\n")
+        def check(outcome, root):
+            self.assertEqual(outcome[0::2], (2, _EIO))
+            self.assertEqual(_journal(root)["state"], "complete")
+            self.assertEqual(_payload(root), "new\n")
 
         self._each(lambda *_: None, lambda front, _state, run: [*front, *run], check)
 
     def test_resume_of_a_complete_run_reports_the_failed_release(self):
-        def check(outcomes, roots):
-            self.assertEqual(outcomes[0][0::2], outcomes[1][0::2])
-            self.assertEqual(outcomes[1][0::2], (2, _EIO))
-            for root in roots:
-                self.assertEqual(_journal(root)["state"], "complete")
+        def check(outcome, root):
+            self.assertEqual(outcome[0::2], (2, _EIO))
+            self.assertEqual(_journal(root)["state"], "complete")
 
         self._each(
             lambda front, root, env, _state, run: self._plain([*front, *run], root, env),
@@ -136,12 +125,10 @@ class LockReleaseErrorTest(unittest.TestCase):
         )
 
     def test_rollback_reports_the_failed_release_after_rolling_back(self):
-        def check(outcomes, roots):
-            self.assertEqual(outcomes[0][0::2], outcomes[1][0::2])
-            self.assertEqual(outcomes[1][0::2], (2, _EIO))
-            for root in roots:
-                self.assertEqual(_journal(root)["state"], "rolled_back")
-                self.assertEqual(_payload(root), "old\n")
+        def check(outcome, root):
+            self.assertEqual(outcome[0::2], (2, _EIO))
+            self.assertEqual(_journal(root)["state"], "rolled_back")
+            self.assertEqual(_payload(root), "old\n")
 
         self._each(
             lambda front, root, env, _state, run: self._plain([*front, *run], root, env),
@@ -150,14 +137,11 @@ class LockReleaseErrorTest(unittest.TestCase):
         )
 
     def test_a_refusal_under_the_lock_is_kept_by_the_binary(self):
-        # Python's finally clause raises the release's OSError over the
-        # refusal (eb_staged_rebuild/engine.py, `run`); the binary drops the
-        # failed release and reports the refusal.
+        # The binary drops the failed release and reports the refusal.
         refusal = "eb-staged-rebuild: run run1 already exists; resume it or choose another --run-id\n"
 
-        def check(outcomes, _roots):
-            self.assertEqual(outcomes[0][0::2], (2, _EIO))
-            self.assertEqual(outcomes[1][0::2], (2, refusal))
+        def check(outcome, _root):
+            self.assertEqual(outcome[0::2], (2, refusal))
 
         self._each(
             lambda front, root, env, _state, run: self._plain([*front, *run], root, env),

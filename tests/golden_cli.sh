@@ -1,31 +1,67 @@
 #!/bin/bash
-# Run the Python tool (python3 -m eb_staged_rebuild) and the Zig build
-# (TOOL_BIN) on the same invocations and compare exit code, stdout and
-# stderr; for commands that change a fixture, also the journals and the
-# tree they leave.
-#   TOOL_BIN=zig-out/bin/eb-staged-rebuild bash tests/differential.sh
+# Run the binary (TOOL_BIN) on a long list of invocations, and compare each
+# one's exit code, stdout and stderr with the file tests/golden/golden_cli/
+# holds for its label; for commands that change a fixture, also the journals
+# and the tree they leave. Paths, times, run ids and hashes are replaced by
+# placeholders before the comparison.
+#   TOOL_BIN=zig-out/bin/eb-staged-rebuild bash tests/golden_cli.sh
+# RECORD=1 writes the files instead of comparing; read the diff before
+# committing it.
 set -u
 : "${TOOL_BIN:?}"
 # verify loads module files with $LMOD_CMD and judges ELF objects against
 # EESSI; the cases that want either set it themselves.
 unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/esr-diff.XXXXXX")
+golden_dir=${repo_root}/tests/golden/golden_cli
+work=$(mktemp -d "${TMPDIR:-/tmp}/esr-golden.XXXXXX")
 trap 'chmod -R u+rwX "${work}" 2>/dev/null; rm -rf -- "${work}"' EXIT
+# verify lists the temporary directories it knows; the cases see the default.
+unset TMPDIR
+site=${work}/site
 diffs=0
+declare -A seen
+
+# settle LABEL FILE: FILE must be what the golden file of LABEL holds. A label
+# used twice names its second case LABEL-2, and so on.
+settle() {
+    local label=$1 file=$2 name n=1 path
+    name=$(printf '%s' "${label}" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    seen[${name}]=$(( ${seen[${name}]:-0} + 1 ))
+    n=${seen[${name}]}
+    [ "${n}" -gt 1 ] && name=${name}-${n}
+    path=${golden_dir}/${name}
+    if [ "${RECORD:-}" = 1 ]; then
+        mkdir -p "${golden_dir}"
+        cp "${file}" "${path}"
+        echo "recorded ${label}"
+    elif [ ! -f "${path}" ]; then
+        echo "DIFF ${label}: no golden file ${path#"${repo_root}"/}"
+        diffs=$((diffs + 1))
+    elif cmp -s "${file}" "${path}"; then
+        echo "same ${label}"
+    else
+        echo "DIFF ${label}"
+        diff "${path}" "${file}" | head -20 | sed 's/^/     /'
+        diffs=$((diffs + 1))
+    fi
+}
+
+# scrub: the scratch directory is a different path on every run.
+scrub() {
+    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g"
+}
 
 compare() {
     local label=$1; shift
-    (cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild "$@") > "${work}/o.out" 2> "${work}/o.err"; local oc=$?
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
-    if [ "${oc}" != "${nc}" ] || ! cmp -s "${work}/o.out" "${work}/n.out" || ! cmp -s "${work}/o.err" "${work}/n.err"; then
-        echo "DIFF ${label}: exit ${oc} vs ${nc}"
-        diff "${work}/o.out" "${work}/n.out" | head -20 | sed 's/^/     out /'
-        diff "${work}/o.err" "${work}/n.err" | head -20 | sed 's/^/     err /'
-        diffs=$((diffs + 1))
-    else
-        echo "same ${label}"
-    fi
+    {
+        printf 'exit %s\n--- stdout\n' "${nc}"
+        scrub < "${work}/n.out"
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "${label}" "${work}/n.all"
 }
 
 # Module files.
@@ -125,17 +161,40 @@ compare "list, no option" list
 compare "list, a positional" list --state-root "${st}" extra
 
 # Probe.
-compare "probe --json" probe --path "${work}/p" --json --eb missing-eb
-compare "probe text" probe --path "${work}/p" --eb missing-eb
+# probe reports this host's sandboxes and file system; the cases keep its
+# structure: the exit code and the key paths with the type of each value.
+probe_shape() {
+    local label=$1; shift
+    (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    {
+        printf 'exit %s\n--- keys\n' "${nc}"
+        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out"
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "${label}" "${work}/n.all"
+}
+probe_shape "probe --json" probe --path "${work}/p" --json --eb missing-eb
+compare_probe_text() {
+    (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    {
+        printf 'exit %s\n--- labels\n' "${nc}"
+        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out"
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "probe text" "${work}/n.all"
+}
+compare_probe_text probe --path "${work}/p" --eb missing-eb
 compare "probe -h" probe -h
 compare "probe --path without a value" probe --path
 compare "top level, nothing"
 compare "top level --help" --help
-# The binary's --version adds its build to the Python tool's line (COMPAT.md).
-if py_version=$(cd "${work}" && PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild --version 2>&1) && zig_version=$("${TOOL_BIN}" --version 2>&1) && [[ "${zig_version}" == "${py_version} ("*")" ]]; then
-    echo "same --version, then the build"
+# --version names the program, its version and its build.
+if zig_version=$("${TOOL_BIN}" --version 2>&1) && [[ "${zig_version}" =~ ^eb-staged-rebuild\ [0-9]+\.[0-9]+\.[0-9]+\ \(.*\)$ ]]; then
+    echo "same --version, the program, its version and its build"
 else
-    echo "DIFF --version: '${py_version:-}' vs '${zig_version:-}'"; diffs=$((diffs + 1))
+    echo "DIFF --version: '${zig_version:-}'"; diffs=$((diffs + 1))
 fi
 for c in run resume verify rollback status list gc retire; do compare "${c} -h" "${c}" -h; done
 compare "verify, nothing" verify
@@ -159,25 +218,27 @@ compare "run, a backend with a quote" run --backend "a'b" -- x.eb
 compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
 compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 
-# Commands that change a fixture: each implementation gets its own copy,
-# and run ids and timestamps are normalized before the comparison.
+# Commands that change a fixture: run ids and timestamps are normalized
+# before the comparison.
 norm() {
     sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
         -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
-        -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${work}/(py|zig)#W#g" \
+        -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${site}#@SITE@#g" -e "s#${work}#@WORK@#g" \
         -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
-        -e 's#[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox#SANDBOX#' \
-        -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" |
+        -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" \
+        -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
+        -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
     # The sandbox command in a journal's eb_command list, one item per line.
-    perl -0pe 's/"[^"\n]*python[0-9.]*",\n\s*"-m",\n\s*"eb_staged_rebuild\.userns_sandbox",/"SANDBOX",/g; s/"\Q$ENV{TOOL_BIN}\E",\n\s*"__userns-sandbox",/"SANDBOX",/g' 
+    # What the host reports about its sandboxes is not what the cases test.
+    perl -0pe 's/"\Q$ENV{TOOL_BIN}\E",\n\s*"__userns-sandbox",/"SANDBOX",/g; s/("(?:bwrap|userns_sandbox|user_namespaces)": )\{[^{}]*\}/$1HOST/g'
 }
 fixture() {
     local root=$1
     mkdir -p "${root}/modules/all/demo" "${root}/software/demo/1/easybuild" "${root}/state/runs/r1"
     touch "${root}/software/demo/1/easybuild/demo-1.eb"
     # A relative root, so both copies of the module file have the same bytes
-    # and the same hash; each implementation runs from its own copy.
+    # and the same hash wherever the run happens.
     printf 'local root = "software/demo/1"\n' > "${root}/modules/all/demo/1.lua"
     mkdir -p "${root}/software/old/.2.0001/sub" "${root}/software/old/2"
     touch "${root}/software/old/.2.0001/sub/file"
@@ -238,62 +299,52 @@ fixture() {
 }
 compare_admin() {
     local label=$1; shift
-    local impl root out a f bad=0
-    for impl in py zig; do
-        root="${work}/${impl}"
-        out="${work}/${impl}.admin"
-        local -a cmd args=()
-        local rid
-        if [ "${impl}" = py ]; then cmd=(env PYTHONPATH="${repo_root}" python3 -m eb_staged_rebuild); else cmd=("${TOOL_BIN}"); fi
-        # The retire record the last successful retire created. Names sort
-        # by the second only, so two retires in one second do not order by
-        # name the same way in both copies.
-        rid=$(cat "${root}/.last-retire" 2>/dev/null)
-        local -a before=() after=()
-        local d
-        for d in "${root}"/state/runs/retire-*; do [ -e "${d}" ] && before+=("${d##*/}"); done
-        for a in "$@"; do
-            a="${a//@ROOT@/${root}}"
-            if [ "${a}" = "@CMD@" ]; then args+=("${cmd[@]}"); else args+=("${a//@RETIRE@/${rid}}"); fi
-        done
-        if [ "${args[0]}" = env ]; then
-            (cd "${root}" && "${args[@]}") > "${out}.out" 2> "${out}.err"
-        else
-            (cd "${root}" && "${cmd[@]}" "${args[@]}") > "${out}.out" 2> "${out}.err"
-        fi
-        echo $? > "${out}.rc"
-        for d in "${root}"/state/runs/retire-*; do
-            [ -e "${d}" ] || continue
-            [[ " ${before[*]} " == *" ${d##*/} "* ]] || after+=("${d##*/}")
-        done
-        [ "${#after[@]}" -gt 0 ] && echo "${after[-1]}" > "${root}/.last-retire"
-        # Ordered by run directory: by path, "retire-STAMP-2/journal.json"
-        # sorts before "retire-STAMP/journal.json".
-        find "${root}" -name journal.json -printf '%h\0' 2>/dev/null | LC_ALL=C sort -z |
-            while IFS= read -r -d '' d; do cat "${d}/journal.json"; done > "${out}.journals"
-        (cd "${root}" && find . -not -name '.lock*' -not -name .last-retire 2>/dev/null) > "${out}.tree"
-        find "${root}" -name '*.prom' -type f -print0 2>/dev/null | LC_ALL=C sort -z |
-            while IFS= read -r -d '' f; do printf '%s\n' "${f#${root}/}"; cat "${f}"; done > "${out}.metrics"
-        for f in out err journals metrics; do
-            norm < "${out}.${f}" |
-                sed -E 's/^(eb_staged_rebuild_(current_generation_age|last_gc_timestamp)_seconds) .*/\1 TIME/' \
-                > "${out}.${f}.n"
-        done
-        # Sorted after normalizing, so names that differ only in a stamp
-        # compare by what is left.
-        norm < "${out}.tree" | LC_ALL=C sort > "${out}.tree.n"
+    local root=${site} out=${work}/admin a f rid d
+    local -a cmd=("${TOOL_BIN}") args=() before=() after=()
+    # The retire record the last successful retire created. Names sort by the
+    # second only, so two retires in one second do not order by name.
+    rid=$(cat "${root}/.last-retire" 2>/dev/null)
+    for d in "${root}"/state/runs/retire-*; do [ -e "${d}" ] && before+=("${d##*/}"); done
+    for a in "$@"; do
+        a="${a//@ROOT@/${root}}"
+        if [ "${a}" = "@CMD@" ]; then args+=("${cmd[@]}"); else args+=("${a//@RETIRE@/${rid}}"); fi
     done
-    for f in rc out.n err.n journals.n metrics.n tree.n; do
-        if ! cmp -s "${work}/py.admin.${f}" "${work}/zig.admin.${f}"; then
-            [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
-            bad=1
-            diff "${work}/py.admin.${f}" "${work}/zig.admin.${f}" | head -20 | sed "s/^/     ${f} /"
-        fi
+    if [ "${args[0]}" = env ]; then
+        (cd "${root}" && "${args[@]}") > "${out}.out" 2> "${out}.err"
+    else
+        (cd "${root}" && "${cmd[@]}" "${args[@]}") > "${out}.out" 2> "${out}.err"
+    fi
+    echo $? > "${out}.rc"
+    for d in "${root}"/state/runs/retire-*; do
+        [ -e "${d}" ] || continue
+        [[ " ${before[*]} " == *" ${d##*/} "* ]] || after+=("${d##*/}")
     done
-    if [ "${bad}" -eq 0 ]; then echo "same ${label}"; else diffs=$((diffs + 1)); fi
+    [ "${#after[@]}" -gt 0 ] && echo "${after[-1]}" > "${root}/.last-retire"
+    # Ordered by run directory: by path, "retire-STAMP-2/journal.json" sorts
+    # before "retire-STAMP/journal.json".
+    find "${root}" -name journal.json -printf '%h\0' 2>/dev/null | LC_ALL=C sort -z |
+        while IFS= read -r -d '' d; do cat "${d}/journal.json"; done > "${out}.journals"
+    (cd "${root}" && find . -not -name '.lock*' -not -name .last-retire 2>/dev/null) > "${out}.tree"
+    find "${root}" -name '*.prom' -type f -print0 2>/dev/null | LC_ALL=C sort -z |
+        while IFS= read -r -d '' f; do printf '%s\n' "${f#"${root}"/}"; cat "${f}"; done > "${out}.metrics"
+    for f in out err journals metrics; do
+        norm < "${out}.${f}" |
+            sed -E 's/^(eb_staged_rebuild_(current_generation_age|last_gc_timestamp)_seconds) .*/\1 TIME/' \
+            > "${out}.${f}.n"
+    done
+    # Sorted after normalizing, so names that differ only in a stamp compare
+    # by what is left.
+    norm < "${out}.tree" | LC_ALL=C sort -u > "${out}.tree.n"
+    {
+        printf 'exit %s\n' "$(cat "${out}.rc")"
+        for f in out err journals metrics tree; do
+            printf -- '--- %s\n' "${f}"
+            cat "${out}.${f}.n"
+        done
+    } > "${out}.all"
+    settle "${label}" "${out}.all"
 }
-fixture "${work}/py"
-fixture "${work}/zig"
+fixture "${site}"
 
 compare_cross_filesystem() {
     local label="run refuses a state root on another filesystem before the build"
@@ -301,51 +352,27 @@ compare_cross_filesystem() {
         echo "same ${label} (second filesystem not available)"
         return
     fi
-    local other impl root state out builds runs generations bad=0
-    other=$(mktemp -d /dev/shm/esr-diff.XXXXXX)
-    for impl in py zig; do
-        root="${work}/${impl}"
-        state="${other}/${impl}/state"
-        out="${work}/${impl}.cross-filesystem"
-        mkdir -p "${other}/${impl}"
-        if [ "${impl}" = py ]; then
-            env PYTHONPATH="${repo_root}" FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
-                python3 -m eb_staged_rebuild run \
-                --software "${root}/software" --modules "${root}/modules" \
-                --state-root "${state}" --backend installpath --eb "${root}/eb" \
-                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
-                > "${out}.out" 2> "${out}.err"
-        else
-            env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
-                "${TOOL_BIN}" run \
-                --software "${root}/software" --modules "${root}/modules" \
-                --state-root "${state}" --backend installpath --eb "${root}/eb" \
-                --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
-                > "${out}.out" 2> "${out}.err"
-        fi
-        echo $? > "${out}.rc"
-        builds=$(awk '/--installpath-software/{n++} END{print n+0}' "${root}/cross-filesystem-argv")
-        runs=$([ -e "${state}/runs" ] && echo yes || echo no)
-        generations=$([ -e "${state}/generations" ] && echo yes || echo no)
-        printf 'builds=%s runs=%s generations=%s\n' "${builds}" "${runs}" "${generations}" > "${out}.state"
-        for f in out err; do norm < "${out}.${f}" > "${out}.${f}.n"; done
-    done
-    for f in rc out.n err.n state; do
-        if ! cmp -s "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}"; then
-            [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
-            bad=1
-            diff "${work}/py.cross-filesystem.${f}" "${work}/zig.cross-filesystem.${f}" |
-                head -20 | sed "s/^/     ${f} /"
-        fi
-    done
-    if [ "$(cat "${work}/py.cross-filesystem.rc")" != 2 ] ||
-       [ "$(cat "${work}/py.cross-filesystem.state")" != "builds=0 runs=no generations=no" ]; then
-        [ "${bad}" -eq 0 ] && echo "DIFF ${label}"
-        bad=1
-        sed 's/^/     state /' "${work}/py.cross-filesystem.state"
-    fi
+    local other root=${site} state out=${work}/cross-filesystem builds runs generations
+    other=$(mktemp -d /dev/shm/esr-golden.XXXXXX)
+    state="${other}/state"
+    env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+        "${TOOL_BIN}" run \
+        --software "${root}/software" --modules "${root}/modules" \
+        --state-root "${state}" --backend installpath --eb "${root}/eb" \
+        --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+        > "${out}.out" 2> "${out}.err"
+    echo $? > "${out}.rc"
+    builds=$(awk '/--installpath-software/{n++} END{print n+0}' "${root}/cross-filesystem-argv")
+    runs=$([ -e "${state}/runs" ] && echo yes || echo no)
+    generations=$([ -e "${state}/generations" ] && echo yes || echo no)
+    {
+        printf 'exit %s\n' "$(cat "${out}.rc")"
+        printf -- '--- stdout\n'; sed -e "s#${other}#@OTHER@#g" < "${out}.out" | norm
+        printf -- '--- stderr\n'; sed -e "s#${other}#@OTHER@#g" < "${out}.err" | norm
+        printf -- '--- state\nbuilds=%s runs=%s generations=%s\n' "${builds}" "${runs}" "${generations}"
+    } > "${out}.all"
     rm -rf "${other}"
-    if [ "${bad}" -eq 0 ]; then echo "same ${label}"; else diffs=$((diffs + 1)); fi
+    settle "${label}" "${out}.all"
 }
 
 compare_cross_filesystem
@@ -360,46 +387,43 @@ compare_admin "gc --json keeps within grace" gc --state-root @ROOT@/state --dry-
 compare_admin "gc, --usage-log keeps an in-use tree" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 compare_admin "gc, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
 if [ "$(id -u)" != 0 ]; then
-    for impl in py zig; do chmod 0 "${work}/${impl}/modules/all/kept"; done
+    chmod 0 "${site}/modules/all/kept"
     compare_admin "gc, an unreadable live module" gc --state-root @ROOT@/state --grace-hours 0
-    for impl in py zig; do chmod 755 "${work}/${impl}/modules/all/kept"; done
+    chmod 755 "${site}/modules/all/kept"
 fi
 compare_admin "gc removes past grace" gc --state-root @ROOT@/state --grace-hours 0
 compare_admin "gc again" gc --state-root @ROOT@/state --grace-hours 0
 # gc removes a run's generation once the run's hidden trees are settled, and
 # a failed build's only with --include-failed.
-for impl in py zig; do
-    r="${work}/${impl}"
-    mkdir -p "${r}/gstate/runs/g1" "${r}/gstate/runs/g2" "${r}/gstate/runs/g3" "${r}/gstate/generations/g1/modules/all/gen" \
-        "${r}/gstate/generations/g2/software/gen/1/lib" "${r}/gstate/generations/g3/software/gen" "${r}/software/gen/.1.g1" "${r}/software/gen/.1.g3"
-    touch "${r}/gstate/generations/g1/modules/all/gen/1.lua" "${r}/gstate/generations/g2/software/gen/1/lib/partial.so"
-    printf '{"schema": 2, "run_id": "g1", "state": "complete", "backend": "installpath", "generation_removed_at": null, "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g1", "published_at": 1000.5}], "message": ""}\n' "${r}" "${r}" > "${r}/gstate/runs/g1/journal.json"
-    printf '{"schema": 2, "run_id": "g2", "state": "failed", "backend": "installpath", "created_at": 900.5, "updated_at": 1000.5, "generation_removed_at": null, "modules_plan": [], "message": "eb exited 1"}\n' > "${r}/gstate/runs/g2/journal.json"
-    printf '{"schema": 2, "run_id": "g3", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g3", "published_at": 4102444800.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g3/journal.json"
-done
+r="${site}"
+mkdir -p "${r}/gstate/runs/g1" "${r}/gstate/runs/g2" "${r}/gstate/runs/g3" "${r}/gstate/generations/g1/modules/all/gen" \
+    "${r}/gstate/generations/g2/software/gen/1/lib" "${r}/gstate/generations/g3/software/gen" "${r}/software/gen/.1.g1" "${r}/software/gen/.1.g3"
+touch "${r}/gstate/generations/g1/modules/all/gen/1.lua" "${r}/gstate/generations/g2/software/gen/1/lib/partial.so"
+printf '{"schema": 2, "run_id": "g1", "state": "complete", "backend": "installpath", "generation_removed_at": null, "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g1", "published_at": 1000.5}], "message": ""}\n' "${r}" "${r}" > "${r}/gstate/runs/g1/journal.json"
+printf '{"schema": 2, "run_id": "g2", "state": "failed", "backend": "installpath", "created_at": 900.5, "updated_at": 1000.5, "generation_removed_at": null, "modules_plan": [], "message": "eb exited 1"}\n' > "${r}/gstate/runs/g2/journal.json"
+printf '{"schema": 2, "run_id": "g3", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g3", "published_at": 4102444800.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g3/journal.json"
 compare_admin "gc --dry-run, generations" gc --state-root @ROOT@/gstate --dry-run
 compare_admin "gc removes a complete run's generation" gc --state-root @ROOT@/gstate
 compare_admin "gc --include-failed removes a failed build's generation" gc --state-root @ROOT@/gstate --include-failed
-for impl in py zig; do
-    r="${work}/${impl}"
-    mkdir -p "${r}/gstate/runs/g4" "${r}/gstate/generations/g4"
-    printf '{"schema": 2, "run_id": "../runs", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g4", "published_at": 1000.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g4/journal.json"
-done
+r="${site}"
+mkdir -p "${r}/gstate/runs/g4" "${r}/gstate/generations/g4"
+printf '{"schema": 2, "run_id": "../runs", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g4", "published_at": 1000.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g4/journal.json"
 compare_admin "gc refuses a generation for a run id that is not a plain name" gc --state-root @ROOT@/gstate
-for impl in py zig; do rm -rf "${work}/${impl}/gstate" "${work}/${impl}/software/gen"; done
+rm -rf "${site}/gstate" "${site}/software/gen"
 compare_admin "run, a failed build" env FAKE_EB_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/fstate --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "gc --include-failed removes the failed build's generation" gc --state-root @ROOT@/fstate --grace-hours 0 --include-failed
 compare_admin "resume builds the removed generation again" env FAKE_EB_FAIL=1 @CMD@ resume --state-root @ROOT@/fstate f1
-for impl in py zig; do rm -rf "${work}/${impl}/fstate"; done
+rm -rf "${site}/fstate"
 compare_admin "rollback the retire" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "rollback again" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "retire --dry-run, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua --dry-run
 compare_admin "retire, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua
-for impl in py zig; do ln -s /elsewhere/1.lua "${work}/${impl}/modules/tools/classy/1.lua"; done
+ln -s /elsewhere/1.lua "${site}/modules/tools/classy/1.lua"
 compare_admin "rollback over a new class link" rollback --state-root @ROOT@/state @RETIRE@
-for impl in py zig; do rm "${work}/${impl}/modules/tools/classy/1.lua"; done
+rm "${site}/modules/tools/classy/1.lua"
 compare_admin "rollback the retire with class links" rollback --state-root @ROOT@/state @RETIRE@
-compare_admin "run --dry-run, auto" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
+bw='env PATH=@ROOT@/bin:'"${PATH}"
+compare_admin "run --dry-run, auto" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
 compare_admin "run --dry-run, free-space environment unset" env -u EB_STAGED_REBUILD_MIN_FREE_BYTES @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
 compare_admin "run --dry-run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --dry-run -- demo-1.eb -f
@@ -425,10 +449,8 @@ compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@
 compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
 compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom
 compare_admin "gc refuses an empty metrics path" gc --state-root @ROOT@/state --metrics-file=
-for impl in py zig; do
-    printf 'unchanged\n' > "${work}/${impl}/metrics-target"
-    ln -s metrics-target "${work}/${impl}/metrics-link.prom"
-done
+printf 'unchanged\n' > "${site}/metrics-target"
+ln -s metrics-target "${site}/metrics-link.prom"
 compare_admin "gc refuses a symlinked metrics path" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics-link.prom
 compare_admin "run, installpath, recorded prefix" env FAKE_EB_RECORD_PREFIX=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id rp1 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "status after the run" status --state-root @ROOT@/state r2
@@ -565,7 +587,7 @@ compare_admin "retire, no module file with the state root from the environment" 
 compare_admin "put a file where an installation would be" env touch @ROOT@/software/demo/file
 compare_admin "run, --module names a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id n2 --skip-live-check --module demo/file -- demo-1.eb
 compare_admin "remove the file" env rm @ROOT@/software/demo/file
-for impl in py zig; do echo fail-before > "${work}/${impl}/plan"; done
+echo fail-before > "${site}/plan"
 export FAKE_LEDGER_PLAN_NAME=plan
 compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
 compare_admin "resume delivers the record" resume --state-root @ROOT@/state r6
@@ -574,14 +596,11 @@ compare_admin "ledger records so far" env cat @ROOT@/ledger.jsonl
 # while a record is pending, after the run completed, or during the build
 # is refused, and nothing is appended.
 ledger_edit() {
-    local impl
-    for impl in py zig; do
-        python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d[sys.argv[2]] = json.loads(sys.argv[3]); json.dump(d, open(p, "w"))' \
-            "${work}/${impl}/ledger.json" "$1" "${2//@ROOT@/${work}/${impl}}"
-    done
+    python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d[sys.argv[2]] = json.loads(sys.argv[3]); json.dump(d, open(p, "w"))' \
+        "${site}/ledger.json" "$1" "${2//@ROOT@/${site}}"
 }
-for impl in py zig; do cp "${work}/${impl}/ledger.json" "${work}/${impl}/ledger.json.orig"; echo fail-before > "${work}/${impl}/plan3"; done
-ledger_restore() { local impl; for impl in py zig; do cp "${work}/${impl}/ledger.json.orig" "${work}/${impl}/ledger.json"; done; }
+cp "${site}/ledger.json" "${site}/ledger.json.orig"; echo fail-before > "${site}/plan3"
+ledger_restore() { cp "${site}/ledger.json.orig" "${site}/ledger.json"; }
 compare_admin "run, ledger append fails again" env FAKE_LEDGER_PLAN=@ROOT@/plan3 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r14 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
 ledger_edit required false
 compare_admin "resume after the ledger became optional" resume --state-root @ROOT@/state r14
@@ -598,11 +617,9 @@ compare_admin "ledger records after the policy cases" env cat @ROOT@/ledger.json
 # A correction the ledger did not acknowledge is delivered by rollback, not
 # resume: refused before anything changes when the ledger is required, rolled
 # back with its records waiting when it is not. The line is printed once.
-for impl in py zig; do
-    echo fail-before > "${work}/${impl}/plan4"
-    printf 'fail-before\nfail-before\n' > "${work}/${impl}/plan5"
-    printf 'ok\nfail-before\n' > "${work}/${impl}/plan6"
-done
+echo fail-before > "${site}/plan4"
+printf 'fail-before\nfail-before\n' > "${site}/plan5"
+printf 'ok\nfail-before\n' > "${site}/plan6"
 compare_admin "run, a ledger run to roll back" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r16 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
 compare_admin "rollback, the ledger refuses the correction" env FAKE_LEDGER_PLAN=@ROOT@/plan4 @CMD@ rollback --state-root @ROOT@/state r16
 compare_admin "rollback again delivers the correction" rollback --state-root @ROOT@/state r16
@@ -623,14 +640,12 @@ compare_admin "resume it with --force, ledger" resume --state-root @ROOT@/state 
 compare_admin "rollback the forced ledger run" rollback --state-root @ROOT@/state f1
 compare_admin "ledger records after the forced run" env cat @ROOT@/ledger.jsonl
 # A generation-pointer record (schema 3) is not applied as a directory swap.
-for impl in py zig; do
-    mkdir -p "${work}/${impl}/state/runs/foreign"
-    printf '{"schema": 3, "publication": "generation-pointer", "kind": "publish", "run_id": "foreign", "state": "built", "software": "%s/software", "modules": "%s/modules", "state_root": "%s/state", "modules_plan": [{"rel": "all/demo/1.lua", "generation": "%s/hidden-generation", "live_module": "%s/modules/all/demo/1.lua"}], "ledger_policy": {"actor": "x"}}\n' \
-        "${work}/${impl}" "${work}/${impl}" "${work}/${impl}" "${work}/${impl}" "${work}/${impl}" > "${work}/${impl}/state/runs/foreign/journal.json"
-done
+mkdir -p "${site}/state/runs/foreign"
+printf '{"schema": 3, "publication": "generation-pointer", "kind": "publish", "run_id": "foreign", "state": "built", "software": "%s/software", "modules": "%s/modules", "state_root": "%s/state", "modules_plan": [{"rel": "all/demo/1.lua", "generation": "%s/hidden-generation", "live_module": "%s/modules/all/demo/1.lua"}], "ledger_policy": {"actor": "x"}}\n' \
+    "${site}" "${site}" "${site}" "${site}" "${site}" > "${site}/state/runs/foreign/journal.json"
 compare_admin "resume a generation-pointer record" resume --state-root @ROOT@/state foreign
 compare_admin "status of a generation-pointer record" status --state-root @ROOT@/state foreign
-for impl in py zig; do rm -rf "${work}/${impl}/state/runs/foreign"; done
+rm -rf "${site}/state/runs/foreign"
 compare_admin "run, eb fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb /bin/false --run-id r3 --skip-live-check --module demo/1 -- demo-1.eb
 # The bwrap backend, with the fake bwrap first on PATH and eb answering
 # --version: present stage keys (5.4.2), the 5.3 layout without them, an
@@ -656,14 +671,14 @@ compare_admin "retire, a symlinked module file" retire --state-root @ROOT@/state
 compare_admin "retire, no root assignment" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/noroot.lua
 compare_admin "resume a retire record" resume --state-root @ROOT@/state @RETIRE@
 compare_admin "retire after a rollback" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
-for impl in py zig; do printf 'local root = "software/demo/1"\n-- rewritten\n' > "${work}/${impl}/modules/all/demo/1.lua"; done
+printf 'local root = "software/demo/1"\n-- rewritten\n' > "${site}/modules/all/demo/1.lua"
 compare_admin "rollback over a new module file" rollback --state-root @ROOT@/state @RETIRE@
-for impl in py zig; do rm "${work}/${impl}/modules/all/demo/1.lua"; done
+rm "${site}/modules/all/demo/1.lua"
 compare_admin "rollback after the new file is gone" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "gc after the retire is rolled back" gc --state-root @ROOT@/state --grace-hours 0
 # A software directory another tracked module still names is kept: the
 # alias is tracked through a rolled-back retire, then the module is retired.
-for impl in py zig; do cp "${work}/${impl}/modules/all/demo/1.lua" "${work}/${impl}/modules/all/demo/alias.lua"; done
+cp "${site}/modules/all/demo/1.lua" "${site}/modules/all/demo/alias.lua"
 compare_admin "retire an alias" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/alias.lua
 compare_admin "rollback the alias retire" rollback --state-root @ROOT@/state @RETIRE@
 compare_admin "retire the module again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
@@ -680,9 +695,8 @@ compare_admin "run, module escapes" run --software @ROOT@/software --modules @RO
 compare_admin "run, symlinked state root" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/statelink --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module demo/1 -- demo-1.eb
 compare_admin "run, missing prepare" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r11 --skip-live-check --prepare @ROOT@/no-such-policy --module demo/1 -- demo-1.eb
 compare_admin "run, prepare fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r12 --skip-live-check --prepare @ROOT@/prepare-fails --module demo/1 -- demo-1.eb
-for impl in py zig; do cp "${work}/${impl}/prepare-ok" "${work}/${impl}/prepare-fails"; done
-for impl in py zig; do
-    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+cp "${site}/prepare-ok" "${site}/prepare-fails"
+python3 - "${site}/state/journal/r12.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -692,10 +706,8 @@ journal = json.loads(path.read_text())
 journal["modules_plan"][0]["saved_prepared"] = journal["modules_plan"][0].pop("prepared")
 path.write_text(json.dumps(journal))
 PY
-done
 compare_admin "resume reports an incomplete publication plan" resume --state-root @ROOT@/state r12
-for impl in py zig; do
-    python3 - "${work}/${impl}/state/journal/r12.json" <<'PY'
+python3 - "${site}/state/journal/r12.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -705,7 +717,6 @@ journal = json.loads(path.read_text())
 journal["modules_plan"][0]["prepared"] = journal["modules_plan"][0].pop("saved_prepared")
 path.write_text(json.dumps(journal))
 PY
-done
 compare_admin "resume after the prepare is fixed" resume --state-root @ROOT@/state r12
 compare_admin "the prepare ran once" env cat @ROOT@/prepare-count
 compare_admin "rollback a prepared run" rollback --state-root @ROOT@/state r12
@@ -716,7 +727,7 @@ pr='--software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/stat
 compare_admin "run, prepare barrier, second generation incomplete" env FAKE_EB_RELS=alpha/1,beta/1 @CMD@ run ${pr} --run-id p1 --prepare @ROOT@/prepare-barrier-rename --module alpha/1 --module beta/1 -- alpha-1.eb
 # shellcheck disable=SC2086
 compare_admin "run, prepare barrier, second generation unreadable" env FAKE_EB_RELS=alpha/1,beta/1 @CMD@ run ${pr} --run-id p2 --prepare @ROOT@/prepare-barrier-chmod --module alpha/1 --module beta/1 -- alpha-1.eb
-for impl in py zig; do chmod -R u+rwX "${work}/${impl}/state/generations/p2"; done
+chmod -R u+rwX "${site}/state/generations/p2"
 compare_admin "module files after the barrier" env cat @ROOT@/modules/all/alpha/1.lua @ROOT@/modules/all/beta/1.lua
 # A policy sees the publication context and restricts the staged tree
 # before the module file changes.
@@ -732,15 +743,13 @@ compare_admin "rollback the published module retire" rollback --state-root @ROOT
 # --build-dir passes --buildpath to eb when set, preserves eb_args and
 # EASYBUILD_BUILDPATH when unset, persists through resume, and refuses
 # paths inside the generation or the live prefix.
-for impl in py zig; do
-    r="${work}/${impl}"
-    mkdir -p "${r}/scratch-outside"
-    ln -s "${r}/scratch-outside" "${r}/scratch-link"
-    ln -s "${r}/software/demo/via-link" "${r}/bad-sw-link"
-    ln -s "${r}/modules/all/via-link" "${r}/bad-mod-link"
-    ln -s "${r}/state/generations/via-link" "${r}/bad-gen-link"
-    printf 'file\n' > "${r}/build-file"
-done
+r="${site}"
+mkdir -p "${r}/scratch-outside"
+ln -s "${r}/scratch-outside" "${r}/scratch-link"
+ln -s "${r}/software/demo/via-link" "${r}/bad-sw-link"
+ln -s "${r}/modules/all/via-link" "${r}/bad-mod-link"
+ln -s "${r}/state/generations/via-link" "${r}/bad-gen-link"
+printf 'file\n' > "${r}/build-file"
 compare_admin "run --dry-run, --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir @ROOT@/scratch-outside --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run --dry-run, relative --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir rel/build --dry-run --module demo/1 -- demo-1.eb
 compare_admin "run, --build-dir overrides EASYBUILD_BUILDPATH and --buildpath" env EASYBUILD_BUILDPATH=@ROOT@/ignored-env FAKE_EB_ARGV=@ROOT@/bp_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd1 --skip-live-check --build-dir @ROOT@/scratch-link --module demo/1 -- demo-1.eb --buildpath=@ROOT@/ignored-arg
@@ -792,10 +801,10 @@ compare_admin "resume --force" resume --state-root @ROOT@/state --force v1
 compare_admin "rollback the forced run" rollback --state-root @ROOT@/state v1
 compare_admin "resume --force, a run without --verify" resume --state-root @ROOT@/state --force r2
 compare_admin "resume --verify, a complete run" resume --state-root @ROOT@/state --verify r2
-for impl in py zig; do printf '#!/bin/sh\nexit 42\n' > "${work}/${impl}/prepare-later"; chmod +x "${work}/${impl}/prepare-later"; done
+printf '#!/bin/sh\nexit 42\n' > "${site}/prepare-later"; chmod +x "${site}/prepare-later"
 # shellcheck disable=SC2086
 compare_admin "run, the prepare fails before a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v3 --prepare @ROOT@/prepare-later -- demo-1.eb --buildpath=@ROOT@/build
-for impl in py zig; do printf '#!/bin/sh\nexit 0\n' > "${work}/${impl}/prepare-later"; done
+printf '#!/bin/sh\nexit 0\n' > "${site}/prepare-later"
 compare_admin "resume --verify checks the stage" resume --state-root @ROOT@/state --verify v3
 compare_admin "a later resume checks it too" resume --state-root @ROOT@/state v3
 compare_admin "resume --force publishes it" resume --state-root @ROOT@/state --force v3
@@ -809,7 +818,7 @@ compare_admin "list every generation" list --state-root @ROOT@/state
 # rollback --latest, and rollback --to over more than one run. The
 # prepare-context run left the live tree group-only; verify refuses a stage
 # that would widen it.
-for impl in py zig; do chmod 755 "${work}/${impl}/software/demo/1"; done
+chmod 755 "${site}/software/demo/1"
 for g in g1 g2 g3; do
     # shellcheck disable=SC2086
     compare_admin "run, generation ${g}" env FAKE_EB_MODULE_NOTE="${g}" @CMD@ run ${vr} --run-id "${g}" -- demo-1.eb
@@ -836,8 +845,8 @@ compare_admin "run, generation l3" run ${vr} --run-id l3 -- demo-1.eb
 compare_admin "rollback --to over a ledger run" rollback --state-root @ROOT@/state --to l1
 compare_admin "rollback --latest, no complete run" rollback --latest --state-root @ROOT@/empty
 # gc --keep, and with --check-in-use a tree and a generation kept because a
-# process on this node has them open: one holder opens the same paths in
-# both copies, so both name its pid. Without the option gc does not look.
+# process on this node has them open: one holder opens the paths, and
+# the output names its pid. Without the option gc does not look.
 compare_admin "gc --keep within grace" gc --state-root @ROOT@/state --keep 2 --dry-run
 compare_admin "gc --keep past grace, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
 compare_admin "gc --keep, not a count" gc --state-root @ROOT@/state --keep x
@@ -848,8 +857,7 @@ compare_admin "gc --keep, a value with a quote" gc --state-root @ROOT@/state --k
 # reads one back.
 coproc HOLDER {
     exec python3 -c 'import os, sys; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[1:]]; print("ready", flush=True); sys.stdin.readline()' \
-        "${work}/py/software/demo/.1.l2" "${work}/zig/software/demo/.1.l2" \
-        "${work}/py/state/generations/l1" "${work}/zig/state/generations/l1"
+        "${site}/software/demo/.1.l2" "${site}/state/generations/l1"
 }
 holder_out=${HOLDER[0]} holder_in=${HOLDER[1]}
 read -r _ <&"${holder_out}"
@@ -861,7 +869,7 @@ compare_admin "gc --keep once the tree is free" gc --state-root @ROOT@/state --k
 compare_admin "list after gc --keep" list --state-root @ROOT@/state
 unset NORM_HASH
 
-# The live-tree snapshot a journal records, compared as JSON.
+# The live-tree snapshot a journal records, as JSON.
 snap="${work}/snaptree"
 mkdir -p "${snap}/a/b" "${snap}/c"
 printf 'x' > "${snap}/a/b/f"
@@ -869,9 +877,8 @@ printf 'y' > "${snap}/top"
 ln -s ../c "${snap}/a/dirlink"
 ln -s top "${snap}/filelink"
 for p in "${snap}" "${snap}/top" "${snap}/filelink" "${snap}/missing"; do
-    PYTHONPATH="${repo_root}" python3 -c 'import json, sys; from eb_staged_rebuild.livecheck import snapshot; print(json.dumps(snapshot(sys.argv[1]), indent=2, sort_keys=True))' "${p}" > "${work}/snap.py"
-    "${TOOL_BIN}" __snapshot "${p}" > "${work}/snap.zig"
-    if cmp -s "${work}/snap.py" "${work}/snap.zig"; then echo "same snapshot ${p##*/}"; else echo "DIFF snapshot ${p##*/}"; diff "${work}/snap.py" "${work}/snap.zig" | head -20; diffs=$((diffs + 1)); fi
+    "${TOOL_BIN}" __snapshot "${p}" 2>&1 | scrub | norm > "${work}/snap.out"
+    settle "snapshot ${p##*/}" "${work}/snap.out"
 done
 
 echo "${diffs} differences"

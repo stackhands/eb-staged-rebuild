@@ -1,9 +1,9 @@
 //! eb-staged-rebuild: build EasyBuild software in a staged tree, then
 //! exchange the complete tree with the stable live directory.
 //!
-//! The commands of the Python tool in one static binary: probe, run,
+//! The commands in one static binary: probe, run,
 //! resume, verify, rollback, gc, retire, status, list and resolve.
-//! COMPAT.md lists where the two builds differ.
+//! COMPAT.md lists what differs from the earlier Python implementation.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -1203,7 +1203,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     // Only the -Dtest-ops test artifact can emulate a file system's ACLs.
     if (comptime common.atomic.replaceable) @import("aclmodel.zig").installFromEnv(env);
 
-    // Internal: the live-tree snapshot as JSON, for the differential tests.
+    // Internal: the live-tree snapshot as JSON, for the golden tests.
     if (args.len == 2 and std.mem.eql(u8, args[0], "__snapshot")) {
         const snap = @import("livecheck.zig").snapshot(a, args[1]) catch |err| refuse("{s}", .{osError(a, err, args[1])});
         cli.put(1, json.dumps(a, snap, 2, true) catch return 1);

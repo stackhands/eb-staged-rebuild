@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary, start_lock_holder_process
+from tests.support import golden, run_cli, scrub, start_lock_holder_process
 
 
 class CliStaleLockRecoveryParityTests(unittest.TestCase):
@@ -14,17 +14,10 @@ class CliStaleLockRecoveryParityTests(unittest.TestCase):
             holder.join(5)
             self.assertFalse(holder.is_alive(), "lock holder process did not stop")
 
-            proc = run_cli("gc", "--state-root", state_root, "--dry-run", "--lock-timeout", "0")
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertEqual(proc.stderr, "")
-
-            binary = run_cli_optional_binary(
-                "gc", "--state-root", state_root, "--dry-run", "--lock-timeout", "0"
-            )
-            if binary is not None:
-                self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
-                self.assertEqual(binary.stderr, "")
-                self.assertEqual(binary.stdout, proc.stdout)
+            binary = run_cli("gc", "--state-root", state_root, "--dry-run", "--lock-timeout", "0")
+            self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stderr, "")
+            golden(self, "stdout", scrub(binary.stdout, STATE=state_root))
 
 
 if __name__ == "__main__":

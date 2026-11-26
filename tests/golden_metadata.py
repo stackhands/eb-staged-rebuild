@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Publication access metadata through `run` and `rollback`, from the Python
-tool and from TOOL_BIN on the same fixtures, with the kernel's POSIX ACLs.
+"""Publication access metadata through `run` and `rollback`, from TOOL_BIN,
+with the kernel's POSIX ACLs.
 
-Each case builds one fixture, copies it twice and runs the same commands on
-each copy. Exit codes, stdout and stderr (paths and times normalized) and the
-module file's bytes, mode and POSIX access ACL must match.
+Each case builds one fixture and runs commands on it. Exit codes, stdout and
+stderr (paths and times normalized) and the module file's bytes, mode and
+POSIX access ACL must match tests/golden/golden_metadata/results.json;
+RECORD=1 rewrites it.
 
-    TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 tests/differential_metadata.py
+    TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 tests/golden_metadata.py
 
-The fixtures live below the repository (`.differential-metadata/`), on a file
+The fixtures live below the repository (`.golden-metadata/`), on a file
 system that keeps POSIX ACLs; where it does not, the script says so and exits 0.
 """
 
 import errno
+import json
 import os
 import re
 import shutil
@@ -23,10 +25,12 @@ import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-from tests.support import classic_install, normalize_userns_helper  # noqa: E402
+from tests.support import classic_install, normalize_userns_helper, tool_bin  # noqa: E402
 
-TOOL = os.environ["TOOL_BIN"]
+TOOL = tool_bin()
 POSIX = "system.posix_acl_access"
+GOLDEN = os.path.join(REPO, "tests", "golden", "golden_metadata", "results.json")
+RECORDED = {}
 
 
 def access_acl():
@@ -78,12 +82,6 @@ def policy(root, body):
     return path
 
 
-def command(side, root, args):
-    if side == "py":
-        return [sys.executable, "-m", "eb_staged_rebuild", *args]
-    return [TOOL, *args]
-
-
 failures = []
 cases = 0
 
@@ -93,36 +91,40 @@ def case(name, setup, steps, umask=None, env=None):
     with @S @M @ST @ROOT placeholders."""
     global cases
     cases += 1
-    base = tempfile.mkdtemp(prefix="case-", dir=os.path.join(REPO, ".differential-metadata"))
+    base = tempfile.mkdtemp(prefix="case-", dir=os.path.join(REPO, ".golden-metadata"))
     try:
-        results = {}
-        for side in ("py", "zig"):
-            root = os.path.join(base, side)
-            os.makedirs(root)
-            software, modules, state, module = setup(root)
-            out = []
-            for step in steps:
-                args = [a.replace("@ST", state).replace("@S", software).replace("@M", modules).replace("@ROOT", root)
-                        for a in step]
-                full_env = dict(os.environ, EB_STAGED_REBUILD_EB=os.path.join(root, "eb"), PYTHONPATH=REPO,
-                                **(env or {}))
-                previous = os.umask(umask) if umask is not None else None
-                try:
-                    done = subprocess.run(command(side, root, args), cwd=root, env=full_env,
-                                          capture_output=True, text=True, timeout=300)
-                finally:
-                    if previous is not None:
-                        os.umask(previous)
-                out.append((done.returncode, norm(done.stdout, root), norm(done.stderr, root)))
-            exists = os.path.exists(module)
-            state_of = (open(module, "rb").read().replace(root.encode(), b"<ROOT>"), os.stat(module).st_mode & 0o7777,
-                        acl_of(module)) if exists else None
-            results[side] = (out, state_of)
-        if results["py"] != results["zig"]:
-            failures.append(name)
-            print(f"FAIL {name}\n  python: {str(results['py'])[:900]}\n  zig:    {str(results['zig'])[:900]}")
+        root = os.path.join(base, "site")
+        os.makedirs(root)
+        software, modules, state, module = setup(root)
+        out = []
+        for step in steps:
+            args = [a.replace("@ST", state).replace("@S", software).replace("@M", modules).replace("@ROOT", root)
+                    for a in step]
+            full_env = dict(os.environ, EB_STAGED_REBUILD_EB=os.path.join(root, "eb"), **(env or {}))
+            previous = os.umask(umask) if umask is not None else None
+            try:
+                done = subprocess.run([TOOL, *args], cwd=root, env=full_env,
+                                      capture_output=True, text=True, timeout=300)
+            finally:
+                if previous is not None:
+                    os.umask(previous)
+            out.append([done.returncode, norm(done.stdout, root), norm(done.stderr, root)])
+        exists = os.path.exists(module)
+        acl = acl_of(module) if exists else None
+        state_of = [open(module, "rb").read().replace(root.encode(), b"<ROOT>").decode("utf-8", "surrogateescape"),
+                    os.stat(module).st_mode & 0o7777, acl.hex() if acl is not None else None] if exists else None
+        result = [out, state_of]
+        if os.environ.get("RECORD") == "1":
+            RECORDED[name] = result
+            print(f"rec  {name}")
         else:
-            print(f"ok   {name} (exit {[r[0] for r in results['py'][0]]})")
+            with open(GOLDEN, encoding="utf-8") as handle:
+                expected = json.load(handle).get(name)
+            if expected != result:
+                failures.append(name)
+                print(f"FAIL {name}\n  got:      {str(result)[:900]}\n  expected: {str(expected)[:900]}")
+            else:
+                print(f"ok   {name} (exit {[r[0] for r in out]})")
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
@@ -132,8 +134,8 @@ RUN = ["run", "--software", "@S", "--modules", "@M", "--state-root", "@ST", "--b
 
 
 def main():
-    os.makedirs(os.path.join(REPO, ".differential-metadata"), exist_ok=True)
-    probe = tempfile.mkstemp(dir=os.path.join(REPO, ".differential-metadata"))[1]
+    os.makedirs(os.path.join(REPO, ".golden-metadata"), exist_ok=True)
+    probe = tempfile.mkstemp(dir=os.path.join(REPO, ".golden-metadata"))[1]
     try:
         os.setxattr(probe, POSIX, access_acl())
     except OSError as error:
@@ -170,6 +172,12 @@ def main():
     case("a staged ACL on an existing module is published", lambda root: fixture(root, existing=True),
          [[*RUN, "--", "demo.eb"]], env={"FAKE_EB_ACL": acl_hex})
 
+    if os.environ.get("RECORD") == "1":
+        os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
+        with open(GOLDEN, "w", encoding="utf-8") as handle:
+            json.dump(RECORDED, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+        return 0
     if failures:
         print(f"{len(failures)} of {cases} case(s) differ")
         return 1

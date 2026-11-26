@@ -1,147 +1,57 @@
-"""gc refuses an unreadable reference and follows a symlink to a hidden tree."""
+"""gc keeps a generation that the usage log reports in use."""
 
+import json
 import os
 import shutil
-import tempfile
-import unittest
 import sys
+import unittest
 
-from eb_staged_rebuild.engine import Spec, run
-from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.faults import FaultInjector
-from eb_staged_rebuild.gc import collect
-from eb_staged_rebuild.journal import journal_path, load_journal
-from tests.support import PROBES, classic_install, installpath_builder
+from tests.support import site, write
+
 
 def _keep_logs_stub(root):
     script = os.path.join(root, "eb-keep-logs")
-    with open(script, "w", encoding="utf-8") as handle:
-        handle.write(
-            "#!/bin/sh\n"
-            f'exec "{sys.executable}" "{os.path.join(os.path.dirname(__file__), "fake_eb_keep_logs.py")}" "$@"\n'
-        )
-    os.chmod(script, 0o755)
+    write(
+        script,
+        "#!/bin/sh\n"
+        f'exec "{sys.executable}" "{os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eb_keep_logs.py")}" "$@"\n',
+        0o755,
+    )
     return script
 
 
 class ReferenceTests(unittest.TestCase):
-    def published(self, root):
-        software = os.path.join(root, "software")
-        modules = os.path.join(root, "modules")
-        state = os.path.join(root, "state")
-        os.makedirs(software)
-        os.makedirs(modules)
-        install, module, _text = classic_install(
-            software, modules, "demo/1", "v0\n", "all/demo/1.lua"
-        )
-        clock = iter(range(1_700_000_000, 1_700_000_000 + 1000, 10)).__next__
-        result = run(Spec(
-            software=software,
-            modules=modules,
-            state_root=state,
-            eb_args=["demo-1.eb"],
-            backend="installpath",
-            module_rels=["demo/1"],
-            builder=installpath_builder(
-                [{"rel": "demo/1", "payload": "v1\n", "module_rel": "all/demo/1.lua"}]
-            ),
-            faults=FaultInjector(),
-            run_id="run1",
-            probes=PROBES,
-            clock=clock,
-        ))
-        self.assertEqual(result.returncode, 0, result.message)
-        journal = load_journal(journal_path(state, "run1"))
-        return state, module, journal["modules_plan"][0]["retired"], install
-
-    def test_unreadable_module_is_not_treated_as_unreferenced(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, module, retired, _install = self.published(root)
-            blocked = os.path.dirname(module)
-            os.chmod(blocked, 0)
-            try:
-                with self.assertRaisesRegex(Refused, "cannot inspect live module"):
-                    collect(state, 1, 1_800_000_000)
-                self.assertTrue(os.path.isdir(retired))
-            finally:
-                os.chmod(blocked, 0o755)
-
-    def test_symlink_to_a_hidden_tree_keeps_it(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, module, retired, _install = self.published(root)
-            alias = os.path.join(root, "alias")
-            os.symlink(retired, alias)
-            original = open(module, encoding="utf-8").read()
-            root_line = [line for line in original.splitlines() if line.startswith("local root")][0]
-            rewritten = original.replace(root_line, f'local root = "{alias}"')
-            with open(module, "w", encoding="utf-8") as handle:
-                handle.write(rewritten)
-            actions = collect(state, 1, 1_800_000_000, dry_run=True)
-            matched = [action for action in actions if action["path"] == retired]
-            self.assertEqual(matched[0]["action"], "keep")
-            self.assertTrue(os.path.isdir(retired))
-
-    def test_usage_log_keeps_a_retired_tree(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, _module, retired, _install = self.published(root)
-            keep_logs = _keep_logs_stub(root)
-            usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
-            try:
-                actions = collect(
-                    state,
-                    0,
-                    1_800_000_000,
-                    usage_log=usage,
-                    eb_keep_logs=keep_logs,
-                )
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            matched = [action for action in actions if action["path"] == retired]
-            self.assertEqual(matched[0]["action"], "keep")
-            self.assertTrue(os.path.isdir(retired))
+    def published(self):
+        demo = site(self, "gc-references-")
+        done = demo.run(verify=False, run_id="run1", FAKE_EB_PAYLOAD="v1\n")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return demo, demo.journal("run1")["modules_plan"][0]["retired"]
 
     def test_usage_log_keeps_a_generation(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, _module, retired, _install = self.published(root)
-            keep_logs = _keep_logs_stub(root)
-            usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            generation = os.path.join(state, "generations", "run1")
-            self.assertTrue(os.path.isdir(generation))
-            shutil.rmtree(retired)
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
-            try:
-                actions = collect(
-                    state,
-                    0,
-                    1_800_000_000,
-                    usage_log=usage,
-                    eb_keep_logs=keep_logs,
-                )
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            matched = [action for action in actions if action["path"] == generation]
-            self.assertEqual(matched[0]["action"], "keep")
-            self.assertTrue(os.path.isdir(generation))
-
-    def test_usage_log_failure_refuses_without_deleting(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, _module, retired, _install = self.published(root)
-            keep_logs = _keep_logs_stub(root)
-            usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "error"
-            try:
-                with self.assertRaisesRegex(Refused, "eb-keep-logs used exited"):
-                    collect(state, 0, 1_800_000_000, usage_log=usage, eb_keep_logs=keep_logs)
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            self.assertTrue(os.path.isdir(retired))
+        demo, retired = self.published()
+        keep_logs = _keep_logs_stub(demo.root)
+        usage = os.path.join(demo.root, "usage.log")
+        write(usage, "{}\n")
+        generation = os.path.join(demo.state, "generations", "run1")
+        self.assertTrue(os.path.isdir(generation))
+        shutil.rmtree(retired)
+        done = demo.cli(
+            "gc",
+            "--state-root",
+            demo.state,
+            "--grace-hours",
+            "0",
+            "--usage-log",
+            usage,
+            "--eb-keep-logs",
+            keep_logs,
+            "--json",
+            FAKE_KEEP_LOGS_MODE="in-use",
+        )
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        matched = [action for action in json.loads(done.stdout)["actions"] if action["path"] == generation]
+        self.assertEqual([action["action"] for action in matched], ["keep"], done.stdout)
+        self.assertTrue(os.path.isdir(generation))
 
 
 if __name__ == "__main__":

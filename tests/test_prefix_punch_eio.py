@@ -1,7 +1,6 @@
 """A failed punch of a zero page stops the prefix rewrite.
 
-The file is on a FUSE passthrough whose fallocate returns EIO. Python
-raises. The mount is the whole state root, so the refusal is the punch
+The file is on a FUSE passthrough whose fallocate returns EIO. The mount is the whole state root, so the refusal is the punch
 and not a cross-device rename.
 """
 
@@ -9,14 +8,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import tempfile
 import textwrap
 import unittest
 
 from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
 
 class PrefixPunchEioTests(unittest.TestCase):
@@ -29,22 +26,15 @@ class PrefixPunchEioTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        python = self._run("python")
         binary = self._run(tool)
-        self.assertEqual(python.returncode, 2, python.stderr)
         self.assertEqual(binary.returncode, 2, binary.stderr)
-        self.assertIn("fallocate(PUNCH_HOLE)", python.stderr)
         self.assertIn("fallocate(PUNCH_HOLE)", binary.stderr)
-        self.assertIn("Input/output error", python.stderr)
         self.assertIn("Input/output error", binary.stderr)
-        self.assertIn("generations/r1", python.stdout)
         self.assertIn("generations/r1", binary.stdout)
-        self.assertIn("LIVE old", python.stdout)
         self.assertIn("LIVE old", binary.stdout)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
-        label = tool if tool == "python" else "zig"
-        with tempfile.TemporaryDirectory(prefix=f"punch-eio-{label}-") as work:
+        with tempfile.TemporaryDirectory(prefix="punch-eio-zig-") as work:
             back = os.path.join(work, "back")
             mnt = os.path.join(work, "mnt")
             os.makedirs(os.path.join(back, "software", "demo", "1"))
@@ -96,13 +86,9 @@ class PrefixPunchEioTests(unittest.TestCase):
             )
             try:
                 _wait_mount(self, mnt, mounted)
-                run_env = dict(os.environ)
-                run_env["PYTHONPATH"] = _REPO
-                run_env["PYTHONIOENCODING"] = "utf-8:strict"
-                argv = [sys.executable, "-m", "eb_staged_rebuild"] if tool == "python" else [tool]
                 done = subprocess.run(
                     [
-                        *argv,
+                        tool,
                         "run",
                         "--software",
                         os.path.join(mnt, "software"),
@@ -123,7 +109,6 @@ class PrefixPunchEioTests(unittest.TestCase):
                     ],
                     check=False,
                     capture_output=True,
-                    env=run_env,
                     timeout=60,
                 )
                 kept = os.path.join(mnt, "generations", "r1", "software", "demo", "1", "kept.txt")

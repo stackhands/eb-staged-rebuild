@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli
 
 
 class ProbeNonUtf8VersionOutputTests(unittest.TestCase):
@@ -22,18 +22,12 @@ class ProbeNonUtf8VersionOutputTests(unittest.TestCase):
                 )
             os.chmod(eb, 0o755)
 
-            py = run_cli("probe", "--json", "--path", root, "--eb", eb)
-            self.assertEqual(py.returncode, 0, py.stdout + py.stderr)
-            self.assertNotIn("Traceback", py.stderr)
-            py_easybuild = json.loads(py.stdout)["easybuild"]
-
-            zig = run_cli_optional_binary("probe", "--json", "--path", root, "--eb", eb)
-            if zig is None:
-                return
+            zig = run_cli("probe", "--json", "--path", root, "--eb", eb)
             self.assertEqual(zig.returncode, 0, zig.stdout + zig.stderr)
-            zig_easybuild = json.loads(zig.stdout)["easybuild"]
-            self.assertEqual(py_easybuild["framework_version"], zig_easybuild["framework_version"])
-            self.assertEqual(py_easybuild["stage_path_keys"], zig_easybuild["stage_path_keys"])
+            self.assertNotIn("Traceback", zig.stderr)
+            easybuild = json.loads(zig.stdout)["easybuild"]
+            golden(self, "framework_version", json.dumps(easybuild["framework_version"], sort_keys=True))
+            golden(self, "stage_path_keys", json.dumps(easybuild["stage_path_keys"], sort_keys=True))
 
 
 if __name__ == "__main__":

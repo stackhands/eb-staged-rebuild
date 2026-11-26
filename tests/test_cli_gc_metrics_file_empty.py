@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 def _state_fixture(root: str) -> str:
@@ -33,14 +33,11 @@ class EmptyMetricsFileCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="gc-metrics-empty-") as tmp:
             state = _state_fixture(tmp)
             args = ("gc", "--state-root", state, "--metrics-file", "")
-            py_done = run_cli(*args)
-            self.assertEqual(py_done.returncode, 2, py_done.stdout + py_done.stderr)
-            self.assertIn("--metrics-file must name a file; it is empty", py_done.stderr)
-            zig_done = run_cli_optional_binary(*args)
-            if zig_done is not None:
-                self.assertEqual(zig_done.returncode, 2, zig_done.stdout + zig_done.stderr)
-                self.assertEqual(py_done.stdout, zig_done.stdout)
-                self.assertEqual(py_done.stderr, zig_done.stderr)
+            done = run_cli(*args)
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+            self.assertIn("--metrics-file must name a file; it is empty", done.stderr)
+            golden(self, "stdout", scrub(done.stdout, STATE=state, TMP=tmp))
+            golden(self, "stderr", scrub(done.stderr, STATE=state, TMP=tmp))
 
 
 if __name__ == "__main__":

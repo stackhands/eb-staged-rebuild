@@ -2,53 +2,20 @@
 
 import contextlib
 import ctypes
+import fcntl
 import json
 import os
-import re
 import select
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from collections.abc import Collection, Sequence
-from typing import NamedTuple
-
-from eb_staged_rebuild.atomicio import atomic_write
-from eb_staged_rebuild.faults import FaultInjector
-from eb_staged_rebuild.paths import abspath
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-PROBES = {
-    "bwrap": {
-        "installed": True,
-        "usable": True,
-        "reason": None,
-        "version": "test",
-        "path": "bwrap",
-    },
-    "user_namespaces": {"max_user_namespaces": None, "readable": False},
-    "userns_sandbox": {
-        "installed": True,
-        "usable": True,
-        "path": "unshare",
-        "reason": None,
-    },
-    "rename_exchange": {"ok": False, "errno": 22, "error": "test", "fstype": "test"},
-    "easybuild": {
-        "found": True,
-        "framework_version": [5, 4, 2],
-        "stage_path_keys": True,
-        "keys_source": "test",
-        "version_text": "test",
-        "reason": None,
-    },
-    "filesystem": {"fstype": "test"},
-    "flock": {"cross_node": "unmeasured", "method": "flock"},
-}
+GOLDEN = os.path.join(_REPO, "tests", "golden")
 
 
 def lua(root, name="demo", version="1", loads=()):
@@ -64,131 +31,75 @@ def lua(root, name="demo", version="1", loads=()):
     return "\n".join(lines)
 
 
+def abspath(path):
+    """PATH made absolute and normalized, without resolving symbolic links."""
+    return os.path.abspath(os.path.normpath(os.fspath(path)))
+
+
 def classic_install(software, modules, rel, payload, module_rel, name="demo", version="1", loads=()):
+    """A live install under SOFTWARE/REL with its module file under MODULES/MODULE_REL.
+
+    Returns the install directory, the module file and the module text.
+    """
     install = os.path.join(software, rel)
-    os.makedirs(os.path.join(install, "easybuild"), exist_ok=True)
-    silent = FaultInjector()
-    atomic_write(os.path.join(install, "PAYLOAD"), payload, silent, "fixture.payload")
-    atomic_write(
-        os.path.join(install, "easybuild", f"{name}-{version}.eb"),
-        f"name = '{name}'\n",
-        silent,
-        "fixture.eb",
-    )
+    write(os.path.join(install, "PAYLOAD"), payload)
+    write(os.path.join(install, "easybuild", f"{name}-{version}.eb"), f"name = '{name}'\n")
     module = os.path.join(modules, module_rel)
     text = lua(abspath(install), name=name, version=version, loads=loads)
-    atomic_write(module, text, silent, "fixture.module")
+    write(module, text)
     return abspath(install), abspath(module), text
 
 
-def generation_of(state_root, run_id, rel):
-    return abspath(os.path.join(state_root, "generations", run_id, "software", rel))
+class StateRootLock:
+    """The lock a command holds on its state root.
 
-
-def installpath_builder(packages):
-    """In-process EasyBuild stand-in.
-
-    ``packages`` is a list of dicts: rel, payload, module_rel, name, version, loads.
-    Fault points ``build.payload:<rel>`` and ``build.module:<rel>`` are raised
-    before those files are written.
+    An flock gate on ``.lock`` and a POSIX record lock on ``.lock.posix``, taken
+    without waiting; a command that finds either held refuses. ``acquire`` raises
+    BlockingIOError when another holder has one of them.
     """
 
-    def build(ctx):
-        silent = FaultInjector()
-        for package in packages:
-            rel = package["rel"]
-            ctx.faults.reach(f"build.payload:{rel}")
-            generation = os.path.join(ctx.generation_root, "software", rel)
-            os.makedirs(os.path.join(generation, "easybuild"), exist_ok=True)
-            atomic_write(
-                os.path.join(generation, "PAYLOAD"),
-                package["payload"],
-                silent,
-                "silent.payload",
-            )
-            name = package.get("name", "demo")
-            version = package.get("version", "1")
-            atomic_write(
-                os.path.join(generation, "easybuild", f"{name}-{version}.eb"),
-                f"name = '{name}'\n",
-                silent,
-                "silent.eb",
-            )
-            ctx.faults.reach(f"build.module:{rel}")
-            module = os.path.join(ctx.generation_root, "modules", package["module_rel"])
-            text = lua(
-                abspath(generation),
-                name=name,
-                version=version,
-                loads=package.get("loads") or (),
-            )
-            atomic_write(module, text, silent, "silent.module")
-            link_rel = package.get("link_rel")
-            if link_rel:
-                link = os.path.join(ctx.generation_root, "modules", link_rel)
-                os.makedirs(os.path.dirname(link), exist_ok=True)
-                if not os.path.lexists(link):
-                    os.symlink(abspath(module), link)
-        return 0
+    def __init__(self, state_root):
+        self.state_root = os.fspath(state_root)
+        self.gate = self.posix = None
 
-    return build
+    def acquire(self):
+        os.makedirs(self.state_root, exist_ok=True)
+        flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+        gate = os.open(os.path.join(self.state_root, ".lock"), flags, 0o600)
+        posix = None
+        try:
+            fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            posix = os.open(os.path.join(self.state_root, ".lock.posix"), flags, 0o600)
+            fcntl.lockf(posix, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.ftruncate(gate, 0)
+            os.write(gate, f"{os.getpid()}\n".encode())
+        except BaseException:
+            for fd in (posix, gate):
+                if fd is not None:
+                    os.close(fd)
+            raise
+        self.gate, self.posix = gate, posix
 
-
-def guard_calls(live_dirs):
-    """Raise if a rename or delete names a path inside a live install directory."""
-    banned = [abspath(path) for path in live_dirs]
-
-    def illegal(path):
-        path = abspath(path)
-        return any(path == root or path.startswith(root + os.sep) for root in banned)
-
-    def wrap(original):
-        def wrapped(*args, **kwargs):
-            for arg in args:
-                if isinstance(arg, (str, os.PathLike)) and illegal(arg):
-                    raise AssertionError(f"{original.__name__} touched live install {arg}")
-            return original(*args, **kwargs)
-
-        return wrapped
-
-    return {
-        "rename": wrap(os.rename),
-        "replace": wrap(os.replace),
-        "remove": wrap(os.remove),
-        "unlink": wrap(os.unlink),
-        "rmdir": wrap(os.rmdir),
-    }
-
-
-def patch_os(guards):
-    originals = {name: getattr(os, name) for name in guards}
-    for name, wrapped in guards.items():
-        setattr(os, name, wrapped)
-    return originals
-
-
-def restore_os(originals):
-    for name, original in originals.items():
-        setattr(os, name, original)
-
-
+    def release(self):
+        gate, posix = self.gate, self.posix
+        self.gate = self.posix = None
+        for fd in (posix, gate):
+            if fd is not None:
+                os.close(fd)
 
 
 def _lock_and_sleep(state_root: str, acquired) -> None:
-    from eb_staged_rebuild.lockfile import FileLock
-
-    lock = FileLock(state_root)
-    lock.acquire(0)
+    lock = StateRootLock(state_root)
+    lock.acquire()
     acquired.set()
     try:
-        import time
-
         time.sleep(30)
     finally:
         lock.release()
 
 
 def start_lock_holder_process(state_root: str):
+    """A process that holds the state root's lock until it is terminated."""
     import multiprocessing as mp
 
     acquired = mp.Event()
@@ -202,12 +113,10 @@ def start_lock_holder_process(state_root: str):
 
 
 @contextlib.contextmanager
-def hold_state_root_lock(state_root: str, timeout: float | None = 0):
-    """Hold ``FileLock(state_root)`` in the test process for the duration of the block."""
-    from eb_staged_rebuild.lockfile import FileLock
-
-    lock = FileLock(state_root)
-    lock.acquire(timeout)
+def hold_state_root_lock(state_root: str):
+    """Hold the state root's lock in the test process for the duration of the block."""
+    lock = StateRootLock(state_root)
+    lock.acquire()
     try:
         yield lock
     finally:
@@ -242,10 +151,6 @@ def wait_for_pause(proc, fifo, timeout=60):
         os.close(fifo)
 
 
-def mode_of(path):
-    return stat.S_IMODE(os.lstat(path).st_mode)
-
-
 def _run(argv, env=None, cwd=None, clear=(), prefix=()):
     merged = {key: value for key, value in os.environ.items() if key not in clear}
     if env:
@@ -259,27 +164,30 @@ def _run(argv, env=None, cwd=None, clear=(), prefix=()):
     )
 
 
-PYTHON_CLI = (sys.executable, "-m", "eb_staged_rebuild.cli")
+def tool_bin() -> str:
+    """The binary under test: TOOL_BIN, else zig-out/bin/eb-staged-rebuild of this checkout.
+
+    ``zig build -Drelease=true`` builds the second.
+    """
+    tool = os.environ.get("TOOL_BIN")
+    if tool:
+        return tool
+    built = os.path.join(_REPO, "zig-out", "bin", "eb-staged-rebuild")
+    if os.access(built, os.X_OK):
+        return built
+    raise AssertionError("TOOL_BIN names the eb-staged-rebuild binary under test; `zig build -Drelease=true` builds it")
 
 
-_USERNS_PYTHON = re.compile(r"[^ ]*python[0-9.]* -m eb_staged_rebuild\.userns_sandbox")
 _USERNS_TOKEN = "SANDBOX"
 
 
 def normalize_userns_helper(text, binary=None):
-    """Map both userns helper argv spellings onto one token.
-
-    Python spells the helper as ``python -m eb_staged_rebuild.userns_sandbox``.
-    The binary spells it as that program followed by ``__userns-sandbox``.
-    Every other byte is left as it is.
-    """
-    text = _USERNS_PYTHON.sub(_USERNS_TOKEN, text)
-    tool = os.environ.get("TOOL_BIN") if binary is None else binary
-    if tool:
-        text = text.replace(f"{tool} __userns-sandbox", _USERNS_TOKEN)
-        resolved = os.path.realpath(tool)
-        if resolved != tool:
-            text = text.replace(f"{resolved} __userns-sandbox", _USERNS_TOKEN)
+    """Replace the argv of the user-namespace helper, the binary and its ``__userns-sandbox`` command, with one token."""
+    tool = tool_bin() if binary is None else binary
+    text = text.replace(f"{tool} __userns-sandbox", _USERNS_TOKEN)
+    resolved = os.path.realpath(tool)
+    if resolved != tool:
+        text = text.replace(f"{resolved} __userns-sandbox", _USERNS_TOKEN)
     return text
 
 
@@ -290,58 +198,12 @@ def run_cli(
     clear: Collection[str] = (),
     prefix: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
-    """Run the Python CLI with ARGS, importing it from this checkout when CWD is elsewhere.
+    """Run the binary tool_bin() names with ARGS.
 
     The variables named in CLEAR are left out of the inherited environment; ENV is added after.
-    PREFIX is a command, such as ``unshare``, that runs the CLI.
+    PREFIX is a command, such as ``unshare``, that runs the binary.
     """
-    if cwd is not None:
-        search = [_REPO, os.environ.get("PYTHONPATH", "")]
-        env = {"PYTHONPATH": os.pathsep.join(filter(None, search)), **(env or {})}
-    return _run([*PYTHON_CLI, *args], env, cwd, clear, prefix)
-
-
-def run_cli_optional_binary(
-    *args: str,
-    env: dict[str, str] | None = None,
-    cwd: str | None = None,
-    clear: Collection[str] = (),
-    prefix: Sequence[str] = (),
-) -> subprocess.CompletedProcess[str] | None:
-    """Run the program named by TOOL_BIN with ARGS, or return None when TOOL_BIN is unset."""
-    tool = os.environ.get("TOOL_BIN")
-    if not tool:
-        return None
-    return _run([tool, *args], env, cwd, clear, prefix)
-
-
-def require_tool_bin() -> str:
-    """Return TOOL_BIN or raise, for tests that require both front ends."""
-    tool = os.environ.get("TOOL_BIN")
-    if not tool:
-        raise AssertionError("TOOL_BIN is required for this test")
-    return tool
-
-
-def run_cli_binary(
-    *args: str,
-    env: dict[str, str] | None = None,
-    cwd: str | None = None,
-    clear: Collection[str] = (),
-    prefix: Sequence[str] = (),
-) -> subprocess.CompletedProcess[str]:
-    """Run the binary front end named by TOOL_BIN, which this test requires."""
-    return _run([require_tool_bin(), *args], env, cwd, clear, prefix)
-
-
-def run_cli_or_binary(
-    *args: str, env: dict[str, str] | None = None, cwd: str | None = None
-) -> subprocess.CompletedProcess[str]:
-    """Run the program named by TOOL_BIN with ARGS when set, otherwise the Python CLI."""
-    binary = run_cli_optional_binary(*args, env=env, cwd=cwd)
-    if binary is not None:
-        return binary
-    return run_cli(*args, env=env, cwd=cwd)
+    return _run([tool_bin(), *args], env, cwd, clear, prefix)
 
 
 def _skip(case: unittest.TestCase, reason: str) -> None:
@@ -454,22 +316,6 @@ def _wait_mount(case: unittest.TestCase, mnt: str, mounted: subprocess.Popen[byt
     case.fail("FUSE mount did not appear")
 
 
-class Implementation(NamedTuple):
-    """One front end: its name, the command that starts it, and how a test runs it to completion."""
-
-    name: str
-    command: tuple[str, ...]
-
-    def run(self, *args, env=None, cwd=None, clear=(), prefix=()):
-        runner = run_cli if self.name == "python" else run_cli_binary
-        return runner(*args, env=env, cwd=cwd, clear=clear, prefix=prefix)
-
-
-def implementations():
-    """The Python front end and the program TOOL_BIN names, which the tests that use both require."""
-    return [Implementation("python", PYTHON_CLI), Implementation("binary", (require_tool_bin(),))]
-
-
 def remove_tree(root):
     """Remove ROOT, first giving back the write access a test took from its directories."""
     for directory, dirs, _files in os.walk(root):
@@ -480,17 +326,11 @@ def remove_tree(root):
     shutil.rmtree(root)
 
 
-def sites(test, make, prefix):
-    """``make(implementation, root)`` for each front end, each in a fresh ROOT that TEST removes when it ends.
-
-    A list, so a test opens its own ``subTest`` around each site rather than a generator yielding from inside one.
-    """
-    made = []
-    for implementation in implementations():
-        root = tempfile.mkdtemp(prefix=prefix)
-        test.addCleanup(remove_tree, root)
-        made.append(make(implementation, root))
-    return made
+def site(test, prefix):
+    """A Site in a fresh directory that TEST removes when it ends."""
+    root = tempfile.mkdtemp(prefix=prefix)
+    test.addCleanup(remove_tree, root)
+    return Site(root)
 
 
 def write(path, data, mode=None):
@@ -507,14 +347,12 @@ CLEARED = ("LMOD_CMD", "MODULEPATH", "LOADEDMODULES", "_LMFILES_", "EESSI_CVMFS_
 
 
 class Site:
-    """A live demo/1 and the commands that stage, verify and publish it with one front end.
+    """A live demo/1 and the commands that stage, verify and publish it with the binary.
 
     LMOD_CMD, the EESSI variables and EASYBUILD_* are unset unless a command sets them.
     """
 
-    def __init__(self, implementation, root):
-        self.implementation = implementation
-        self.name = implementation.name
+    def __init__(self, root):
         self.root = root
         self.software = os.path.join(root, "software")
         self.modules = os.path.join(root, "modules")
@@ -529,10 +367,10 @@ class Site:
         os.makedirs(self.tmp)
         self.eb = os.path.join(root, "eb")
         write(self.eb, f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_EB}" "$@"\n', 0o755)
-        self.env = {"PYTHONPATH": _REPO, "TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
+        self.env = {"TMPDIR": self.tmp, "HOME": os.path.join(root, "home")}
 
     def cli(self, *args, prefix=(), **env):
-        return self.implementation.run(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared(), prefix=prefix)
+        return run_cli(*args, env={**self.env, **env}, cwd=self.root, clear=self.cleared(), prefix=prefix)
 
     def cleared(self):
         return [key for key in os.environ if key in CLEARED or key.startswith("EASYBUILD_")]
@@ -573,3 +411,38 @@ class Site:
     def payload(self):
         with open(os.path.join(self.live, "PAYLOAD"), encoding="utf-8") as handle:
             return handle.read()
+
+
+def scrub(text, **placeholders):
+    """TEXT with each value of PLACEHOLDERS replaced by ``@NAME@``, the longest value first.
+
+    A path the test made is a different string on every run; the golden files hold the placeholder.
+    """
+    for name, value in sorted(placeholders.items(), key=lambda item: -len(item[1])):
+        if value:
+            text = text.replace(value, f"@{name}@")
+            resolved = os.path.realpath(value)
+            if resolved != value:
+                text = text.replace(resolved, f"@{name}@")
+    return text
+
+
+def golden(case, part, text):
+    """Assert that TEXT is what ``tests/golden/MODULE/CLASS.TEST.PART`` holds.
+
+    ``RECORD=1`` writes the file instead of comparing, so a change in output that a
+    person has read and accepted is one command and a diff to review.
+    """
+    module, klass, method = case.id().split(".")[-3:]
+    path = os.path.join(GOLDEN, module, f"{klass}.{method}.{part}")
+    if os.environ.get("RECORD") == "1":
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as handle:
+            handle.write(text)
+        return
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape", newline="") as handle:
+            expected = handle.read()
+    except FileNotFoundError:
+        case.fail(f"no golden file {os.path.relpath(path, _REPO)}; RECORD=1 writes it")
+    case.assertEqual(text, expected, f"differs from {os.path.relpath(path, _REPO)}; RECORD=1 rewrites it")

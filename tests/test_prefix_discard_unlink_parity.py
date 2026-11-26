@@ -1,4 +1,4 @@
-"""Parity checks for recovery of a private prefix temporary."""
+"""Checks for recovery of a private prefix temporary."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 def _skip_if_root() -> None:
@@ -18,28 +18,17 @@ class PrefixDiscardUnlinkParityTests(unittest.TestCase):
     def test_sealed_partial_refuses_before_publication(self) -> None:
         _skip_if_root()
         with tempfile.TemporaryDirectory(prefix="prefix-discard-") as tmp:
-            python_result = self._run_case(os.path.join(tmp, "python"), run_cli)
-            self.assertEqual(python_result.returncode, 2, python_result.stderr)
-            self.assertIn("[Errno 13] Permission denied:", python_result.stderr)
-            self.assertIn(".ebsr-partial", python_result.stderr)
-            self.assertEqual(python_result.payload, "old\n")
-            self.assertFalse(python_result.live_tool)
-            self.assertFalse(python_result.live_debris)
-            self.assertTrue(python_result.generation_debris)
-            self.assertIn("generations", python_result.generation_tool)
+            result = self._run_case(os.path.join(tmp, "zig"))
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("[Errno 13] Permission denied:", result.stderr)
+            self.assertIn(".ebsr-partial", result.stderr)
+            self.assertEqual(result.payload, "old\n")
+            self.assertFalse(result.live_tool)
+            self.assertFalse(result.live_debris)
+            self.assertTrue(result.generation_debris)
+            self.assertIn("generations", result.generation_tool)
 
-            if os.environ.get("TOOL_BIN"):
-                zig_result = self._run_case(os.path.join(tmp, "zig"), run_cli_optional_binary)
-                self.assertEqual(zig_result.returncode, 2, zig_result.stdout + zig_result.stderr)
-                self.assertIn("[Errno 13] Permission denied:", zig_result.stderr)
-                self.assertIn(".ebsr-partial", zig_result.stderr)
-                self.assertEqual(zig_result.payload, "old\n")
-                self.assertFalse(zig_result.live_tool)
-                self.assertFalse(zig_result.live_debris)
-                self.assertTrue(zig_result.generation_debris)
-                self.assertIn("generations", zig_result.generation_tool)
-
-    def _run_case(self, root: str, runner):
+    def _run_case(self, root: str):
         software = os.path.join(root, "software")
         modules = os.path.join(root, "modules")
         state = os.path.join(root, "state")
@@ -90,9 +79,7 @@ class PrefixDiscardUnlinkParityTests(unittest.TestCase):
             "demo-1.eb",
         )
         try:
-            result = runner(*args, env={"PYTHONIOENCODING": "utf-8:strict"})
-            self.assertIsNotNone(result)
-            assert result is not None
+            result = run_cli(*args)
             generation = os.path.join(state, "generations", "r1", "software", "demo", "1")
             tool = os.path.join(generation, "tool")
             generation_tool = ""
