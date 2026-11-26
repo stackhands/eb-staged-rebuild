@@ -32,7 +32,7 @@ class ShareTests(unittest.TestCase):
                 self.assertIn(command, text, f"{command} is missing from the {name} file")
             helped = run_cli(command, "--help")
             self.assertEqual(helped.returncode, 0, helped.stderr)
-            for option in sorted(set(re.findall(r"--[a-z][a-z0-9-]+", helped.stdout))):
+            for option in sorted(set(re.findall(r"^  (?:-[a-zA-Z], )?(--[a-z][a-z0-9-]+)", helped.stdout, re.M))):
                 if option == "--help":
                     continue
                 for name, text in (("bash", bash), ("zsh", zsh), ("man", man)):

@@ -151,7 +151,7 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         # still flushed before the link is recorded as removed.
         zig = self._compare(5, "fsync", 1, "modules/tools/demo", replaced=True)
         self.assertEqual(zig["rc"], 2)
-        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n")
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/tools/demo'\n")
         self.assertEqual(zig["state"], "complete")
         self.assertEqual(zig["message"], "rollback interrupted; published tree restored")
         self.assertEqual(zig["links"], [(True, "kept")])
@@ -221,7 +221,7 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
                 self.assertEqual(zig["rc"], 2)
                 self.assertEqual(
                     zig["stderr"],
-                    "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n",
+                    "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/tools/demo'\n",
                 )
                 self.assertEqual(zig["link"], link)
                 self.assertEqual(zig["states"], ["rolling_back", "rolled_back"])
@@ -239,13 +239,13 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         zig = self._rollback_to([os.environ["TOOL_BIN"]], retry_fsync=True, module_gone=True)
         golden(self, "outcome", json.dumps(zig, indent=2, sort_keys=True) + "\n")
         self.assertEqual(zig["rc"], 2)
-        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/all/demo'\n")
+        self.assertEqual(zig["stderr"], "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/all/demo'\n")
         self.assertFalse(zig["module"])
         self.assertEqual(zig["states"], ["rolling_back", "rolling_back"])
         self.assertEqual(zig["retry_rc"], 2)
         self.assertEqual(
             zig["retry_stderr"],
-            "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/all/demo'\n",
+            "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/all/demo'\n",
         )
         self.assertEqual(zig["retry_states"], ["rolling_back", "rolling_back"])
         self.assertEqual(zig["retry_run2_links"], [(True, "created")])
@@ -261,7 +261,7 @@ class RollbackUnlinkErrorTest(unittest.TestCase):
         self.assertEqual(zig["retry_rc"], 2)
         self.assertEqual(
             zig["retry_stderr"],
-            "eb-staged-rebuild: [Errno 5] Input/output error: 'ROOT/modules/tools/demo'\n",
+            "eb-staged-rebuild: [Errno 5] Input/output error: '@ROOT@/modules/tools/demo'\n",
         )
         self.assertEqual(zig["retry_states"], ["rolling_back", "rolled_back"])
         self.assertEqual(zig["retry_run2_links"], [(True, "created")])
