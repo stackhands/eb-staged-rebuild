@@ -34,6 +34,8 @@ eb_staged_rebuild = ["bin/eb-staged-rebuild"]
 # One abi3 wheel from CPython 3.11 for every GIL CPython, and one wheel per
 # free-threaded CPython, which takes no abi3 wheel.
 build = ["cp311-manylinux_*", "cp313t-manylinux_*", "cp314t-manylinux_*"]
+# cibuildwheel 3.x builds CPython 3.13t only with this; 3.14t needs nothing.
+enable = ["cpython-freethreading"]
 archs = ["native"]
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"

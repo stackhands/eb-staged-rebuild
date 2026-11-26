@@ -89,6 +89,8 @@ class StageSourceDirFsyncTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     #!/bin/sh
+                    # The probe's eb --version: no version, the same status on any sh.
+                    [ "$1" = --version ] && exit 1
                     for arg in "$@"; do
                       case "$arg" in
                         --installpath-software=*) sw="${arg#*=}" ;;

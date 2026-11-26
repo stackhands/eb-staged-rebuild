@@ -72,7 +72,7 @@ jobs:
       # each of cp313t and cp314t; auditwheel repair tags them manylinux. The
       # static binary built above rides along as package data.
       - name: wheels that carry the binary
-        uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+        uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084 # v3.4.1
         with:
           output-dir: dist
       - name: check the wheels

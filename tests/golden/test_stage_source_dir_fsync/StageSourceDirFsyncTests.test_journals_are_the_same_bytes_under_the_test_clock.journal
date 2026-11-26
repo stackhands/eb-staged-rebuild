@@ -85,7 +85,7 @@
       "path": "@WORK@/fake-eb",
       "reason": "eb --version exited 1",
       "stage_path_keys": null,
-      "version_text": "mkdir: cannot create directory \u2018/demo\u2019: Permission denied\nmkdir: cannot create directory \u2018/all\u2019: Permission denied\n@WORK@/fake-eb: line 9: /demo/1/PAYLOAD: No such file or directory\n@WORK@/fake-eb: line 10: /all/demo/1.lua: No such file or directory"
+      "version_text": null
     },
     "filesystem": {
       "device": "faultfs",

@@ -30,7 +30,7 @@ jobs:
           version: 0.17.1
       - run: zig fmt --check build.zig build.zig.zon zig
       - name: fuse3 before the zig tests that compile faultfs
-        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config shellcheck
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev pkg-config shellcheck bubblewrap
       - run: zig build test --summary all
       - run: zig build -Drelease=true
       - name: promtool 3.16.0
@@ -99,7 +99,7 @@ jobs:
           version: 0.17.1
       - name: build the static binary the wheels carry
         run: zig build -Drelease=true -Dtarget=${{ matrix.arch }}-linux-musl --prefix out
-      - uses: pypa/cibuildwheel@f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+      - uses: pypa/cibuildwheel@8d2b08b68458a16aeb24b64e68a09ab1c8e82084 # v3.4.1
         with:
           output-dir: dist
       - name: the tag and contents of every wheel
