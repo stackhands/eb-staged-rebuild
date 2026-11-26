@@ -9,6 +9,7 @@
 # committing it.
 set -u
 : "${TOOL_BIN:?}"
+export TOOL_BIN
 # verify loads module files with $LMOD_CMD and judges ELF objects against
 # EESSI, and a login shell with Lmod exports MODULEPATH; the cases that want
 # any of them set it themselves.
@@ -65,9 +66,16 @@ hostfacts() {
         -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g'
 }
 
+# sandbox: the user-namespace sandbox command, as one line or as the items of
+# a journal's eb_command list, becomes SANDBOX. It runs before any path is
+# masked, since TOOL_BIN may sit under HOME or the work directory.
+sandbox() {
+    perl -0pe 's/"\Q$ENV{TOOL_BIN}\E",\n\s*"__userns-sandbox",/"SANDBOX",/g; s/\Q$ENV{TOOL_BIN}\E __userns-sandbox/SANDBOX/g'
+}
+
 # scrub: the scratch directory is a different path on every run.
 scrub() {
-    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" | hostfacts
+    sandbox | sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" | hostfacts
 }
 
 compare() {
@@ -239,19 +247,17 @@ compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
 # Commands that change a fixture: run ids and timestamps are normalized
 # before the comparison.
 norm() {
-    sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
+    sandbox | sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
         -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
         -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${site}#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" \
         -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
-        -e "s#${TOOL_BIN} __userns-sandbox#SANDBOX#" \
         -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
         -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
         -e 's#"(device|inode)": [0-9]+#"\1": HOST#' -e 's#^( {6})[0-9]{5,}(,?)$#\1INO\2#' \
         -e 's#pid [0-9]+ has a file open#pid PID has a file open#' | hostfacts |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
-    # The sandbox command in a journal's eb_command list, one item per line.
     # What the host reports about its sandboxes is not what the cases test.
-    perl -0pe 's/"\Q$ENV{TOOL_BIN}\E",\n\s*"__userns-sandbox",/"SANDBOX",/g; s/("(?:bwrap|userns_sandbox|user_namespaces)": )\{[^{}]*\}/$1HOST/g'
+    perl -0pe 's/("(?:bwrap|userns_sandbox|user_namespaces)": )\{[^{}]*\}/$1HOST/g'
 }
 fixture() {
     local root=$1
