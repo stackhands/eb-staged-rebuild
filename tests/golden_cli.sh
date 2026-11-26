@@ -65,6 +65,7 @@ hostfacts() {
         -e '/bubblewrap 0\.11\.0/!s/(\(|"version": ")bubblewrap [0-9][0-9.]*/\1bubblewrap HOST/g' \
         -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
         -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g' \
+        -e 's#"unprivileged_userns_clone": null#"unprivileged_userns_clone": HOST#g' \
         -e 's#"version_text": "false \([^"]*"#"version_text": "HOST"#g'
 }
 
@@ -196,7 +197,8 @@ probe_shape() {
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
     {
         printf 'exit %s\n--- keys\n' "${nc}"
-        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out"
+        # The sysctl is an int or null, depending on the kernel. The golden keeps neither.
+        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out" | sed -e 's/^\.user_namespaces\.unprivileged_userns_clone .*/.user_namespaces.unprivileged_userns_clone host/'
         printf -- '--- stderr\n'
         scrub < "${work}/n.err"
     } > "${work}/n.all"
@@ -207,7 +209,8 @@ compare_probe_text() {
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
     {
         printf 'exit %s\n--- labels\n' "${nc}"
-        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | hostfacts
+        # Printed only by a kernel that has kernel.unprivileged_userns_clone.
+        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | grep -v '^kernel\.unprivileged_userns_clone' | hostfacts
         printf -- '--- stderr\n'
         scrub < "${work}/n.err"
     } > "${work}/n.all"
