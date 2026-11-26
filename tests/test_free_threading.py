@@ -2,10 +2,13 @@
 
 Importing it must not turn the GIL back on: CPython re-enables the GIL when it
 imports an extension module that does not declare free-threading support, and
-the package must carry none. Its functions keep no shared state, so calls from
-many threads at once give the answers one thread gets.
+the package carries ``_launch``, so the probe imports it and reads the GIL
+afterwards. Its functions keep no shared state, so calls from many threads at
+once give the answers one thread gets; ``_launch.execv`` on a missing path
+fails with ENOENT and leaves the process in place.
 """
 
+import errno
 import os
 import subprocess
 import sys
@@ -25,12 +28,12 @@ CALLS = 8
 
 
 def gil_after_importing_the_package() -> str:
-    """What sys._is_gil_enabled() says after a fresh interpreter imports every module of the package."""
+    """What sys._is_gil_enabled() says after a fresh interpreter imports every module of the package and _launch."""
     env = {k: v for k, v in os.environ.items() if k != "PYTHON_GIL"}
     env["PYTHONPATH"] = PACKAGE_PARENT
     code = (
         "import sys\n"
-        "import eb_staged_rebuild, eb_staged_rebuild.ship, eb_staged_rebuild.site_hooks\n"
+        "import eb_staged_rebuild, eb_staged_rebuild._launch, eb_staged_rebuild.ship, eb_staged_rebuild.site_hooks\n"
         "print(sys._is_gil_enabled() if hasattr(sys, '_is_gil_enabled') else 'no _is_gil_enabled')\n"
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=tempfile.gettempdir())
@@ -57,6 +60,30 @@ class FreeThreadingTests(unittest.TestCase):
         else:
             expected = "no _is_gil_enabled"
         self.assertEqual(gil_after_importing_the_package(), expected)
+
+    def test_execv_on_a_missing_path_fails_with_enoent_in_every_thread(self):
+        from eb_staged_rebuild import _launch
+
+        missing = "/nonexistent-eb-staged-rebuild/prog"
+        codes = []
+        lock = threading.Lock()
+        start = threading.Barrier(THREADS)
+
+        def worker():
+            start.wait()
+            for _ in range(CALLS):
+                try:
+                    _launch.execv(missing, [missing])
+                except OSError as error:
+                    with lock:
+                        codes.append(error.errno)
+
+        threads = [threading.Thread(target=worker) for _ in range(THREADS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(codes, [errno.ENOENT] * (THREADS * CALLS))
 
     def test_calls_from_many_threads_agree_with_one_thread(self):
         alone_path = eb_staged_rebuild.binary_path()
