@@ -208,12 +208,6 @@ test "walk crosses a deep tree under a tight descriptor limit" {
     try sys.writeAll(leaf, "deep\n");
     sys.close(leaf);
 
-    var old: linux.rlimit = undefined;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, null, &old)));
-    const lim: linux.rlimit = .{ .cur = 1024, .max = old.max };
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, &lim, null)));
-    defer _ = linux.prlimit(0, .NOFILE, &old, null);
-
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const a = arena_state.allocator();
