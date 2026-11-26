@@ -25,19 +25,16 @@ The release commit gathers them into =CHANGELOG.md=; [[https://github.com/stackh
 
 ** Run the tests
 
-With Python 3.11 or newer, from the top of the repository:
+With Zig 0.17.1 and Python 3.11 or newer, from the top of the repository, =zig build test= runs the unit tests of the Zig build and =zig build -Drelease=true= builds the binary. The Python tests then run it:
 
 #+begin_src bash
-python3 -m unittest discover -s tests
+TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" python3 -m unittest discover -s tests
 #+end_src
 
 The ledger tests need =openssl= on =PATH= and an eb-stack 0.7.0 binary in =EB_STACK_BIN=, the one =.github/actions/pinned-ledger= builds; without it the tests that need it skip.
-=EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration.py=, which rebuilds a package with EasyBuild 5.4.2 and Lmod: with it set, a missing =eb= or Lmod fails the tests, and the bubblewrap case skips where =bwrap= does not run.
-=python3 tests/check_testmap.py= checks that every test that imports the Python code has its row in =TESTMAP.md=, which names what covers it for the Zig build.
-
-With Zig 0.17.1, =zig build test= runs the unit tests of the Zig build, and =zig build -Drelease=true= builds the binary.
-=TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/differential.sh= then runs both builds on the same commands and compares what they print and the files they leave; =.github/workflows/test.yml= has the other suites CI runs against the binary.
-A deliberate difference between the two builds has its row in =COMPAT.md=, which [[file:reference/compatibility.org][Compatibility]] shows.
+=EB_STAGED_REBUILD_INTEGRATION=1= turns on =tests/test_easybuild_integration_cli.py=, which rebuilds a package with EasyBuild 5.4.2 and Lmod: with it set, a missing =eb= or Lmod fails the tests, and the bubblewrap case skips where =bwrap= does not run.
+=TOOL_BIN="$PWD/zig-out/bin/eb-staged-rebuild" bash tests/golden_cli.sh= runs the binary on a long list of commands and compares what they print and the files they leave with the files under =tests/golden/golden_cli/=; =RECORD=1= rewrites them, and the diff is what a person reads before committing. =tests/crash_matrix.py=, =tests/fail_matrix.py=, =tests/signal_harness.py= and =tests/golden_metadata.py= work the same way against =tests/golden/=. =.github/workflows/test.yml= has the suites CI runs.
+=COMPAT.md= records what differs from the earlier Python implementation, and [[file:reference/compatibility.org][Compatibility]] shows it.
 CI also runs =zig fmt --check build.zig build.zig.zon zig= and =shellcheck -S warning= on the shell scripts.
 
 ** Build the documentation

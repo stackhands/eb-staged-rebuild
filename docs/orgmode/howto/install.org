@@ -5,15 +5,15 @@
 * Install eb-staged-rebuild
 
 Install eb-staged-rebuild for the account that builds the site's software with EasyBuild: the static binary of a release, a binary built from source, or the Python package.
-All three run the same commands; [[file:../reference/compatibility.org][Compatibility]] lists where their output differs.
-The Python package alone carries the site hook file (=eb_staged_rebuild.site_hooks=) and the checksum list for a copied install (=eb_staged_rebuild.ship=); the binary has neither, and neither is a subcommand.
+The Python package carries the same binary and starts it, so all three run the same commands; [[file:../reference/compatibility.org][Compatibility]] lists what changed for a site that ran the earlier Python implementation.
+The Python package also carries the site hook file (=eb_staged_rebuild.site_hooks=) and the checksum list for a copied install (=eb_staged_rebuild.ship=); neither is a subcommand of the binary.
 
 ** Before you start
 
 - Linux on x86_64 or aarch64, and the account that runs EasyBuild for the software tree.
 - For a release binary, =curl= and =sha256sum=, and the GitHub CLI, =gh=, to check where the binary was built.
 - To build the binary, Zig 0.17.1 and =git=.
-- For the Python package, Python 3.11 or newer and =git=; on Ubuntu, install =python3-venv= for =python3 -m venv=.
+- For the Python package built from source, Python 3.11 or newer, =git= and Zig 0.17.1; on Ubuntu, install =python3-venv= for =python3 -m venv=.
 
 ** Steps
 
@@ -100,7 +100,7 @@ The Python package alone carries the site hook file (=eb_staged_rebuild.site_hoo
    #+end_example
 
    That is the checksum =SHA256SUMS= gives for =eb-staged-rebuild-1.0.0-x86_64-linux-musl=.
-5. To install the Python package instead, install it into a virtual environment, from the clone of step 4 and in its directory:
+5. To install the Python package instead, install it into a virtual environment, from the clone of step 4 and in its directory. The build runs =zig build -Drelease=true= and puts the binary in the wheel; =EB_STAGED_REBUILD_BINARY=PATH= bundles a binary already built:
 
    #+begin_src bash
    python3 -m venv ~/eb-staged-rebuild-venv
@@ -155,5 +155,5 @@ For a strict readiness check, add =--require-eb= so the probe exits 1 when the E
 
 - [[file:rebuild.org][Rebuild an installed module]]
 - [[file:../tutorials/first-staged-rebuild.org][Rebuild an installation and put the old one back]]
-- [[file:../reference/compatibility.org][Compatibility]], for what differs between the binary and the Python package
+- [[file:../reference/compatibility.org][Compatibility]], for what changed for a site that ran the earlier Python implementation
 - [[https://github.com/stackhands/eb-staged-rebuild/blob/main/RELEASING.md][RELEASING.md]], for how a release is built and checked

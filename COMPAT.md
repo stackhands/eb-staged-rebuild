@@ -1,25 +1,24 @@
-# The Zig build and the Python tool
+# Moving from the Python implementation
 
-The Zig build in `zig/` carries every command of the Python tool: `probe`,
-`status`, `list`, `resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`,
-with or without `--ledger-config`. Either build can be used: releases carry the
-binary, and CI runs the command-line and real-EasyBuild tests against it
-through `TOOL_BIN`.
+Releases before the retirement of the Python implementation shipped a pure
+Python `eb-staged-rebuild` beside the Zig binary. This page records what a
+site that ran the Python version should know. The command is now the Zig
+binary alone: every command of the Python tool (`probe`, `status`, `list`,
+`resolve`, `retire`, `gc`, `run`, `resume`, `verify` and `rollback`, with or
+without `--ledger-config`) is in it. The Python package `eb_staged_rebuild`
+stays as a thin layer: its wheel carries the binary, and
+`python3 -m eb_staged_rebuild` and the console script replace the Python
+process with the binary, with the same arguments, exit status and streams.
 
-`tests/differential.sh` runs both on the same invocations and fails on any
-difference in exit code, stdout or stderr; for the commands that change a
-fixture (`retire`, `gc`, `rollback`, `run`, `resume`, `verify`) it also compares
-the journals and the trees they leave, with timestamps and the sandbox command
-normalized, and, for whole runs, the sha256 of module text that names each
-fixture's own path.
+## The Python parts that stay
 
-## Python-only modules
+`eb_staged_rebuild.site_hooks` (an EasyBuild hook file, which EasyBuild loads as Python) and `eb_staged_rebuild.ship` (a checksum list, run as `python3 -m eb_staged_rebuild.ship`) are Python modules of the package. They are not subcommands of `eb-staged-rebuild`. `site_hooks.py` is also installed by `zig build` under `share/eb-staged-rebuild/`.
 
-`eb_staged_rebuild.site_hooks` (an EasyBuild hook file) and `eb_staged_rebuild.ship` (a checksum list, run as `python3 -m eb_staged_rebuild.ship`) exist only in the Python package. They are not subcommands of `eb-staged-rebuild`, and the Zig build has no counterpart for either.
+The importable Python modules of the old implementation (`eb_staged_rebuild.engine`, `.cli`, `.retire`, and the rest) are gone. The package offers `binary_path()`, `run(*args)` and `run_json(*args)` for code that called the command.
 
-## Where the Zig build differs on purpose
+## Where the output differs from the Python tool
 
-| case | Python tool | Zig build |
+| case | Python tool | Zig binary |
 |---|---|---|
 | `--help` text | wrapped to the terminal width (`COLUMNS`) | the 80-column text |
 | `--version` | `eb-staged-rebuild VERSION` | `eb-staged-rebuild VERSION (TARGET, MODE, zig VERSION, COMMIT)`, `COMMIT` from `-Dcommit` (`unknown` without it); the first two words are unchanged |
