@@ -182,8 +182,16 @@ fn exitStatus(status: i32) !u8 {
 fn mounted(path: []const u8, buf: []u8) bool {
     const fd = sys.openat(fsx.cwd, "/proc/self/mountinfo", .{ .ACCMODE = .RDONLY }, 0) catch return false;
     defer sys.close(fd);
-    const n = linux.read(fd, buf.ptr, buf.len);
-    if (linux.errno(n) != .SUCCESS or n == 0) return false;
+    // procfs hands out mountinfo about one page per read, so read to EOF.
+    var n: usize = 0;
+    while (n < buf.len) {
+        const got = linux.read(fd, buf.ptr + n, buf.len - n);
+        if (linux.errno(got) == .INTR) continue;
+        if (linux.errno(got) != .SUCCESS) return false;
+        if (got == 0) break;
+        n += got;
+    }
+    if (n == 0) return false;
     var needle: [4096]u8 = undefined;
     const text = std.fmt.bufPrint(&needle, " {s} ", .{path}) catch return false;
     return std.mem.indexOf(u8, buf[0..n], text) != null;
