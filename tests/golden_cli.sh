@@ -358,17 +358,23 @@ compare_admin() {
 }
 fixture "${site}"
 
-compare_cross_filesystem() {
-    local label="run refuses a state root on another filesystem before the build"
-    # The first writable directory on another device than the work directory.
-    local base='' candidate
+# other_fs_base: the first writable directory on another device than the
+# work directory, or nothing.
+other_fs_base() {
+    local candidate
     for candidate in /dev/shm /var/tmp /tmp "${HOME:-}"; do
         if [ -n "${candidate}" ] && [ -d "${candidate}" ] && [ -w "${candidate}" ] \
             && [ "$(stat -c %d "${candidate}")" != "$(stat -c %d "${work}")" ]; then
-            base=${candidate}
-            break
+            printf '%s\n' "${candidate}"
+            return
         fi
     done
+}
+
+compare_cross_filesystem() {
+    local label="run refuses a state root on another filesystem before the build"
+    local base
+    base=$(other_fs_base)
     if [ -z "${base}" ]; then
         echo "DIFF ${label}: no second filesystem among /dev/shm, /var/tmp, /tmp and HOME"
         diffs=$((diffs + 1))
@@ -706,10 +712,14 @@ compare_admin "rollback the alias retire" rollback --state-root @ROOT@/state @RE
 compare_admin "retire the module again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
 compare_admin "gc keeps a directory a live module names" gc --state-root @ROOT@/state --grace-hours 0 --dry-run
 compare_admin "rollback the module retire" rollback --state-root @ROOT@/state @RETIRE@
-if [ -d /dev/shm ] && [ -w /dev/shm ]; then
-    shm=$(mktemp -d /dev/shm/esr-diff.XXXXXX)
+other_base=$(other_fs_base)
+if [ -n "${other_base}" ]; then
+    shm=$(mktemp -d "${other_base}/esr-diff.XXXXXX")
     compare_admin "retire, state root on another filesystem" retire --state-root "${shm}/state" --module-file @ROOT@/modules/all/link/1.lua
     rm -rf -- "${shm}"
+else
+    echo "DIFF retire, state root on another filesystem: no second filesystem among /dev/shm, /var/tmp, /tmp and HOME"
+    diffs=$((diffs + 1))
 fi
 compare_admin "run, no installed target" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module nope/1 -- nope-1.eb
 compare_admin "run, symlinked target" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module link/1 -- demo-1.eb

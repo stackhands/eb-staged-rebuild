@@ -16,8 +16,16 @@ from tests.support import _program, classic_install, tool_bin
 class RetireDiscardWalkTest(unittest.TestCase):
     def setUp(self):
         self.program = _program(self, "eb-fs-fail-retire")
-        shm = "/dev/shm"
-        if not os.path.isdir(shm) or os.stat(shm).st_dev == os.stat(tempfile.gettempdir()).st_dev:
+        here = os.stat(tempfile.gettempdir()).st_dev
+        self.other = next(
+            (
+                d
+                for d in ("/dev/shm", "/var/tmp", "/tmp", os.path.expanduser("~"))
+                if os.path.isdir(d) and os.access(d, os.W_OK) and os.stat(d).st_dev != here
+            ),
+            None,
+        )
+        if self.other is None:
             self.skipTest("no second filesystem is available, so retire cannot be forced to clean up")
 
     def test_a_failed_listing_still_removes_the_retire_directory(self):
@@ -27,7 +35,7 @@ class RetireDiscardWalkTest(unittest.TestCase):
             with (
                 self.subTest(errno=number),
                 tempfile.TemporaryDirectory() as root,
-                tempfile.TemporaryDirectory(dir="/dev/shm") as other,
+                tempfile.TemporaryDirectory(dir=self.other) as other,
             ):
                 software = os.path.join(root, "software")
                 modules = os.path.join(root, "modules")
