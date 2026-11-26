@@ -83,7 +83,8 @@ class ArgumentTests(unittest.TestCase):
 
     def test_the_module_has_the_documented_name(self) -> None:
         self.assertEqual(_launch.__name__, "eb_staged_rebuild._launch")
-        self.assertTrue(_launch.execv.__doc__.startswith("execv(path, argv)"))
+        self.assertEqual(_launch.execv.__text_signature__, "(path, argv)")
+        self.assertTrue(_launch.execv.__doc__.startswith("Replace the current process"))
 
 
 class ExecTests(unittest.TestCase):
