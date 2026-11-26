@@ -212,19 +212,6 @@ def _skip(case: unittest.TestCase, reason: str) -> None:
     case.skipTest(reason)
 
 
-def _python314() -> str | None:
-    if sys.version_info[:2] == (3, 14):
-        return sys.executable
-    found = shutil.which("python3.14")
-    if not found:
-        return None
-    completed = subprocess.run(
-        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
-        check=False,
-    )
-    return found if completed.returncode == 0 else None
-
-
 def _ptrace_problem() -> str | None:
     libc = ctypes.CDLL(None, use_errno=True)
     read_fd, write_fd = os.pipe()

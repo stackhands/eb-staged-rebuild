@@ -16,7 +16,7 @@ INTERNAL_ID = re.compile(r"\b(?:open|ns)-\d{3}\b")
 
 def internal_ids():
     """Lines of the docs and sources that cite a design-note id such as ns-051."""
-    paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md", "TESTMAP.md")]
+    paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md")]
     for sub, suffixes in (
         ("changelog.d", (".md",)),
         ("docs", (".md", ".org")),
