@@ -69,7 +69,11 @@ zig_autodoc_root = "api/"
 # Python: sphinx-autoapi reads the packages listed here, without importing
 # them, into reference/api/python/.
 PYTHON_PACKAGES = ["eb_staged_rebuild"]
+suppress_warnings = []
 if PYTHON_PACKAGES:
+    # `from . import _launch` names a compiled extension that has no source
+    # for autoapi to read, so its resolver reports a cycle on the package.
+    suppress_warnings.append("autoapi.python_import_resolution")
     extensions.append("autoapi.extension")
     autoapi_type = "python"
     autoapi_dirs = [os.path.join(_repo, p) for p in PYTHON_PACKAGES]
@@ -101,7 +105,7 @@ if RUST_CRATES:
     rust_generate_mode = "always"
     # A rustdoc link to an item named like its module ([`gap`] in gap) also
     # matches that module's page; MyST links the page, which lists the item.
-    suppress_warnings = ["myst.xref_ambiguous"]
+    suppress_warnings.append("myst.xref_ambiguous")
     # A type from std, core or another crate has no page here; a name in
     # these crates that does not resolve still fails the build.
     nitpick_ignore_regex = [
