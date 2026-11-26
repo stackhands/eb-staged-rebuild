@@ -47,9 +47,19 @@ settle() {
     fi
 }
 
+# hostfacts: what the probe reads from this host's kernel, file system and
+# bwrap. The stub bwrap's version, 0.11.0, stays.
+hostfacts() {
+    sed -E -e 's/(user\.max_user_namespaces|kernel\.unprivileged_userns_clone): [0-9]+/\1: HOST/' \
+        -e 's/RENAME_EXCHANGE on [A-Za-z0-9_.]+:/RENAME_EXCHANGE on HOST:/' \
+        -e '/bubblewrap 0\.11\.0/!s/(\(|"version": ")bubblewrap [0-9][0-9.]*/\1bubblewrap HOST/g' \
+        -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
+        -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g'
+}
+
 # scrub: the scratch directory is a different path on every run.
 scrub() {
-    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g"
+    sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" | hostfacts
 }
 
 compare() {
@@ -179,7 +189,7 @@ compare_probe_text() {
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
     {
         printf 'exit %s\n--- labels\n' "${nc}"
-        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out"
+        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | hostfacts
         printf -- '--- stderr\n'
         scrub < "${work}/n.err"
     } > "${work}/n.all"
@@ -229,7 +239,7 @@ norm() {
         -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
         -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
         -e 's#"(device|inode)": [0-9]+#"\1": HOST#' -e 's#^( {6})[0-9]{5,}(,?)$#\1INO\2#' \
-        -e 's#pid [0-9]+ has a file open#pid PID has a file open#' |
+        -e 's#pid [0-9]+ has a file open#pid PID has a file open#' | hostfacts |
     if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
     # The sandbox command in a journal's eb_command list, one item per line.
     # What the host reports about its sandboxes is not what the cases test.

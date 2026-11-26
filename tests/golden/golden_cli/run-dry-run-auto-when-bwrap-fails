@@ -6,8 +6,8 @@ eb-staged-rebuild: software: @SITE@/software
 eb-staged-rebuild: modules: @SITE@/modules
 eb-staged-rebuild: state root: @SITE@/state
 eb-staged-rebuild: bwrap usable: False (bwrap exited 1: setting up uid map: Permission denied (user namespaces disabled))
-eb-staged-rebuild: user.max_user_namespaces: 188824
-eb-staged-rebuild: renameat2 RENAME_EXCHANGE on btrfs: yes
+eb-staged-rebuild: user.max_user_namespaces: HOST
+eb-staged-rebuild: renameat2 RENAME_EXCHANGE on HOST: yes
 eb-staged-rebuild: easybuild: This is EasyBuild 5.4.2 (framework: 5.4.2, easyblocks: 5.4.2) on host fake.
 eb-staged-rebuild: lock: local flock lock plus POSIX record lock; cross-node coherence unmeasured
 eb-staged-rebuild: publish: renameat2(RENAME_EXCHANGE), with a restoring ordinary-rename fallback

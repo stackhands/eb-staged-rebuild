@@ -70,7 +70,7 @@
       "path": "/usr/bin/bwrap",
       "reason": null,
       "usable": true,
-      "version": "bubblewrap 0.13.1"
+      "version": "bubblewrap HOST"
     },
     "easybuild": {
       "bwrap_info_keys": null,
@@ -109,9 +109,9 @@
       "path": "@WORK@/mnt/software"
     },
     "user_namespaces": {
-      "max_user_namespaces": 188824,
+      "max_user_namespaces": HOST,
       "readable": true,
-      "unprivileged_userns_clone": 1
+      "unprivileged_userns_clone": HOST
     },
     "userns_sandbox": {
       "installed": true,

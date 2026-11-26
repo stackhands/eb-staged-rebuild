@@ -414,6 +414,13 @@ def scrub(text, **placeholders):
                 text = text.replace(resolved, f"@{name}@")
     # A journal's snapshot records the device and inode numbers of the host.
     text = re.sub(r'"(device|inode)": [0-9]+', r'"\1": HOST', text)
+    # What the probe reads from this host's kernel, file system and bwrap.
+    text = re.sub(r"(user\.max_user_namespaces|kernel\.unprivileged_userns_clone): [0-9]+", r"\1: HOST", text)
+    text = re.sub(r"RENAME_EXCHANGE on [A-Za-z0-9_.]+:", "RENAME_EXCHANGE on HOST:", text)
+    text = re.sub(r'(\(|"version": ")bubblewrap [0-9][0-9.]*', r"\1bubblewrap HOST", text)
+    # The faultfs mount a test makes, and placeholders, stay.
+    text = re.sub(r'"(mount|fstype|device)": "(?!@|faultfs"|fuse\.faultfs")[^"]*"', r'"\1": "HOST"', text)
+    text = re.sub(r'"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+', r'"\1": HOST', text)
     return re.sub(r"^( {6,})[0-9]{5,}(,?)$", r"\1INO\2", text, flags=re.M)
 
 
