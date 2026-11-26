@@ -8,7 +8,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/esr-version.XXXXXX")
 trap 'rm -rf -- "${work}"' EXIT
-cp -R "${repo_root}/build.zig" "${repo_root}/build.zig.zon" "${repo_root}/zig" "${work}/"
+cp -R "${repo_root}/build.zig" "${repo_root}/build.zig.zon" "${repo_root}/zig" "${repo_root}/share" "${repo_root}/eb_staged_rebuild" "${work}/"
 sed -i -E 's/^( *\.version = ")[^"]+(".*)$/\10.0.0-check\2/' "${work}/build.zig.zon"
 (cd "${work}" && zig build -Dcommit=0123abc --prefix "${work}/out")
 got=$("${work}/out/bin/eb-staged-rebuild" --version)
