@@ -165,6 +165,17 @@ def _run(argv, env=None, cwd=None, clear=(), prefix=()):
     )
 
 
+def path_without_eb() -> str:
+    """PATH without the directories that hold an ``eb``.
+
+    A dry run reports the EasyBuild it finds on PATH; the recorded output is
+    the one for a host with none, so a host that has EasyBuild installed must
+    not change it.
+    """
+    keep = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not os.access(os.path.join(d, "eb"), os.X_OK)]
+    return os.pathsep.join(keep)
+
+
 def tool_bin() -> str:
     """The binary under test: TOOL_BIN, else zig-out/bin/eb-staged-rebuild of this checkout.
 

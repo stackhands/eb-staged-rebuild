@@ -10,8 +10,16 @@
 set -u
 : "${TOOL_BIN:?}"
 # verify loads module files with $LMOD_CMD and judges ELF objects against
-# EESSI; the cases that want either set it themselves.
-unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX
+# EESSI, and a login shell with Lmod exports MODULEPATH; the cases that want
+# any of them set it themselves.
+unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX MODULEPATH
+# A dry run reports the EasyBuild it finds on PATH, and the recorded output
+# is the one for a host with none: leave out the directories that hold an eb.
+PATH=$(printf '%s' "${PATH}" | tr ':' '\n' | while IFS= read -r d || [ -n "${d}" ]; do
+    [ -n "${d}" ] && [ ! -x "${d}/eb" ] && printf '%s:' "${d}"
+done)
+PATH=${PATH%:}
+export PATH
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 golden_dir=${repo_root}/tests/golden/golden_cli
 work=$(mktemp -d "${TMPDIR:-/tmp}/esr-golden.XXXXXX")
@@ -766,7 +774,7 @@ compare_admin "module files after the barrier" env cat @ROOT@/modules/all/alpha/
 # shellcheck disable=SC2086
 compare_admin "run, prepare restricts the staged tree" run ${pr} --run-id p3 --prepare @ROOT@/prepare-context --module demo/1 -- demo-1.eb
 compare_admin "the context the prepare saw" env cat @ROOT@/context.json
-compare_admin "modes after a restricting prepare" env sh -c 'cd "$1" && find . -printf "%m %p\n" | sort' sh @ROOT@/software/demo/1
+compare_admin "modes after a restricting prepare" env sh -c 'cd "$1" && find . -printf "%m %p\n" | LC_ALL=C sort' sh @ROOT@/software/demo/1
 # A published module retired: gc removes the hidden sibling and leaves the
 # live tree for the operator.
 compare_admin "retire a published module" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua

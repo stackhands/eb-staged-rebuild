@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import golden, normalize_userns_helper, run_cli, scrub
+from tests.support import golden, normalize_userns_helper, path_without_eb, run_cli, scrub
 
 
 class CliPathBytesParityTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class CliPathBytesParityTests(unittest.TestCase):
                 "--",
                 "Demo-1.0.eb",
             )
-            binary = run_cli(*args)
+            binary = run_cli(*args, env={"PATH": path_without_eb()})
             self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
             self.assertEqual(binary.stderr, "")
             self.assertNotIn("Traceback", binary.stdout)
