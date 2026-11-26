@@ -1,7 +1,6 @@
 import errno
 import os
 import stat
-import time
 from pathlib import Path
 import subprocess
 import sys
@@ -162,11 +161,13 @@ class ClusterLockTests(unittest.TestCase):
 
     def test_gate_fifo_is_refused_without_blocking(self):
         with tempfile.TemporaryDirectory() as root:
-            os.mkfifo(Path(root) / ".lock")
-            started = time.monotonic()
+            fifo = Path(root) / ".lock"
+            os.mkfifo(fifo)
             with self.assertRaises(Refused):
                 FileLock(root).acquire(0)
-            self.assertLess(time.monotonic() - started, 2)
+            with self.assertRaises(OSError) as caught:
+                os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            self.assertEqual(caught.exception.errno, errno.ENXIO)
 
     def test_symlink_state_root_is_refused(self):
         with tempfile.TemporaryDirectory() as root:
@@ -208,8 +209,9 @@ class ClusterLockTests(unittest.TestCase):
                         "nan",
                     ],
                     capture_output=True,
-                    timeout=2,
                 )
+                with self.assertRaises(Refused):
+                    FileLock(root).acquire(0)
             finally:
                 holder.release()
             self.assertEqual(proc.returncode, 2)

@@ -124,36 +124,40 @@ class FakeEbTests(unittest.TestCase):
         self.assertIn(f"Library rpath: [{install}/lib]", dynamic)
         self.assertNotIn("generations", dynamic)
 
-    def test_installpath_records_the_stable_prefix(self):
-        os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
-        result = run(self._spec("installpath"))
-        self.assertEqual(result.returncode, 0, result.message)
-        self._assert_recorded_prefix(self.install)
-
-    def test_bwrap_records_the_stable_prefix(self):
-        os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
-        result = run(self._spec("bwrap"))
-        self.assertEqual(result.returncode, 0, result.message)
-        self._assert_recorded_prefix(self.install)
-
-    def test_installpath_swaps_the_staged_generation(self):
-        result = run(self._spec("installpath"))
-        self.assertEqual(result.returncode, 0, result.message)
-        self._assert_switched()
-        commands = [json.loads(line) for line in _read(self.argv).splitlines()]
-        build = commands[-1]
-        joined = " ".join(build)
-        self.assertIn("--installpath-software=", joined)
-        self.assertIn("--rebuild", build)
-        self.assertNotIn("--remove-ghost-install-dirs", build)
-        self.assertNotIn("--prefix", [arg.split("=", 1)[0] for arg in build])
-        self.assertTrue(any(arg.startswith("--installpath-software=") and self.software not in arg for arg in build))
-
-    def test_bwrap_swaps_the_staged_generation(self):
-        result = run(self._spec("bwrap"))
-        self.assertEqual(result.returncode, 0, result.message)
-        self._assert_switched()
-        self.assertFalse(os.path.islink(self.install))
+    def test_backend_records_the_prefix_or_swaps_the_generation(self):
+        rows = (
+            ("installpath", "prefix"),
+            ("bwrap", "prefix"),
+            ("installpath", "swap"),
+            ("bwrap", "swap"),
+        )
+        for index, (backend, phase) in enumerate(rows):
+            if index:
+                self.tearDown()
+                self.setUp()
+            with self.subTest(backend=backend, phase=phase):
+                if phase == "prefix":
+                    os.environ["FAKE_EB_RECORD_PREFIX"] = "1"
+                    result = run(self._spec(backend))
+                    self.assertEqual(result.returncode, 0, result.message)
+                    self._assert_recorded_prefix(self.install)
+                    continue
+                result = run(self._spec(backend))
+                self.assertEqual(result.returncode, 0, result.message)
+                self._assert_switched()
+                if backend == "bwrap":
+                    self.assertFalse(os.path.islink(self.install))
+                    continue
+                commands = [json.loads(line) for line in _read(self.argv).splitlines()]
+                build = commands[-1]
+                joined = " ".join(build)
+                self.assertIn("--installpath-software=", joined)
+                self.assertIn("--rebuild", build)
+                self.assertNotIn("--remove-ghost-install-dirs", build)
+                self.assertNotIn("--prefix", [arg.split("=", 1)[0] for arg in build])
+                self.assertTrue(
+                    any(arg.startswith("--installpath-software=") and self.software not in arg for arg in build)
+                )
 
     def test_userns_records_the_stable_prefix(self):
         probe = probe_userns_sandbox()

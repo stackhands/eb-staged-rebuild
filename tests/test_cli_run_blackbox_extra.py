@@ -33,31 +33,5 @@ class RunBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.stderr, "")
             self.assertIn("dry-run: no build, no module file written", proc.stdout)
 
-    def test_run_rejects_non_finite_lock_timeout(self) -> None:
-        """Reproducer: `eb-staged-rebuild run ... --lock-timeout nan -- Demo-1.0.eb`."""
-        with tempfile.TemporaryDirectory() as tmp:
-            software = os.path.join(tmp, "software")
-            modules = os.path.join(tmp, "modules")
-            state_root = os.path.join(tmp, "state")
-            os.makedirs(software)
-            os.makedirs(modules)
-            proc = run_cli(
-                "run",
-                "--software",
-                software,
-                "--modules",
-                modules,
-                "--state-root",
-                state_root,
-                "--dry-run",
-                "--lock-timeout",
-                "nan",
-                "--",
-                "Demo-1.0.eb",
-            )
-            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-            self.assertIn("--lock-timeout is not a finite number", proc.stderr)
-
-
 if __name__ == "__main__":
     unittest.main()

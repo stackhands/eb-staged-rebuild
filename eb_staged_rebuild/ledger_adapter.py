@@ -200,7 +200,9 @@ def _bounded(argv, timeout):
             while os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise PublisherError(f"{argv[0]} {argv[1]} {argv[2]} timed out after {timeout}s")
+                    error = PublisherError(f"{argv[0]} {argv[1]} {argv[2]} timed out after {timeout}s")
+                    error.kept = (bytes(kept[0]), bytes(kept[1]))
+                    raise error
                 if not selector.get_map():
                     time.sleep(min(remaining, 0.02))
                     continue

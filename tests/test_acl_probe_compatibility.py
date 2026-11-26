@@ -116,33 +116,24 @@ class AclProbeCompatibilityTests(unittest.TestCase):
             self.assertEqual(model.get_path(path)[POSIX], posix_bytes)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o640)
 
-    def test_unlisted_posix_einval_without_positive_model_is_refused(self):
-        model = AclModel("nfs4-only", NFS4, {NFS4})
-        with self.scenario(model) as (path, expected):
-            def probe(fd, name):
-                if name == POSIX:
-                    raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
-                return None
+    def test_unlisted_einval_without_a_positive_model_is_refused(self):
+        rows = (
+            ("nfs4-only", (POSIX,)),
+            ("nfs4-only-no-posix", (GPFS, POSIX)),
+        )
+        for label, refused_names in rows:
+            model = AclModel(label, NFS4, {NFS4})
+            with self.scenario(model) as (path, expected):
+                def probe(fd, name, refused_names=refused_names):
+                    if name in refused_names:
+                        raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
+                    return None
 
-            model.hooks["getxattr"] = only(path, probe)
-            with self.assertRaises(Refused):
-                atomic_write(path, "new", None, "replace")
-            model.hooks.clear()
-            self.assert_unchanged(model, path, expected)
-
-    def test_unlisted_nfs4_einval_without_listed_posix_is_refused(self):
-        model = AclModel("nfs4-only-no-posix", NFS4, {NFS4})
-        with self.scenario(model) as (path, expected):
-            def probe(fd, name):
-                if name in (GPFS, POSIX):
-                    raise OSError(errno.EINVAL, os.strerror(errno.EINVAL))
-                return None
-
-            model.hooks["getxattr"] = only(path, probe)
-            with self.assertRaises(Refused):
-                atomic_write(path, "new", None, "replace")
-            model.hooks.clear()
-            self.assert_unchanged(model, path, expected)
+                model.hooks["getxattr"] = only(path, probe)
+                with self.assertRaises(Refused):
+                    atomic_write(path, "new", None, "replace")
+                model.hooks.clear()
+                self.assert_unchanged(model, path, expected)
 
     def test_listed_nfs4_einval_is_refused(self):
         model = AclModel("nfs4-generic-listed", NFS4, {NFS4})

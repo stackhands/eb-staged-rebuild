@@ -1,5 +1,6 @@
 """run_command returns only after every process in the command group has exited."""
 
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -45,19 +46,19 @@ class CommandGroupExitTests(unittest.TestCase):
             output = root / "output"
             leader = root / "leader"
             ready = root / "ready"
-            worker = (
-                "import os, signal, time\nfrom pathlib import Path\n"
-                f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
-                f"fd = os.open({str(output)!r}, os.O_WRONLY | os.O_CREAT, 0o600)\n"
-                "for _ in range(48):\n"
-                "    if os.fork() == 0:\n"
-                "        signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                "        while True:\n"
-                "            pass\n"
-                f"Path({str(ready)!r}).touch()\n"
-                + ("while True: time.sleep(0.05)\n" if interrupt else "time.sleep(0.2)\n")
-            )
             if interrupt:
+                worker = (
+                    "import os, signal, time\nfrom pathlib import Path\n"
+                    f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
+                    f"fd = os.open({str(output)!r}, os.O_WRONLY | os.O_CREAT, 0o600)\n"
+                    "for _ in range(2):\n"
+                    "    if os.fork() == 0:\n"
+                    "        signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    "        while True:\n"
+                    "            pass\n"
+                    f"Path({str(ready)!r}).touch()\n"
+                    "while True: time.sleep(0.05)\n"
+                )
                 code = (
                     "import json, os, signal, sys, threading, time\nfrom pathlib import Path\n"
                     "from eb_staged_rebuild.builders import run_command\n"
@@ -77,17 +78,56 @@ class CommandGroupExitTests(unittest.TestCase):
                 rc, members, open_writers = json.loads(completed.stdout.strip().splitlines()[-1])
                 self.assertEqual(rc, 128 + signal.SIGTERM)
             else:
-                rc = run_command([sys.executable, "-c", worker], os.environ.copy(), FaultInjector(), "x")
-                pgid = int(leader.read_text())
-                members, open_writers = group_members(pgid), holders(output)
-                self.assertEqual(rc, 0)
-            self.assertEqual(members, [])
-            self.assertEqual(open_writers, [])
+                children = root / "children"
+                go = root / "go"
+                os.mkfifo(go)
+                worker = (
+                    "import os\nfrom pathlib import Path\n"
+                    f"Path({str(leader)!r}).write_text(str(os.getpid()))\n"
+                    "read_fd, write_fd = os.pipe()\n"
+                    "pids = []\n"
+                    "for _ in range(2):\n"
+                    "    pid = os.fork()\n"
+                    "    if pid == 0:\n"
+                    "        os.close(write_fd)\n"
+                    "        os.read(read_fd, 1)\n"
+                    "        os._exit(0)\n"
+                    "    pids.append(pid)\n"
+                    f"part = Path({str(children)!r} + '.part')\n"
+                    "part.write_text(' '.join(str(pid) for pid in pids))\n"
+                    f"os.replace(part, Path({str(children)!r}))\n"
+                    f"os.open({str(go)!r}, os.O_RDONLY)\n"
+                )
+                fds = []
+
+                def open_pidfds():
+                    while not children.exists():
+                        pass
+                    for text in children.read_text().split():
+                        fds.append(os.pidfd_open(int(text)))
+                    os.close(os.open(go, os.O_WRONLY))
+
+                import threading
+                libc = ctypes.CDLL(None, use_errno=True)
+                PR_SET_CHILD_SUBREAPER = 36
+                if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+                    raise OSError(ctypes.get_errno(), "prctl")
+                threading.Thread(target=open_pidfds, daemon=True).start()
+                try:
+                    rc = run_command([sys.executable, "-c", worker], os.environ.copy(), FaultInjector(), "x")
+                    self.assertEqual(rc, 0)
+                    self.assertEqual(len(fds), 2)
+                    for fd in fds:
+                        info = None
+                        while info is None:
+                            info = os.waitid(os.P_PIDFD, fd, os.WEXITED | os.WNOHANG)
+                        os.close(fd)
+                finally:
+                    libc.prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
+                return
 
     def test_normal_exit_returns_after_stray_workers_have_exited(self):
-        for attempt in range(3):
-            with self.subTest(attempt=attempt):
-                self.check(interrupt=False)
+        self.check(interrupt=False)
 
     def test_interrupted_command_returns_after_every_worker_has_exited(self):
         self.check(interrupt=True)

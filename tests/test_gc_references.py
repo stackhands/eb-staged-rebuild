@@ -81,52 +81,36 @@ class ReferenceTests(unittest.TestCase):
             self.assertEqual(matched[0]["action"], "keep")
             self.assertTrue(os.path.isdir(retired))
 
-    def test_usage_log_keeps_a_retired_tree(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, _module, retired, _install = self.published(root)
-            keep_logs = _keep_logs_stub(root)
-            usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
-            try:
-                actions = collect(
-                    state,
-                    0,
-                    1_800_000_000,
-                    usage_log=usage,
-                    eb_keep_logs=keep_logs,
-                )
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            matched = [action for action in actions if action["path"] == retired]
-            self.assertEqual(matched[0]["action"], "keep")
-            self.assertTrue(os.path.isdir(retired))
-
-    def test_usage_log_keeps_a_generation(self):
-        with tempfile.TemporaryDirectory() as root:
-            state, _module, retired, _install = self.published(root)
-            keep_logs = _keep_logs_stub(root)
-            usage = os.path.join(root, "usage.log")
-            with open(usage, "w", encoding="utf-8") as handle:
-                handle.write("{}\n")
-            generation = os.path.join(state, "generations", "run1")
-            self.assertTrue(os.path.isdir(generation))
-            shutil.rmtree(retired)
-            os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
-            try:
-                actions = collect(
-                    state,
-                    0,
-                    1_800_000_000,
-                    usage_log=usage,
-                    eb_keep_logs=keep_logs,
-                )
-            finally:
-                os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
-            matched = [action for action in actions if action["path"] == generation]
-            self.assertEqual(matched[0]["action"], "keep")
-            self.assertTrue(os.path.isdir(generation))
+    def test_usage_log_keeps_a_referenced_path(self):
+        for kind in ("retired", "generation"):
+            with self.subTest(kind=kind):
+                with tempfile.TemporaryDirectory() as root:
+                    state, _module, retired, _install = self.published(root)
+                    keep_logs = _keep_logs_stub(root)
+                    usage = os.path.join(root, "usage.log")
+                    with open(usage, "w", encoding="utf-8") as handle:
+                        handle.write("{}\n")
+                    generation = os.path.join(state, "generations", "run1")
+                    if kind == "generation":
+                        self.assertTrue(os.path.isdir(generation))
+                        shutil.rmtree(retired)
+                        kept = generation
+                    else:
+                        kept = retired
+                    os.environ["FAKE_KEEP_LOGS_MODE"] = "in-use"
+                    try:
+                        actions = collect(
+                            state,
+                            0,
+                            1_800_000_000,
+                            usage_log=usage,
+                            eb_keep_logs=keep_logs,
+                        )
+                    finally:
+                        os.environ.pop("FAKE_KEEP_LOGS_MODE", None)
+                    matched = [action for action in actions if action["path"] == kept]
+                    self.assertEqual(matched[0]["action"], "keep")
+                    self.assertTrue(os.path.isdir(kept))
 
     def test_usage_log_failure_refuses_without_deleting(self):
         with tempfile.TemporaryDirectory() as root:
