@@ -254,6 +254,51 @@ class PrefixPublishTests(unittest.TestCase):
         self.assertEqual(os.lstat(path).st_ino, again)
         self.assertEqual(Path(path).read_bytes(), updated)
 
+    def test_a_refused_syscall_keeps_the_original_file(self):
+        for fault in ("punch", "chmod", "fsync"):
+            with self.subTest(fault=fault):
+                self._refused_syscall(fault)
+
+    def _refused_syscall(self, fault):
+        work = os.path.join(self.root, fault)
+        os.makedirs(work)
+        path = os.path.join(work, "kept")
+        if fault == "punch":
+            blob = b"prefix=" + OLD + b"/lib\n" + b"\0" * 8192
+        else:
+            blob = b"prefix " + OLD + b" suffix"
+        with open(path, "wb") as handle:
+            handle.write(blob)
+        before = Path(path).read_bytes()
+        if fault == "punch":
+            def boom(_fd, _offset, _length):
+                raise OSError(errno.EIO, "fallocate(PUNCH_HOLE): Input/output error")
+
+            context = patch("eb_staged_rebuild.prefix._punch", side_effect=boom)
+            expected = errno.EIO
+        elif fault == "chmod":
+            os.chmod(work, 0o555)
+
+            def boom(_fd, _mode):
+                raise OSError(errno.EPERM, "Operation not permitted")
+
+            context = patch("eb_staged_rebuild.prefix.os.fchmod", side_effect=boom)
+            expected = errno.EPERM
+        else:
+            def boom(directory):
+                raise OSError(errno.EIO, "Input/output error", directory)
+
+            context = patch("eb_staged_rebuild.prefix.fsync_dir", side_effect=boom)
+            expected = errno.EIO
+        try:
+            with context:
+                with self.assertRaises(OSError) as caught:
+                    rewrite_tree(work, OLD, NEW)
+            self.assertEqual(caught.exception.errno, expected)
+            self.assertEqual(Path(path).read_bytes(), before)
+        finally:
+            os.chmod(work, 0o755)
+
 
 if __name__ == "__main__":
     unittest.main()

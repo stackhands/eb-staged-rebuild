@@ -301,6 +301,7 @@ tests cover the same bytes, mode, hard links and symbolic links.
 | test | replacement |
 |---|---|
 | PrefixPublishTests.test_a_failed_publish_leaves_the_original_bytes | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
+| PrefixPublishTests.test_a_refused_syscall_keeps_the_original_file | in-process `EIO` from `_punch`, `EPERM` from `fchmod`, and `EIO` from `fsync_dir`; `zig/prefix.zig` covers the same publish |
 | PrefixPublishTests.test_rewrite_does_not_chmod_a_sealed_file | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
 | PrefixPublishTests.test_a_sparse_file_stays_sparse | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
 | PrefixPublishTests.test_hard_links_stay_one_inode | `zig/prefix.zig` test "a rewritten tree keeps mode, holes, hard links and replaces a symlink by rename" |
@@ -312,6 +313,12 @@ tests cover the same bytes, mode, hard links and symbolic links.
 | PrefixPublishTests.test_a_full_filesystem_names_the_temporary_file | `zig/main.zig` `errnoPath` on the temporary file; `os.write` already reports that path |
 | PrefixPublishTests.test_a_read_only_directory_names_the_directory | `zig/prefix.zig` test "a read-only directory names that directory" |
 | PrefixPublishTests.test_an_interrupted_hard_link_publish_is_finished_on_the_next_rewrite | `zig/prefix.zig` test "an interrupted hard-link publish is finished on the next rewrite" |
+
+### tests/test_prefix_user_xattr_parity.py
+
+| test | replacement |
+|---|---|
+| PrefixUserXattrParityTests.test_refused_user_xattr_keeps_the_original_file | Python patches `setxattr` to `ENOTSUP`; the release binary runs under `tests/xattr_enotsup.c`. `tests/test_prefix.py` PrefixPublishTests.test_a_failed_publish_leaves_the_original_bytes covers the live bytes |
 
 ### tests/test_backends.py
 
