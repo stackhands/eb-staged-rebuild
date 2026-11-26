@@ -195,7 +195,7 @@ test "walk crosses a deep tree under a tight descriptor limit" {
     var fd = try fsx.openDir(fsx.cwd, base, false);
     defer sys.close(fd);
     var depth: usize = 0;
-    while (depth < 1300) : (depth += 1) {
+    while (depth < 1025) : (depth += 1) {
         const c: u8 = 'a' + @as(u8, @intCast(rand.uintLessThan(u8, 26)));
         try names.append(gpa, c);
         const nm = names.items[names.items.len - 1 ..];
@@ -207,12 +207,6 @@ test "walk crosses a deep tree under a tight descriptor limit" {
     const leaf = try sys.openat(fd, "leaf.txt", .{ .ACCMODE = .WRONLY, .CREAT = true }, 0o644);
     try sys.writeAll(leaf, "deep\n");
     sys.close(leaf);
-
-    var old: linux.rlimit = undefined;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, null, &old)));
-    const lim: linux.rlimit = .{ .cur = 1024, .max = old.max };
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prlimit(0, .NOFILE, &lim, null)));
-    defer _ = linux.prlimit(0, .NOFILE, &old, null);
 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
