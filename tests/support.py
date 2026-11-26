@@ -263,7 +263,7 @@ def _program(case: unittest.TestCase, binary_name: str) -> str:
     )
     if built.returncode != 0:
         detail = (built.stderr or built.stdout or "gcc failed").strip()
-        case.skipTest(f"gcc could not build tests/fs_fail.c: {detail}")
+        _skip(case, f"gcc could not build tests/fs_fail.c: {detail}")
     return out
 
 
