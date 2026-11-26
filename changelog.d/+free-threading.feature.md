@@ -1,0 +1,1 @@
+The wheel declares free-threading support. One `py3-none` wheel installs on every CPython 3, including the free-threaded 3.13t and 3.14t; CI checks its tag and that it carries no extension module, and tests the installed package on both free-threaded builds.

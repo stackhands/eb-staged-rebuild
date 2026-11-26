@@ -10,6 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Rohit Goswami", email = "rgoswami@ieee.org"}]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+]
 dependencies = []
 
 [project.scripts]

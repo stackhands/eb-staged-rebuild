@@ -91,6 +91,8 @@ jobs:
           ls -l dist
       - name: the wheel carries the binary
         run: unzip -l dist/*.whl | grep -F eb_staged_rebuild/bin/eb-staged-rebuild
+      - name: the wheel is py3-none, carries no extension module and says it supports free threading
+        run: python tools/check_wheel.py dist/*.whl
       - name: install the wheel in a clean environment
         run: |
           python -m venv "$RUNNER_TEMP/venv"
@@ -103,7 +105,7 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" -m eb_staged_rebuild --version
           cp -r "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/docs" "$RUNNER_TEMP/"
           mkdir -p "$RUNNER_TEMP/zig-out/bin" && ln -s "$TOOL_BIN" "$RUNNER_TEMP/zig-out/bin/eb-staged-rebuild"
-          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_site_hooks tests.test_ship tests.test_wrapper
+          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_site_hooks tests.test_ship tests.test_wrapper tests.test_free_threading
       - name: the black-box command tests through the installed entry point
         run: |
           cd "$RUNNER_TEMP"
@@ -111,6 +113,40 @@ jobs:
             tests.test_cli_resolve_blackbox tests.test_cli_status_blackbox_extra tests.test_cli_resume_blackbox \
             tests.test_cli_gc_blackbox_extra tests.test_cli_retire_blackbox tests.test_cli_rollback_blackbox_extra \
             tests.test_cli_run_blackbox_extra tests.test_docs_json_output_format_contract tests.test_docs_resolve_json_stdout_contract
+
+  free-threading:
+    # The same wheel on a free-threaded CPython: it installs, importing it keeps
+    # the GIL off, and the package answers calls from many threads.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13t", "3.14t"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.1
+      - name: build the wheel
+        run: |
+          python -m pip install build
+          python -m build --wheel --outdir dist
+          python tools/check_wheel.py dist/*.whl
+      - name: install it and test it as installed
+        run: |
+          python -c "import sysconfig, sys; assert sysconfig.get_config_var('Py_GIL_DISABLED'), sys.version"
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          cp -r "$GITHUB_WORKSPACE/tests" "$GITHUB_WORKSPACE/docs" "$RUNNER_TEMP/"
+          export TOOL_BIN="$RUNNER_TEMP/venv/bin/eb-staged-rebuild"
+          "$RUNNER_TEMP/venv/bin/python" -m unittest -v tests.test_free_threading tests.test_wrapper tests.test_site_hooks tests.test_ship
 
   integration:
     runs-on: ubuntu-latest
