@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: 'eb-staged-rebuild: rebuild a live EasyBuild install and swap it in'
+message: If you use eb-staged-rebuild, please cite it using the metadata below.
+type: software
+authors:
+- given-names: Rohit
+  family-names: Goswami
+  email: rgoswami@ieee.org
+  orcid: https://orcid.org/0000-0002-2393-8056
+license: MIT
+repository-code: https://github.com/stackhands/eb-staged-rebuild
+url: https://stackhands.github.io/eb-staged-rebuild/
+keywords:
+- EasyBuild
+- HPC
+- atomic deployment
+- rollback
+abstract: Rebuilds an EasyBuild install in a generation directory under a state
+  root, then exchanges the finished tree with the live software directory and publishes
+  the module file, with journals, rollback and garbage collection; shipped as a
+  Python package and a static Zig binary.
