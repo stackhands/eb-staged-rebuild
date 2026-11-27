@@ -61,7 +61,11 @@ fn tighten(fd: fsx.fd_t) bool {
 /// `detail` receives an owned copy of the symlink component when the error is
 /// `Unsafe`.
 pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]const u8) Error!state.RootLock {
-    const normalized = fsx.absPath(a, root) catch return error.OutOfMemory;
+    const normalized = fsx.absPath(a, root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A removed working directory leaves a relative root normalized as written.
+        else => fsx.normPath(a, root) catch return error.OutOfMemory,
+    };
     defer a.free(normalized);
     if (offendingComponent(normalized)) |component| {
         detail.* = a.dupe(u8, component) catch return error.OutOfMemory;

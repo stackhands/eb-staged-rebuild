@@ -86,7 +86,7 @@ The binary's commit is the one =zig build= was given with =-Dcommit=, or =unknow
 Built with =zig build -Drelease=true -Dcommit=abc1234=, it prints:
 
 #+begin_example
-eb-staged-rebuild X.Y.Z (x86_64-linux-musl, safe, zig 0.17.1, abc1234)
+eb-staged-rebuild 3.0.1 (x86_64-linux-musl, safe, zig 0.17.1, abc1234)
 #+end_example
 
 Each command takes the options of its section below.

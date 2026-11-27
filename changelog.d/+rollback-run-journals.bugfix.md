@@ -1,1 +1,0 @@
-`rollback RUN_ID`, `rollback --latest` and `rollback --to GEN` read journals through the run journal loader in Python and Zig. `--latest` and `--to` refuse every run if any journal under `runs/` names another run, names another state root, or lacks a field. They refuse before they choose runs or print anything. `--to` reads `GEN` at `runs/GEN/journal.json`.
