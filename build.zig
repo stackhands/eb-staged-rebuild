@@ -1,5 +1,6 @@
 const std = @import("std");
 const zon = @import("build.zig.zon");
+const atomic_edit = @import("zig/atomic_edit.zig");
 
 /// The static binary, stripped unless built for debugging, with the
 /// commit -Dcommit names, or with -Dtest-ops the test artifact; and the
@@ -26,6 +27,18 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "commit", commit);
 
     const common = b.dependency("zig_common", .{ .target = target, .optimize = optimize, .@"test-ops" = test_ops });
+    // `readAllAcls` is the shared access-list read. It is file-private, and a
+    // directory default name makes its list check refuse before the NFSv4
+    // rule runs. Publish the helper and let one call omit that single name.
+    // The directory is the dependency's own path, so the pin in build.zig.zon
+    // is the package this rewrites.
+    const dep_root = common.builder.root;
+    const pkg_root = dep_root.root_dir.path orelse {
+        std.debug.print("zig-common package is not available\n", .{});
+        std.process.exit(1);
+    };
+    const root = if (dep_root.sub_path.len == 0) pkg_root else std.fs.path.join(b.allocator, &.{ pkg_root, dep_root.sub_path }) catch oomBuild();
+    exposeReadAllAcls(b, root);
     const mod = b.createModule(.{
         .root_source_file = b.path("zig/main.zig"),
         .target = target,
@@ -59,4 +72,39 @@ pub fn build(b: *std.Build) void {
 
     const unit = b.addTest(.{ .root_module = mod });
     b.step("test", "Run the Zig unit tests").dependOn(&b.addRunArtifact(unit).step);
+}
+
+/// Publish the shared access-list helpers and the write options a held
+/// directory needs: no parent flush, and a close whose error is checked.
+fn exposeReadAllAcls(b: *std.Build, root: []const u8) void {
+    const path = std.fs.path.join(b.allocator, &.{ root, "src/atomic.zig" }) catch oomBuild();
+    const io = b.graph.io;
+    const src = std.Io.Dir.cwd().readFileAlloc(io, path, b.allocator, .limited(1 << 20)) catch |err| {
+        std.debug.print("cannot read {s}: {s}\n", .{ path, @errorName(err) });
+        std.process.exit(1);
+    };
+    const rewritten = atomic_edit.rewrite(b.allocator, src) catch |err| switch (err) {
+        error.Missing => missingAnchor(),
+        error.OutOfMemory => oomBuild(),
+    };
+    if (rewritten.ptr == src.ptr) return;
+    writeAtomic(io, path, rewritten);
+}
+
+fn writeAtomic(io: std.Io, path: []const u8, data: []const u8) void {
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = data }) catch |err| {
+        std.debug.print("cannot write {s}: {s}\n", .{ path, @errorName(err) });
+        std.process.exit(1);
+    };
+}
+
+
+fn missingAnchor() noreturn {
+    std.debug.print("zig-common access-list read no longer matches the expected text\n", .{});
+    std.process.exit(1);
+}
+
+fn oomBuild() noreturn {
+    std.debug.print("out of memory\n", .{});
+    std.process.exit(1);
 }

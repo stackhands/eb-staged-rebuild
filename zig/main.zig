@@ -1252,6 +1252,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
 pub var last_why: []const u8 = "";
 
 test {
+    _ = @import("prefix.zig");
     _ = @import("run.zig");
     _ = @import("publish.zig");
     _ = @import("swap.zig");
