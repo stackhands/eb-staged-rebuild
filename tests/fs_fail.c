@@ -16,11 +16,81 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <elf.h>
+#include <fcntl.h>
 #include <sys/ptrace.h>
+#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+/* Registers and syscall numbers differ per architecture. Each call
+   site uses the names below. A name absent on an architecture is -1,
+   which never matches a real syscall number. */
+#if defined(__x86_64__)
+typedef struct user_regs_struct regs_t;
+#define REG_NR(r) ((long)(r)->orig_rax)
+#define REG_A0(r) ((r)->rdi)
+#define REG_A1(r) ((r)->rsi)
+#define REG_A2(r) ((r)->rdx)
+#define REG_A3(r) ((r)->r10)
+#define REG_RET(r) ((r)->rax)
+#elif defined(__aarch64__)
+typedef struct user_regs_struct regs_t;
+#define REG_NR(r) ((long)(r)->regs[8])
+#define REG_A0(r) ((r)->regs[0])
+#define REG_A1(r) ((r)->regs[1])
+#define REG_A2(r) ((r)->regs[2])
+#define REG_A3(r) ((r)->regs[3])
+#define REG_RET(r) ((r)->regs[0])
+#ifndef NT_ARM_SYSTEM_CALL
+#define NT_ARM_SYSTEM_CALL 0x404
+#endif
+#else
+#error "fs_fail.c supports x86_64 and aarch64 Linux"
+#endif
+
+#ifdef SYS_open
+#define N_OPEN SYS_open
+#else
+#define N_OPEN (-1)
+#endif
+#ifdef SYS_mkdir
+#define N_MKDIR SYS_mkdir
+#else
+#define N_MKDIR (-1)
+#endif
+#ifdef SYS_unlink
+#define N_UNLINK SYS_unlink
+#else
+#define N_UNLINK (-1)
+#endif
+#ifdef SYS_rename
+#define N_RENAME SYS_rename
+#else
+#define N_RENAME (-1)
+#endif
+#ifdef SYS_dup2
+#define N_DUP2 SYS_dup2
+#else
+#define N_DUP2 (-1)
+#endif
+#ifdef SYS_renameat
+#define N_RENAMEAT SYS_renameat
+#else
+#define N_RENAMEAT (-1)
+#endif
+#ifdef SYS_openat2
+#define N_OPENAT2 SYS_openat2
+#else
+#define N_OPENAT2 437
+#endif
+#ifdef SYS_pwritev2
+#define N_PWRITEV2 SYS_pwritev2
+#else
+#define N_PWRITEV2 (-1)
+#endif
 
 enum { OP_LOG = 0, OP_OPEN, OP_WRITE, OP_FSYNC, OP_MKDIR, OP_UNLINK, OP_FLOCK, OP_RENAME, OP_FCNTL };
 enum { FDMAX = 256 };
@@ -77,16 +147,21 @@ static int wanted(const char *path) {
     return 1;
 }
 
+static int is_open(long nr) {
+    return nr == N_OPEN || nr == SYS_openat || nr == N_OPENAT2;
+}
+
 static int class_of(long nr, unsigned long arg) {
-    if (nr == 2 || nr == 257 || nr == 437) return OP_OPEN;
-    if (nr == 1 || nr == 18 || nr == 20 || nr == 296 || nr == 328) return OP_WRITE;
-    if (nr == 74 || nr == 75) return OP_FSYNC;
-    if (nr == 83 || nr == 258) return OP_MKDIR;
-    if (nr == 87 || nr == 263) return OP_UNLINK;
-    if (nr == 73) return OP_FLOCK;
-    if (nr == 82 || nr == 264 || nr == 316) return OP_RENAME;
+    if (is_open(nr)) return OP_OPEN;
+    if (nr == SYS_write || nr == SYS_pwrite64 || nr == SYS_writev || nr == SYS_pwritev ||
+        nr == N_PWRITEV2) return OP_WRITE;
+    if (nr == SYS_fsync || nr == SYS_fdatasync) return OP_FSYNC;
+    if (nr == N_MKDIR || nr == SYS_mkdirat) return OP_MKDIR;
+    if (nr == N_UNLINK || nr == SYS_unlinkat) return OP_UNLINK;
+    if (nr == SYS_flock) return OP_FLOCK;
+    if (nr == N_RENAME || nr == N_RENAMEAT || nr == SYS_renameat2) return OP_RENAME;
     /* F_SETLK and F_SETLKW. The record lock is the other half of the gate. */
-    if (nr == 72 && (arg == 6 || arg == 7)) return OP_FCNTL;
+    if (nr == SYS_fcntl && (arg == F_SETLK || arg == F_SETLKW)) return OP_FCNTL;
     return 0;
 }
 
@@ -101,24 +176,24 @@ static void join_path(char *dst, int dirfd, const char *rel) {
     else snprintf(dst, 768, "%s", rel);
 }
 
-static void path_arg(pid_t pid, long nr, struct user_regs_struct *regs, char *a, char *b) {
+static void path_arg(pid_t pid, long nr, const regs_t *regs, char *a, char *b) {
     a[0] = b[0] = 0;
     char raw1[768], raw2[768];
     raw1[0] = raw2[0] = 0;
     unsigned long p1 = 0, p2 = 0;
     int d1 = -100, d2 = -100;
-    if (nr == 2 || nr == 83 || nr == 87) p1 = regs->rdi;
-    else if (nr == 257 || nr == 437 || nr == 258 || nr == 263) {
-        d1 = (int)regs->rdi;
-        p1 = regs->rsi;
-    } else if (nr == 82) {
-        p1 = regs->rdi;
-        p2 = regs->rsi;
-    } else if (nr == 264 || nr == 316) {
-        d1 = (int)regs->rdi;
-        p1 = regs->rsi;
-        d2 = (int)regs->rdx;
-        p2 = regs->r10;
+    if (nr == N_OPEN || nr == N_MKDIR || nr == N_UNLINK) p1 = REG_A0(regs);
+    else if (nr == SYS_openat || nr == N_OPENAT2 || nr == SYS_mkdirat || nr == SYS_unlinkat) {
+        d1 = (int)REG_A0(regs);
+        p1 = REG_A1(regs);
+    } else if (nr == N_RENAME) {
+        p1 = REG_A0(regs);
+        p2 = REG_A1(regs);
+    } else if (nr == N_RENAMEAT || nr == SYS_renameat2) {
+        d1 = (int)REG_A0(regs);
+        p1 = REG_A1(regs);
+        d2 = (int)REG_A2(regs);
+        p2 = REG_A3(regs);
     }
     if (p1) read_str(pid, p1, raw1, sizeof raw1);
     if (p2) read_str(pid, p2, raw2, sizeof raw2);
@@ -142,9 +217,27 @@ static const char *name_of(int c) {
 
 static FILE *logf;
 
-static void poison(pid_t pid, struct user_regs_struct *regs) {
-    regs->orig_rax = 39;
-    if (ptrace(PTRACE_SETREGS, pid, 0, regs) < 0) _exit(1);
+static int get_regs(pid_t pid, regs_t *regs) {
+    struct iovec iov = {regs, sizeof *regs};
+    return ptrace(PTRACE_GETREGSET, pid, (void *)NT_PRSTATUS, &iov);
+}
+
+static int set_regs(pid_t pid, regs_t *regs) {
+    struct iovec iov = {regs, sizeof *regs};
+    return ptrace(PTRACE_SETREGSET, pid, (void *)NT_PRSTATUS, &iov);
+}
+
+/* Replace the syscall at entry with getpid. */
+static void poison(pid_t pid, regs_t *regs) {
+#if defined(__x86_64__)
+    regs->orig_rax = SYS_getpid;
+    if (set_regs(pid, regs) < 0) _exit(1);
+#else
+    (void)regs;
+    int nr = SYS_getpid;
+    struct iovec iov = {&nr, sizeof nr};
+    if (ptrace(PTRACE_SETREGSET, pid, (void *)NT_ARM_SYSTEM_CALL, &iov) < 0) _exit(1);
+#endif
     poisoned = 1;
     fired = 1;
 }
@@ -191,6 +284,7 @@ int main(int argc, char **argv) {
     if (ptrace(PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD | PTRACE_O_EXITKILL) < 0) return 1;
     if (ptrace(PTRACE_SYSCALL, pid, 0, 0) < 0) return 1;
     int entering = 1;
+    regs_t entry;
 
     for (;;) {
         if (waitpid(pid, &status, 0) < 0) return errno == ECHILD ? 0 : 1;
@@ -202,17 +296,18 @@ int main(int argc, char **argv) {
             if (ptrace(PTRACE_SYSCALL, pid, 0, sig == SIGTRAP ? 0 : sig) < 0) return 1;
             continue;
         }
-        struct user_regs_struct regs;
-        if (ptrace(PTRACE_GETREGS, pid, 0, &regs) < 0) return 1;
+        regs_t regs;
+        if (get_regs(pid, &regs) < 0) return 1;
         if (entering) {
             poisoned = 0;
-            long nr = (long)regs.orig_rax;
-            int cls = class_of(nr, regs.rsi);
+            entry = regs;
+            long nr = REG_NR(&regs);
+            int cls = class_of(nr, REG_A1(&regs));
             char a[768], b[768];
             path_arg(pid, nr, &regs, a, b);
             const char *via = NULL;
             if (cls == OP_WRITE || cls == OP_FSYNC || cls == OP_FLOCK || cls == OP_FCNTL)
-                via = path_of((int)regs.rdi);
+                via = path_of((int)REG_A0(&regs));
             if (op == OP_LOG && cls) {
                 const char *show = via ? via : a;
                 if (show && show[0] && (!root || !root[0] || strstr(show, root) || (b[0] && strstr(b, root)))) {
@@ -228,26 +323,28 @@ int main(int argc, char **argv) {
                 else hit = wanted(a);
                 if (hit && ++seen == nth) poison(pid, &regs);
             }
-            if (nr == 3) forget((int)regs.rdi);
+            if (nr == SYS_close) forget((int)REG_A0(&regs));
             entering = 0;
         } else {
-            long nr = (long)regs.orig_rax;
-            if (poisoned) regs.rax = (unsigned long)(-fail_errno);
-            if ((nr == 2 || nr == 257 || nr == 437) && (long)regs.rax >= 0) {
+            /* The return value replaces argument 0 on some architectures,
+               so arguments come from the entry snapshot. */
+            long nr = poisoned ? -1 : REG_NR(&entry);
+            if (poisoned) REG_RET(&regs) = (unsigned long)(-fail_errno);
+            if (is_open(nr) && (long)REG_RET(&regs) >= 0) {
                 char a[768], b[768];
-                path_arg(pid, nr, &regs, a, b);
-                if (a[0]) remember((int)regs.rax, a);
+                path_arg(pid, nr, &entry, a, b);
+                if (a[0]) remember((int)REG_RET(&regs), a);
             }
-            if (nr == 32 && (long)regs.rax >= 0) {
-                const char *p = path_of((int)regs.rdi);
-                if (p) remember((int)regs.rax, p);
+            if (nr == SYS_dup && (long)REG_RET(&regs) >= 0) {
+                const char *p = path_of((int)REG_A0(&entry));
+                if (p) remember((int)REG_RET(&regs), p);
             }
-            if ((nr == 33 || nr == 292) && (long)regs.rax >= 0) {
-                const char *p = path_of((int)regs.rdi);
-                if (p) remember((int)regs.rsi, p);
+            if ((nr == N_DUP2 || nr == SYS_dup3) && (long)REG_RET(&regs) >= 0) {
+                const char *p = path_of((int)REG_A0(&entry));
+                if (p) remember((int)REG_A1(&entry), p);
             }
-            if (poisoned || nr == 2 || nr == 257 || nr == 437 || nr == 32 || nr == 33 || nr == 292)
-                if (ptrace(PTRACE_SETREGS, pid, 0, &regs) < 0) return 1;
+            if (poisoned || is_open(nr) || nr == SYS_dup || nr == N_DUP2 || nr == SYS_dup3)
+                if (set_regs(pid, &regs) < 0) return 1;
             entering = 1;
         }
         if (ptrace(PTRACE_SYSCALL, pid, 0, 0) < 0) return 1;
