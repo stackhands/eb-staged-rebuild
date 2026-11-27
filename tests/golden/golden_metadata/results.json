@@ -1,0 +1,77 @@
+{
+ "a new module keeps the staged ACL under a restrictive umask": [
+  [
+   [
+    0,
+    "eb-staged-rebuild: module preflight: <ROOT>/eb --dry-run demo.eb --rebuild\neb-staged-rebuild: run metadata backend installpath generation <ROOT>/state/generations/metadata\neb-staged-rebuild: running <ROOT>/eb --installpath-software=<ROOT>/state/generations/metadata/software --installpath-modules=<ROOT>/state/generations/metadata/modules demo.eb --rebuild\neb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)\neb-staged-rebuild: published module all/demo/1.lua\neb-staged-rebuild: run metadata published 1 module(s)\n",
+    ""
+   ]
+  ],
+  [
+   "local root = \"<ROOT>/software/demo/1\"\nconflict(\"demo\")\nsetenv(\"EBROOTDEMO\", root)\nsetenv(\"EBVERSIONDEMO\", \"1\")\n",
+   416,
+   "0200000001000600ffffffff02000400feff000004000400ffffffff10000400ffffffff20000000ffffffff"
+  ]
+ ],
+ "a prepared module replaced by a symlink is refused before publication": [
+  [
+   [
+    2,
+    "eb-staged-rebuild: module preflight: <ROOT>/eb --dry-run demo.eb --rebuild\neb-staged-rebuild: run metadata backend installpath generation <ROOT>/state/generations/metadata\neb-staged-rebuild: running <ROOT>/eb --installpath-software=<ROOT>/state/generations/metadata/software --installpath-modules=<ROOT>/state/generations/metadata/modules demo.eb --rebuild\neb-staged-rebuild: preparing publication permissions: <ROOT>/policy <ROOT>/state/runs/metadata/prepare-context.json\neb-staged-rebuild: cannot validate publication for all/demo/1.lua: [Errno 40] Too many levels of symbolic links: '<ROOT>/state/runs/metadata/prepared/all/demo/1.lua'\n",
+    ""
+   ]
+  ],
+  [
+   "local root = \"<ROOT>/software/demo/1\"\nconflict(\"demo\")\nsetenv(\"EBROOTDEMO\", root)\nsetenv(\"EBVERSIONDEMO\", \"1\")\n",
+   384,
+   null
+  ]
+ ],
+ "a staged ACL on an existing module is published": [
+  [
+   [
+    0,
+    "eb-staged-rebuild: module preflight: <ROOT>/eb --dry-run demo.eb --rebuild\neb-staged-rebuild: run metadata backend installpath generation <ROOT>/state/generations/metadata\neb-staged-rebuild: running <ROOT>/eb --installpath-software=<ROOT>/state/generations/metadata/software --installpath-modules=<ROOT>/state/generations/metadata/modules demo.eb --rebuild\neb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)\neb-staged-rebuild: published module all/demo/1.lua\neb-staged-rebuild: run metadata published 1 module(s)\n",
+    ""
+   ]
+  ],
+  [
+   "local root = \"<ROOT>/software/demo/1\"\nconflict(\"demo\")\nsetenv(\"EBROOTDEMO\", root)\nsetenv(\"EBVERSIONDEMO\", \"1\")\n",
+   384,
+   null
+  ]
+ ],
+ "rollback restores the previous mode and the absence of an ACL": [
+  [
+   [
+    0,
+    "eb-staged-rebuild: module preflight: <ROOT>/eb --dry-run demo.eb --rebuild\neb-staged-rebuild: run metadata backend installpath generation <ROOT>/state/generations/metadata\neb-staged-rebuild: running <ROOT>/eb --installpath-software=<ROOT>/state/generations/metadata/software --installpath-modules=<ROOT>/state/generations/metadata/modules demo.eb --rebuild\neb-staged-rebuild: preparing publication permissions: <ROOT>/policy <ROOT>/state/runs/metadata/prepare-context.json\neb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)\neb-staged-rebuild: published module all/demo/1.lua\neb-staged-rebuild: run metadata published 1 module(s)\n",
+    ""
+   ],
+   [
+    0,
+    "eb-staged-rebuild: restored all/demo/1.lua\neb-staged-rebuild: run metadata rolled back; replacement kept at its retired path\n",
+    ""
+   ]
+  ],
+  [
+   "local root = \"<ROOT>/software/demo/1\"\nconflict(\"demo\")\nsetenv(\"EBROOTDEMO\", root)\nsetenv(\"EBVERSIONDEMO\", \"1\")\n",
+   384,
+   null
+  ]
+ ],
+ "the prepare policy's ACL is applied at publication": [
+  [
+   [
+    0,
+    "eb-staged-rebuild: module preflight: <ROOT>/eb --dry-run demo.eb --rebuild\neb-staged-rebuild: run metadata backend installpath generation <ROOT>/state/generations/metadata\neb-staged-rebuild: running <ROOT>/eb --installpath-software=<ROOT>/state/generations/metadata/software --installpath-modules=<ROOT>/state/generations/metadata/modules demo.eb --rebuild\neb-staged-rebuild: preparing publication permissions: <ROOT>/policy <ROOT>/state/runs/metadata/prepare-context.json\neb-staged-rebuild: swapped all/demo/1.lua (renameat2-exchange)\neb-staged-rebuild: published module all/demo/1.lua\neb-staged-rebuild: run metadata published 1 module(s)\n",
+    ""
+   ]
+  ],
+  [
+   "local root = \"<ROOT>/software/demo/1\"\nconflict(\"demo\")\nsetenv(\"EBROOTDEMO\", root)\nsetenv(\"EBVERSIONDEMO\", \"1\")\n",
+   416,
+   "0200000001000600ffffffff02000400feff000004000400ffffffff10000400ffffffff20000000ffffffff"
+  ]
+ ]
+}

@@ -1,0 +1,11 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild gc [-h] --state-root STATE_ROOT
+                            [--grace-hours GRACE_HOURS] [--dry-run]
+                            [--lock-timeout LOCK_TIMEOUT]
+                            [--usage-log USAGE_LOG]
+                            [--eb-keep-logs EB_KEEP_LOGS]
+                            [--metrics-file PATH] [--include-failed] [--json]
+                            [--keep N] [--check-in-use]
+eb-staged-rebuild gc: error: argument --dry-run: ignored explicit argument "a'b"

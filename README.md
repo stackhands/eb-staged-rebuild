@@ -16,7 +16,7 @@ It is for a stack on NFS, Lustre or GPFS that jobs read while it is rebuilt, whe
 
 EasyBuild's own `--bwrap` builds the new tree at a temporary path with the real path bound over it, and writes `bwrap_info.json` there; moving the tree into place is left to the caller. With `--backend bwrap`, the first one `auto` tries, this program runs that build and does the move: it exchanges the finished tree with the live one with `renameat2(RENAME_EXCHANGE)`, or with three ordinary renames that restore both names on failure where the filesystem refuses rename flags, publishes the module file with a same-directory replace, and keeps the previous tree for jobs that still have it open. `installpath` and `userns` are for hosts without bubblewrap and rewrite the generation path in each file before the exchange.
 
-Documentation: <https://stackhands.github.io/eb-staged-rebuild/>, built from the Org pages in `docs/orgmode/`: a tutorial, how-to guides, explanation, and a reference, including the API generated from the Python and Zig code.
+Documentation: <https://stackhands.github.io/eb-staged-rebuild/>, built from the Org pages in `docs/orgmode/`: a tutorial, how-to guides, explanation, and a reference, including the API generated from the Zig and Python code.
 
 ```console
 pixi run -e docs docbld
@@ -24,16 +24,16 @@ pixi run -e docs docbld
 
 The HTML is written to `docs/build/html`. `docs/orgmode/contributing.org` says how to write a page.
 
-Release bundles now include bash and zsh completion scripts with a man page produced from `_parser`, using pinned `shtab` and `argparse-manpage` in CI. Fish output is excluded because the generator toolchain does not provide fish completion support.
+Release archives carry the bash and zsh completion scripts and the man page that `share/` holds.
 
 ## Install
 
-Linux only. There are two builds of the same command-line tool; their outputs agree byte for byte except where [COMPAT.md](COMPAT.md) lists a deliberate difference.
+Linux only. The `eb-staged-rebuild` command is one static Zig binary. The Python package `eb_staged_rebuild` is a thin layer over it: the wheel carries the binary, and `python3 -m eb_staged_rebuild` and the `eb-staged-rebuild` console script replace the Python process with it through `eb_staged_rebuild._launch`, a small C extension that calls `execv(2)`, so there is one implementation of every command. The package also holds the two Python-only parts: `eb_staged_rebuild.site_hooks`, the EasyBuild hook file ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/add-a-site-hook.html)), and `eb_staged_rebuild.ship`, the checksum list for a copied install, run as `python3 -m eb_staged_rebuild.ship` ([how-to](https://stackhands.github.io/eb-staged-rebuild/howto/check-a-copied-install.html)). Neither is a subcommand of the binary.
 
-The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v1.0.0):
+The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v2.0.1):
 
 ```bash
-v=2.0.1 arch=x86_64   # or aarch64
+v=3.0.0 arch=x86_64   # or aarch64
 curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/eb-staged-rebuild-${v}-${arch}-linux-musl"
 curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
@@ -43,12 +43,14 @@ eb-staged-rebuild --version
 
 `gh attestation verify FILE --repo stackhands/eb-staged-rebuild` checks the build provenance. To build it yourself, Zig 0.17.1: `zig build -Drelease=true`.
 
-The Python package, Python 3.11 or newer, no third-party dependencies:
+The Python package, Python 3.11 or newer, no third-party dependencies. The release has wheels for x86_64 and aarch64 Linux (glibc 2.17 or newer): `cp311-abi3` for every CPython from 3.11 with the GIL, and `cp313t` and `cp314t` for the free-threaded builds, which install no abi3 wheel. `pip` picks the one that fits. The extension uses only the stable ABI on a GIL CPython and declares free-threading support on the others. Installing from a clone compiles the extension, so it needs a C compiler and the Python headers; the build runs `zig build -Drelease=true`, and `EB_STAGED_REBUILD_BINARY=/path/to/eb-staged-rebuild` bundles a binary already built instead:
 
 ```bash
 python3 -m pip install .
 eb-staged-rebuild --version
 ```
+
+From Python, `eb_staged_rebuild.binary_path()` names the bundled binary (else the first `eb-staged-rebuild` on `PATH`), `eb_staged_rebuild.run(*args)` runs it, and `eb_staged_rebuild.run_json("status", "--state-root", DIR)` parses the document of a command that takes `--json`.
 
 ## Usage
 
@@ -61,7 +63,7 @@ eb-staged-rebuild run --software /opt/site/software --modules /opt/site/modules 
 eb-staged-rebuild status --state-root /opt/site/.eb-staged-rebuild example-1
 ```
 
-`probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover failed runs, rollback and `gc`.
+`probe` reports the sandboxes the machine has and whether the filesystem exchanges two directories in one call. `run` builds into `/opt/site/.eb-staged-rebuild/generations/example-1`, in the default state root for that software tree, and swaps the new tree in for `software/Example/1.0-GCCcore-15.2.0`, then its module file. With `--verify`, it first checks the new tree as `verify` does, and leaves a tree that fails unpublished unless `--force` is given. Arguments after `--` go to `eb`. `rollback` with the run id swaps the previous tree back, and `rollback --to RUN_ID` goes back over every run published after that one. The [how-to guide](https://stackhands.github.io/eb-staged-rebuild/howto/rebuild.html) covers the dry run and the output of each step, and the guides after it cover the checks, failed runs, rollback and `gc`.
 Sites that keep a filesystem reserve can add `--min-free-bytes BYTES` to `run`; without it, the command does not check free space.
 
 ## Changelog

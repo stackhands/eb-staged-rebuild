@@ -1,0 +1,70 @@
+exit 0
+--- stdout
+{
+  "runs": [
+    {
+      "backend": "userns",
+      "kind": "rebuild",
+      "message": [
+        "a",
+        1,
+        null,
+        1.5,
+        true
+      ],
+      "modules": [
+        {
+          "live_software": "/x",
+          "rel": "z/9",
+          "retired": "/y \u00e9",
+          "status": "built"
+        }
+      ],
+      "modules_published": 0,
+      "modules_total": 1,
+      "run_id": "r0",
+      "state": "planned"
+    },
+    {
+      "backend": "bwrap",
+      "kind": "rebuild",
+      "message": "all published",
+      "modules": [
+        {
+          "live_software": "/sw/demo/1",
+          "rel": "demo/1",
+          "retired": "/sw/demo/.1.old",
+          "status": "published"
+        },
+        {
+          "live_software": "/sw/other/2",
+          "rel": "other/2",
+          "retired": null,
+          "status": "pending"
+        }
+      ],
+      "modules_published": 1,
+      "modules_total": 2,
+      "run_id": "r1",
+      "state": "done"
+    },
+    {
+      "kind": "retire",
+      "module_path": "/m/x/1.lua",
+      "run_id": "r2",
+      "software_dir": "/sw/x/1",
+      "state": "retired"
+    },
+    {
+      "backend": null,
+      "kind": "rebuild",
+      "message": "",
+      "modules": [],
+      "modules_published": 0,
+      "modules_total": 0,
+      "run_id": "r3",
+      "state": 7
+    }
+  ]
+}
+--- stderr

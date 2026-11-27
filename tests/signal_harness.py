@@ -1,12 +1,11 @@
-"""Signal a run while its build command runs, for the Python tool and TOOL_BIN.
+"""Signal a run while its build command runs, for TOOL_BIN.
 
-Ports tests/test_command_lifecycle.py and tests/test_command_group_exit.py
-to the command line: the fake eb's build step is a worker that starts
+The fake eb's build step is a worker that starts
 descendants, and the harness signals the tool (or lets the worker exit
-with stray workers left). For both implementations it requires the state
-lock to stay held until the command group has stopped, no descendant to
-outlive the run, no process to hold the worker's output file open, and
-the same exit code from both. A retire while another process holds the
+with stray workers left). It requires the state lock to stay held until
+the command group has stopped, no descendant to outlive the run, no
+process to hold the worker's output file open, and the exit code each
+case names. A retire while another process holds the
 state lock must be refused and leave the module file.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 tests/signal_harness.py
@@ -25,9 +24,41 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
 sys.path.insert(0, REPO)
 
-from eb_staged_rebuild.errors import Refused  # noqa: E402
-from eb_staged_rebuild.lockfile import FileLock  # noqa: E402
-from tests.test_command_group_exit import group_members, holders  # noqa: E402
+from tests.support import StateRootLock  # noqa: E402
+
+
+def group_members(pgid):
+    """The live processes whose process group is PGID."""
+    members = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", encoding="utf-8") as handle:
+                fields = handle.read().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if int(fields[2]) == pgid and fields[0] not in ("Z", "X"):
+            members.append(int(name))
+    return members
+
+
+def holders(path):
+    """The processes that hold PATH open."""
+    found = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            for fd in os.listdir(f"/proc/{name}/fd"):
+                if os.readlink(f"/proc/{name}/fd/{fd}") == str(path):
+                    found.append(int(name))
+        except OSError:
+            continue
+    return found
+
+# The exit status of a run whose build command exits while its workers still run.
+STRAY_EXIT = 2
 
 LEAF = (
     "import signal, sys, time\nfrom pathlib import Path\n"
@@ -89,20 +120,17 @@ def fixture(root, worker):
     os.chmod(eb, 0o755)
 
 
-def command(impl):
-    if impl == "py":
-        return [sys.executable, "-m", "eb_staged_rebuild"]
+def command():
     return [os.environ["TOOL_BIN"]]
 
 
-def start(impl, root):
+def start(root):
     args = [
         "run", "--software", f"{root}/software", "--modules", f"{root}/modules",
         "--state-root", f"{root}/state", "--backend", "installpath", "--eb", f"{root}/eb",
         "--run-id", "r1", "--module", "demo/1", "--", "demo-1.eb",
     ]
-    env = dict(os.environ, PYTHONPATH=REPO)
-    return subprocess.Popen(command(impl) + args, env=env, cwd=root,
+    return subprocess.Popen(command() + args, env=os.environ, cwd=root,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -120,13 +148,12 @@ def wait_for(path, proc):
 
 
 def lock_is_held(root):
-    contender = FileLock(os.path.join(root, "state"))
+    contender = StateRootLock(os.path.join(root, "state"))
     try:
-        contender.acquire(timeout=0.2)
-    except Refused:
+        contender.acquire()
+    except BlockingIOError:
         return True
-    finally:
-        contender.release()
+    contender.release()
     return False
 
 
@@ -139,9 +166,9 @@ def alive(pid):
     return state not in ("Z", "X")
 
 
-def lifecycle(impl, root, sig, ignore_term):
+def lifecycle(root, sig, ignore_term):
     fixture(root, lifecycle_worker(root, ignore_term))
-    proc = start(impl, root)
+    proc = start(root)
     pids = []
     try:
         pids = wait_for(os.path.join(root, "pids.json"), proc)
@@ -165,9 +192,9 @@ def lifecycle(impl, root, sig, ignore_term):
                 pass
 
 
-def group_exit(impl, root, interrupt):
+def group_exit(root, interrupt):
     fixture(root, group_worker(root, interrupt))
-    proc = start(impl, root)
+    proc = start(root)
     pgid = None
     try:
         pgid = wait_for(os.path.join(root, "pids.json"), proc)[0]
@@ -188,17 +215,17 @@ def group_exit(impl, root, interrupt):
                 pass
 
 
-def lock_held(impl, root):
+def lock_held(root):
     """retire while another process holds the state lock: refused, module kept."""
     fixture(root, "")
     module = os.path.join(root, "modules", "all", "demo", "1.lua")
     before = open(module).read()
-    lock = FileLock(os.path.join(root, "state"))
+    lock = StateRootLock(os.path.join(root, "state"))
     lock.acquire()
     try:
         done = subprocess.run(
-            command(impl) + ["retire", "--state-root", f"{root}/state", "--module-file", module],
-            env=dict(os.environ, PYTHONPATH=REPO), cwd=root, capture_output=True, text=True, timeout=60,
+            command() + ["retire", "--state-root", f"{root}/state", "--module-file", module],
+            env=os.environ, cwd=root, capture_output=True, text=True, timeout=60,
         )
     finally:
         lock.release()
@@ -216,36 +243,31 @@ def main():
         return 2
     cases = [
         ("SIGTERM, command ignores SIGTERM: lock held until the group stops",
-         lambda impl, root: lifecycle(impl, root, signal.SIGTERM, True), 128 + signal.SIGTERM),
+         lambda root: lifecycle(root, signal.SIGTERM, True), 128 + signal.SIGTERM),
         ("SIGINT, direct child exits first: descendants stopped",
-         lambda impl, root: lifecycle(impl, root, signal.SIGINT, False), 128 + signal.SIGINT),
+         lambda root: lifecycle(root, signal.SIGINT, False), 128 + signal.SIGINT),
         ("command exits with stray workers: run returns after they exited",
-         lambda impl, root: group_exit(impl, root, False), None),
+         lambda root: group_exit(root, False), STRAY_EXIT),
         ("SIGTERM with stray workers: run returns after every worker exited",
-         lambda impl, root: group_exit(impl, root, True), 128 + signal.SIGTERM),
+         lambda root: group_exit(root, True), 128 + signal.SIGTERM),
         ("retire while the state lock is held: refused, module kept",
          lock_held, 2),
     ]
     failures = 0
     for label, body, expected in cases:
-        results = {}
-        for impl in ("py", "zig"):
-            root = tempfile.mkdtemp(prefix=f"sig-{impl}-")
-            try:
-                results[impl] = body(impl, root)
-            finally:
-                shutil.rmtree(root, ignore_errors=True)
-        (py_rc, py_problems), (zig_rc, zig_problems) = results["py"], results["zig"]
-        bad = py_problems + zig_problems
-        if py_rc != zig_rc:
-            bad.append(f"exit {py_rc} vs {zig_rc}")
-        elif expected is not None and py_rc != expected:
-            bad.append(f"exit {py_rc}, expected {expected}")
+        root = tempfile.mkdtemp(prefix="sig-")
+        try:
+            rc, problems = body(root)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+        bad = list(problems)
+        if rc != expected:
+            bad.append(f"exit {rc}, expected {expected}")
         if bad:
             failures += 1
             print(f"BAD  {label}: {'; '.join(bad)}")
         else:
-            print(f"same {label}: exit {py_rc}")
+            print(f"same {label}: exit {rc}")
     print(f"{len(cases) - failures} of {len(cases)} cases pass")
     return 1 if failures else 0
 

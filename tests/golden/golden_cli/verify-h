@@ -1,0 +1,14 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild verify [-h] --state-root STATE_ROOT
+                                [--lock-timeout LOCK_TIMEOUT]
+                                STAGE
+
+positional arguments:
+  STAGE                 the run id that names the stage
+
+options:
+  -h, --help            show this help message and exit
+  --state-root STATE_ROOT
+  --lock-timeout LOCK_TIMEOUT
+--- stderr

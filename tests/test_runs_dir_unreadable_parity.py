@@ -1,4 +1,4 @@
-"""CLI parity when STATE_ROOT/runs exists as an unreadable directory."""
+"""CLI behaviour when STATE_ROOT/runs exists as an unreadable directory."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 def _make_fixture(tmp: str) -> tuple[str, str, str]:
@@ -51,8 +51,6 @@ class UnreadableRunsDirParityTests(unittest.TestCase):
     def test_python_and_zig_match_on_unreadable_runs_directory(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores directory read permissions")
-        if run_cli_optional_binary("--help") is None:
-            self.skipTest("TOOL_BIN is unset")
         with tempfile.TemporaryDirectory(prefix="unreadable-runs-parity-") as tmp:
             state, runs, module = _make_fixture(tmp)
             expected = f"[Errno 13] Permission denied: '{runs}'"
@@ -66,17 +64,13 @@ class UnreadableRunsDirParityTests(unittest.TestCase):
             )
             os.chmod(runs, 0)
             try:
-                for args in cases:
+                for index, args in enumerate(cases):
                     with self.subTest(cmd=args[0], args=args):
-                        py_done = run_cli(*args)
-                        zig_done = run_cli_optional_binary(*args)
-                        assert zig_done is not None
-                        self.assertEqual(py_done.returncode, 2, py_done.stdout + py_done.stderr)
+                        zig_done = run_cli(*args)
                         self.assertEqual(zig_done.returncode, 2, zig_done.stdout + zig_done.stderr)
-                        self.assertEqual(py_done.stdout, "")
                         self.assertEqual(zig_done.stdout, "")
                         self.assertIn(expected, zig_done.stderr)
-                        self.assertEqual(py_done.stderr, zig_done.stderr)
+                        golden(self, f"stderr-{index}", scrub(zig_done.stderr, TMP=tmp))
             finally:
                 os.chmod(runs, 0o700)
 
@@ -90,15 +84,10 @@ class UnreadableRunsDirParityTests(unittest.TestCase):
                 handle.write("not a directory\n")
             for state in (missing_state, file_state):
                 args = ("status", "--state-root", state)
-                py_done = run_cli(*args)
-                self.assertEqual(py_done.returncode, 0, py_done.stdout + py_done.stderr)
-                self.assertEqual(py_done.stdout, "no runs\n")
-                self.assertEqual(py_done.stderr, "")
-                zig_done = run_cli_optional_binary(*args)
-                if zig_done is not None:
-                    self.assertEqual(zig_done.returncode, 0, zig_done.stdout + zig_done.stderr)
-                    self.assertEqual(zig_done.stdout, py_done.stdout)
-                    self.assertEqual(zig_done.stderr, py_done.stderr)
+                done = run_cli(*args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(done.stdout, "no runs\n")
+                self.assertEqual(done.stderr, "")
 
 
 if __name__ == "__main__":

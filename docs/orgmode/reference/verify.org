@@ -1,0 +1,111 @@
+#+TITLE: The checks before publication
+#+OPTIONS: toc:nil todo:nil num:nil author:nil title:nil
+#+STARTUP: content
+
+* The checks before publication
+
+What =verify=, and =run= and =resume= with =--verify=, check in the generation of a run before it is published, and what they record.
+[[file:../howto/verify-a-stage.org][Check a rebuild before it goes live]] shows a generation that fails, and how it is published once corrected.
+
+** When the checks run
+
+| Command  | When                                                                                                                                                                                         | A generation that fails                                                                       |
+|----------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-----------------------------------------------------------------------------------------------|
+| =run=    | With =--verify=, after the build and the =--prepare= program, before the first ledger record and the exchange; without it, never.                                                            | Is not published: the command exits 2, and the journal stays =built=. =--force= publishes it. |
+| =resume= | For a =built= run that was started or resumed with =--verify=, or that this =resume= gives =--verify=; a run that is =publishing=, whose publication stopped part way, is not checked again. | As for =run=.                                                                                 |
+| =verify= | When it is run, for a =built= run, with or without =--verify=, under the state root's lock.                                                                                                  | The command exits 1; it publishes nothing either way.                                         |
+
+Each of them writes =runs/RUN_ID/verify.json= and records the result in the journal.
+
+** The checks
+
+| Check        | A generation passes when                                                                                                     |
+|--------------+------------------------------------------------------------------------------------------------------------------------------|
+| =elf=        | Each library that each dynamic ELF object needs is found as the loader searches, inside the allowed roots.                   |
+| =references= | Nothing outside =easybuild/= names the build directory or an EasyBuild temporary directory.                                  |
+| =modules=    | =$LMOD_CMD= loads each new module file with the generation first on =MODULEPATH=, and each =EBROOT*= it sets is a directory. |
+| =access=     | Publishing would not change who may use the installation, and the user who publishes can make the renames and the writes.    |
+
+*** elf
+
+Each regular file that is an ELF executable or shared object, of any class and byte order, with a dynamic segment, is read.
+Each =DT_NEEDED= name is looked up in =DT_RPATH=, only when there is no =DT_RUNPATH=, then in =DT_RUNPATH=, with =$ORIGIN= and =${ORIGIN}= expanded, then in the loader's system directories.
+The loader is the object's =PT_INTERP=, or, for a shared object without one, the platform's default loader under =EESSI_EPREFIX=, or under =/=; its system directories are the ones that =LOADER --help= lists as =system search path=.
+
+A library must be found in the generation, in the live software tree or, when =EESSI_CVMFS_REPO= is set, in EESSI.
+Without EESSI, a library in the loader's system directories is accepted.
+A =PT_INTERP= that does not exist is a problem, and so, with EESSI, is one outside those roots.
+
+*** references
+
+The build directories are =--buildpath= of the arguments for EasyBuild, =EASYBUILD_BUILDPATH=, =$EASYBUILD_PREFIX/build= and =$HOME/.local/easybuild/build=.
+The temporary directories are =--tmpdir=, =EASYBUILD_TMPDIR=, =TMPDIR= and =/tmp=; an EasyBuild temporary directory is =eb-= and eight lower-case letters, digits or underscores, in one of them.
+
+A file outside =easybuild/= that names a path in a build directory or in an EasyBuild temporary directory is a problem.
+So is an =RPATH= or =RUNPATH= entry, a symbolic link, or a new module file that names a path in any of these directories.
+Paths under the state root and the live software and module trees are exempt, and files larger than 64 MiB are not read.
+Other temporary paths in a file, such as the socket directory of a program under =/tmp=, are not problems.
+
+*** modules
+
+Each new module file is loaded with =$LMOD_CMD bash load NAME=, in the environment of the command without =LOADEDMODULES=, =_LMFILES_= and Lmod's module table, with =LMOD_IGNORE_CACHE=1=, and with the generation's module directory first on =MODULEPATH=, then the live one, then the entries =MODULEPATH= had.
+The load must exit 0 within 120 seconds, =_LMFILES_= must list the new module file, and each =EBROOT*= that it sets must be a directory, once the stable paths in it are read as the generation's.
+Without =LMOD_CMD= the check is skipped, and the report says so.
+
+*** access
+
+The new tree belongs to the user who publishes, unless that is root, and that user can write the directories that the exchange renames in and the module file is written to, and is not kept out of them by a sticky bit.
+Without =--prepare=, the new tree also has the owner, the group, the mode bits for group and others, and the ACLs of the live tree, and nothing in it is less readable by group or others than its top directory.
+With =--prepare=, the program sets the access policy, and these comparisons are not made.
+
+*** Time limits
+
+Two of the checks run another program, and each is given a fixed time.
+
+| Program         | Limit       | When it is exceeded                                                                                                                                                                                   |
+|-----------------+-------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =$LMOD_CMD=     | 120 seconds | The load is a problem: =module file PATH: Lmod did not load NAME within 120 seconds=.                                                                                                                 |
+| =LOADER --help= | 30 seconds  | It is not a problem: the loader's system directories are then the directory that holds the loader and =usr/NAME= in that directory's parent, NAME being its name, as when =LOADER --help= lists none. |
+
+** What is recorded
+
+*** The context
+
+When a run starts with =--verify=, its journal records =verify_before_swap= and =verify_context=: the build and temporary directories above, and =EESSI_CVMFS_REPO= and =EESSI_EPREFIX=.
+=resume --verify= records both for a run that started without, with the context of its own environment.
+=verify= and =resume= judge the generation against this context, so in the environment the run was built in; =verify= judges a run that has none against its own environment.
+=LMOD_CMD= is read when the check runs.
+
+*** verify.json
+
+| Key           | Value                                                             |
+|---------------+-------------------------------------------------------------------|
+| =run_id=      | The run.                                                          |
+| =result=      | =pass= or =fail=.                                                 |
+| =at=          | When the check ran, in seconds since the epoch.                   |
+| =checks=      | The number of problems of each check; =null= for a skipped check. |
+| =skipped=     | Why a check was skipped, for each one that was.                   |
+| =elf_objects= | The number of ELF objects read.                                   |
+| =problems=    | The =check= and =message= of each problem, grouped by check.      |
+
+The journal's =verify= holds =result=, =at=, =checks=, =skipped=, =elf_objects=, =report=, the path of =verify.json=, and =forced=, whether =--force= published a generation that failed.
+With =--ledger-config=, the =started=, =finished= and =aborted= ledger records of a run that =--force= published carry =build.verify=: its =result=, =forced= and =checks=, as the journal holds them; the =correction= records of a rollback do not.
+
+*** Output
+
+Each of the first 50 problems prints =eb-staged-rebuild: verify: CHECK: MESSAGE=, and the rest one line =eb-staged-rebuild: verify: N more problem(s) in PATH=.
+Then comes =eb-staged-rebuild: verify RUN_ID: RESULT (elf N, references N, modules N, access N); N ELF object(s); report PATH=, with =modules skipped (LMOD_CMD is not set)= for a check that was skipped.
+=run= and =resume=, when they check, add =verify failed; the live directory was not swapped= and what to do, or, with =--force=, =verify failed; publishing run RUN_ID anyway (--force)=.
+
+** Not checked
+
+- =LD_LIBRARY_PATH=, =ld.so.cache=, =ld.so.preload=, the subdirectories of hardware capabilities, and symbol versions.
+- The libraries outside the generation, which are not opened; each object in the generation is checked itself.
+- The files in =easybuild/=, which hold EasyBuild's own record of the build.
+
+** See also
+
+- [[file:cli.org][The eb-staged-rebuild command]], for =verify=, =--verify= and =--force=
+- [[file:files.org][Files]]
+- [[file:../howto/verify-a-stage.org][Check a rebuild before it goes live]]
+- [[file:../explanation/publication.org][How a rebuild is published]]

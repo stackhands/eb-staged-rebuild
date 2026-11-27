@@ -1,0 +1,11 @@
+exit 0
+--- labels
+bwrap
+  version
+user.max_user_namespaces: HOST
+user-namespace sandbox: usable
+RENAME_EXCHANGE
+EasyBuild
+filesystem
+lock
+--- stderr

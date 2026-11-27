@@ -1,9 +1,9 @@
 //! eb-staged-rebuild: build EasyBuild software in a staged tree, then
 //! exchange the complete tree with the stable live directory.
 //!
-//! The commands of the Python tool in one static binary: probe, run,
-//! resume, rollback, gc, retire, status and resolve. COMPAT.md lists where
-//! the two builds differ.
+//! The commands in one static binary: probe, run,
+//! resume, verify, rollback, gc, retire, status, list and resolve.
+//! COMPAT.md lists what differs from the earlier Python implementation.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
 const linux = std.os.linux;
@@ -13,6 +13,7 @@ const pyfmt = @import("pyfmt.zig");
 const probe = @import("probe.zig");
 const admin = @import("admin.zig");
 const engine = @import("engine.zig");
+const generations = @import("generations.zig");
 const build_options = @import("build_options");
 
 const sys = common.sys;
@@ -33,7 +34,7 @@ const version_text = cli.versionLine(prog, version, build_options.commit);
 
 const top_usage =
     \\usage: eb-staged-rebuild [-h] [--version]
-    \\                         {probe,run,resume,rollback,gc,retire,status,resolve} ...
+    \\                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
     \\
 ;
 
@@ -43,17 +44,20 @@ const top_help = top_usage ++
     \\with the stable live directory.
     \\
     \\positional arguments:
-    \\  {probe,run,resume,rollback,gc,retire,status,resolve}
+    \\  {probe,run,resume,verify,rollback,gc,retire,status,list,resolve}
     \\    probe               report bwrap, user namespaces, RENAME_EXCHANGE, and
     \\                        EasyBuild
     \\    run                 build and atomically swap a staged tree
     \\    resume              continue a run after a crash
-    \\    rollback            restore the previous module files, or put a retired
-    \\                        module file back
+    \\    verify              check a built run's stage before it is published
+    \\    rollback            switch back to the previous generation or a named one,
+    \\                        or put a retired module file back
     \\    gc                  remove hidden retired siblings after the grace period
     \\    retire              move a module file out of the module tree after its
     \\                        package is published elsewhere
     \\    status              show run journals
+    \\    list                show each install path's live tree and the generations
+    \\                        kept beside it
     \\    resolve             print the install path a module file names
     \\
     \\options:
@@ -99,6 +103,14 @@ const status_options =
 ;
 const status_help = status_usage ++ status_options;
 const status_help_default = status_usage_default ++ status_options;
+const list_usage = "usage: eb-staged-rebuild list [-h] --state-root STATE_ROOT\n";
+const list_help = list_usage ++
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\
+;
 const resolve_usage = "usage: eb-staged-rebuild resolve [-h] module\n";
 const resolve_help = resolve_usage ++
     \\
@@ -216,26 +228,12 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
 /// Python's str() of an errno with a filename: "[Errno N] text: 'path'",
 /// the path as repr() gives it.
 pub fn errnoPath(a: Allocator, err: linux.E, path: []const u8) []const u8 {
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, common.sys.describeErrno(err)) catch oom();
-    out.appendSlice(a, ": ") catch oom();
-    pyfmt.reprStr(&out, a, path) catch oom();
-    return out.items;
+    return common.pytext.osErrorErrno(a, err, path) catch oom();
 }
 
 /// Python's str() of an OSError with a filename. Other errors are named.
 pub fn osError(a: Allocator, err: anyerror, path: []const u8) []const u8 {
-    if (common.sys.asError(err)) |e| {
-        const described = common.sys.describe(e);
-        const close = std.mem.indexOfScalar(u8, described, ']') orelse unreachable;
-        const number = std.fmt.parseInt(u16, described["[Errno ".len..close], 10) catch unreachable;
-        return errnoPath(a, @fromBackingInt(@intCast(number)), path);
-    }
-    var out: std.ArrayList(u8) = .empty;
-    out.appendSlice(a, @errorName(err)) catch oom();
-    out.appendSlice(a, ": ") catch oom();
-    pyfmt.reprStr(&out, a, path) catch oom();
-    return out.items;
+    return common.pytext.osError(a, err, path) catch oom();
 }
 
 fn cmdResolve(a: Allocator, sub: *const argparse.Parsed) u8 {
@@ -349,6 +347,18 @@ fn lessName(_: void, x: []const u8, y: []const u8) bool {
 /// list_journals: the journals under the state root's runs directory, in
 /// name order; an entry without a regular journal.json is left out.
 pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
+    return journalsUnder(a, state_root, false);
+}
+
+/// run_journals: the journals listJournals returns, each checked as
+/// admin.loadRunJournal checks one. A command that chooses among the runs
+/// refuses them all if one names another run or state root or lacks a
+/// field, before it chooses.
+pub fn runJournals(a: Allocator, state_root: []const u8) []const Py {
+    return journalsUnder(a, state_root, true);
+}
+
+fn journalsUnder(a: Allocator, state_root: []const u8, checked: bool) []const Py {
     var found: std.ArrayList(Py) = .empty;
     const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch oom();
     const runs_st = fsx.statAt(fsx.cwd, runs, true) catch return &.{};
@@ -363,7 +373,9 @@ pub fn listJournals(a: Allocator, state_root: []const u8) []const Py {
         const p = std.fs.path.join(a, &.{ runs, n, "journal.json" }) catch continue;
         const st = fsx.statAt(fsx.cwd, p, false) catch continue;
         if (!st.isReg()) continue;
-        found.append(a, loadJournal(a, p)) catch oom();
+        const j = loadJournal(a, p);
+        if (checked) admin.checkRunJournal(a, state_root, n, j);
+        found.append(a, j) catch oom();
     }
     return found.items;
 }
@@ -534,19 +546,22 @@ const retire_help = retire_usage ++
 ;
 const rollback_usage =
     \\usage: eb-staged-rebuild rollback [-h] --state-root STATE_ROOT
-    \\                                  [--lock-timeout LOCK_TIMEOUT]
+    \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+    \\                                  [--latest]
     \\                                  run_id
     \\
 ;
 const rollback_help = rollback_usage ++
     \\
     \\positional arguments:
-    \\  run_id
+    \\  run_id                the run to roll back, unless --latest or --to is given
     \\
     \\options:
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --to GEN              roll back every run published over run GEN
+    \\  --latest              roll back the newest complete run
     \\
 ;
 const gc_usage =
@@ -556,6 +571,7 @@ const gc_usage =
     \\                            [--usage-log USAGE_LOG]
     \\                            [--eb-keep-logs EB_KEEP_LOGS]
     \\                            [--metrics-file PATH] [--include-failed] [--json]
+    \\                            [--keep N] [--check-in-use]
     \\
 ;
 const gc_help = gc_usage ++
@@ -577,6 +593,10 @@ const gc_help = gc_usage ++
     \\                        failed run that published nothing, after the grace
     \\                        period
     \\  --json                write collection actions as JSON
+    \\  --keep N              keep each install path's N newest generations that
+    \\                        rollback can switch back to
+    \\  --check-in-use        keep a tree or generation that a process or a mount on
+    \\                        this node uses
     \\
 ;
 
@@ -608,7 +628,7 @@ fn parseBytes(v: []const u8) error{ NotAnInteger, BelowZero }!u128 {
 
 fn repr(a: Allocator, s: []const u8) []const u8 {
     var out: std.ArrayList(u8) = .empty;
-    pyfmt.reprStr(&out, a, s) catch oom();
+    common.pytext.reprStr(&out, a, s) catch oom();
     return out.items;
 }
 
@@ -649,6 +669,34 @@ test "envMinFreeBytes trims ASCII whitespace like Python int()" {
     try std.testing.expectEqual(@as(?u64, 4096), envMinFreeBytes(arena.allocator(), .{ .envp = &entries }));
 }
 
+/// --keep: ASCII digits only, saturating at the largest u64.
+fn parseCount(v: []const u8) ?admin.Keep {
+    if (v.len == 0) return null;
+    var value: u64 = 0;
+    for (v) |ch| {
+        if (!std.ascii.isDigit(ch)) return null;
+        value = std.math.mul(u64, value, 10) catch std.math.maxInt(u64);
+        value = std.math.add(u64, value, ch - '0') catch std.math.maxInt(u64);
+    }
+    const trimmed = std.mem.trimStart(u8, v, "0");
+    return .{ .value = value, .text = if (trimmed.len == 0) "0" else trimmed };
+}
+
+fn validateCount(gpa: Allocator, raw: []const u8) Allocator.Error!argparse.ValidationResult {
+    if (parseCount(raw) != null) return .ok;
+    const q = try quoted(gpa, raw);
+    defer gpa.free(q);
+    return .{ .err = try std.fmt.allocPrint(gpa, "invalid count value: {s}", .{q}) };
+}
+
+/// argparse's required-arguments error for a check that depends on more
+/// than one argument: the usage, then the message, status 2.
+fn requiredError(usage: []const u8, who: []const u8, names: []const []const u8, a: Allocator) noreturn {
+    cli.put(2, usage);
+    cli.err("{s}: error: the following arguments are required: {s}\n", .{ who, std.mem.join(a, ", ", names) catch "" });
+    std.process.exit(2);
+}
+
 fn adminCtx(a: Allocator, env: probe.Env) admin.Ctx {
     return .{ .a = a, .env = env, .pause = .{ .env = env } };
 }
@@ -675,15 +723,24 @@ fn cmdRetire(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
 
 fn cmdRollback(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
     const sr = StateRoot.of(env, rollback_usage, rollback_help);
+    // --latest and --to name the runs instead of the run id.
+    const run_id = sub.positional(0);
+    const to = sub.value("to");
+    const latest = sub.seen("latest");
+    var need: std.ArrayList([]const u8) = .empty;
+    if (sub.value("state-root") == null and sr.default == null) need.append(a, "--state-root") catch oom();
+    if (run_id == null and to == null and !latest) need.append(a, "run_id") catch oom();
+    if (need.items.len > 0) requiredError(sr.usage, prog ++ " rollback", need.items, a);
     const timeout: ?f64 = if (sub.value("lock-timeout")) |v| parseLockTimeout(v) catch unreachable else null;
     var ctx = adminCtx(a, env);
-    return admin.rollback(&ctx, stateRootOf(sub, sr), sub.positional(0).?, timeout);
+    return admin.rollback(&ctx, stateRootOf(sub, sr), run_id, to, latest, timeout);
 }
 
 fn cmdGc(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
     const sr = StateRoot.of(env, gc_usage, gc_help);
     const grace_cli: ?f64 = if (sub.value("grace-hours")) |v| parsedFloat(v) else null;
     const timeout: ?f64 = if (sub.value("lock-timeout")) |v| parseLockTimeout(v) catch unreachable else null;
+    const keep: ?admin.Keep = if (sub.value("keep")) |v| parseCount(v).? else null;
     const grace = grace_cli orelse envGrace(a, env);
     var ctx = adminCtx(a, env);
     return admin.gc(
@@ -698,6 +755,8 @@ fn cmdGc(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
         sub.value("eb-keep-logs") orelse "eb-keep-logs",
         sub.value("metrics-file"),
         sub.seen("json"),
+        keep,
+        sub.seen("check-in-use"),
     );
 }
 
@@ -727,6 +786,7 @@ fn cmdRun(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
     const min_free_bytes: ?u128 = if (min_free_cli) |v| v else if (envMinFreeBytes(a, env)) |v| v else null;
     if (sub.value("prepare")) |p| if (p.len == 0) refuse("--prepare must name a program; it is empty", .{});
     if (sub.value("build-dir")) |bd| if (bd.len == 0) refuse("--build-dir must name a directory; it is empty", .{});
+    if (sub.seen("force") and !sub.seen("verify")) refuse("--force needs --verify; without it, nothing checks the stage before the swap", .{});
     return engine.run(a, env, .{
         .software = software.?,
         .modules = modules.?,
@@ -745,6 +805,8 @@ fn cmdRun(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
         .build_dir = sub.value("build-dir"),
         .min_free_bytes = min_free_bytes,
         .require_exchange = sub.seen("require-exchange"),
+        .verify = sub.seen("verify"),
+        .force = sub.seen("force"),
     });
 }
 
@@ -785,7 +847,8 @@ const StateRoot = struct {
 
 const resume_usage =
     \\usage: eb-staged-rebuild resume [-h] --state-root STATE_ROOT
-    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+    \\                                [--force]
     \\                                run_id
     \\
 ;
@@ -798,6 +861,9 @@ const resume_help = resume_usage ++
     \\  -h, --help            show this help message and exit
     \\  --state-root STATE_ROOT
     \\  --lock-timeout LOCK_TIMEOUT
+    \\  --verify              check the stage before the swap, as run --verify does
+    \\  --force               with --verify, publish a stage that fails; the journal
+    \\                        records it
     \\
 ;
 
@@ -806,12 +872,45 @@ fn cmdResume(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
     const timeout: ?f64 = if (sub.value("lock-timeout")) |v| parseLockTimeout(v) catch unreachable else null;
     var ctx = adminCtx(a, env);
     const run_mod = @import("run.zig");
-    const res = run_mod.resumeRun(a, env, &ctx, stateRootOf(sub, sr), sub.positional(0).?, timeout) catch |err| switch (err) {
+    const res = run_mod.resumeRun(a, env, &ctx, stateRootOf(sub, sr), sub.positional(0).?, timeout, sub.seen("verify"), sub.seen("force")) catch |err| switch (err) {
         error.OutOfMemory => refuse("out of memory", .{}),
         else => refuse("{s}", .{last_why}),
     };
     return res.code;
 }
+
+const verify_usage =
+    \\usage: eb-staged-rebuild verify [-h] --state-root STATE_ROOT
+    \\                                [--lock-timeout LOCK_TIMEOUT]
+    \\                                STAGE
+    \\
+;
+const verify_help = verify_usage ++
+    \\
+    \\positional arguments:
+    \\  STAGE                 the run id that names the stage
+    \\
+    \\options:
+    \\  -h, --help            show this help message and exit
+    \\  --state-root STATE_ROOT
+    \\  --lock-timeout LOCK_TIMEOUT
+    \\
+;
+
+fn cmdVerify(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
+    const sr = StateRoot.of(env, verify_usage, verify_help);
+    const timeout: ?f64 = if (sub.value("lock-timeout")) |x| parseLockTimeout(x) catch unreachable else null;
+    var ctx = adminCtx(a, env);
+    return admin.verify(&ctx, stateRootOf(sub, sr), sub.positional(0).?, timeout);
+}
+
+fn cmdList(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
+    const sr = StateRoot.of(env, list_usage, list_help);
+    cli.put(1, generations.print(a, generations.collect(a, listJournals(a, stateRootOf(sub, sr)))));
+    return 0;
+}
+
+// ---- probe -------------------------------------------------------------
 
 fn cmdProbe(a: Allocator, sub: *const argparse.Parsed, env: probe.Env) u8 {
     const eb = sub.value("eb") orelse (env.get("EB_STAGED_REBUILD_EB") orelse "eb");
@@ -866,6 +965,8 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
     const rollback_sr = StateRoot.of(env, rollback_usage, rollback_help);
     const gc_sr = StateRoot.of(env, gc_usage, gc_help);
     const retire_sr = StateRoot.of(env, retire_usage, retire_help);
+    const verify_sr = StateRoot.of(env, verify_usage, verify_help);
+    const list_sr = StateRoot.of(env, list_usage, list_help);
 
     const probe_opts = [_]argparse.OptionSpec{
         .{ .name = "path", .kind = .value },
@@ -899,6 +1000,8 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "build-dir", .kind = .value },
         bytes_opt,
         .{ .name = "require-exchange", .kind = .flag },
+        .{ .name = "verify", .kind = .flag },
+        .{ .name = "force", .kind = .flag },
     };
     const run_spec = argparse.CommandSpec{
         .prog = prog ++ " run",
@@ -908,7 +1011,12 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .positionals = &run_pos,
     };
 
-    const resume_opts = [_]argparse.OptionSpec{ stateOpt(resume_sr.default != null), lock_opt };
+    const resume_opts = [_]argparse.OptionSpec{
+        stateOpt(resume_sr.default != null),
+        lock_opt,
+        .{ .name = "verify", .kind = .flag },
+        .{ .name = "force", .kind = .flag },
+    };
     const resume_pos = [_]argparse.PositionalSpec{.{ .name = "run_id" }};
     const resume_spec = argparse.CommandSpec{
         .prog = prog ++ " resume",
@@ -918,8 +1026,15 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .positionals = &resume_pos,
     };
 
-    const rollback_opts = [_]argparse.OptionSpec{ stateOpt(rollback_sr.default != null), lock_opt };
-    const rollback_pos = [_]argparse.PositionalSpec{.{ .name = "run_id" }};
+    // --latest and --to stand in for run_id, so cmdRollback checks the
+    // required arguments itself, in argparse's order: --state-root, run_id.
+    const rollback_opts = [_]argparse.OptionSpec{
+        .{ .name = "state-root", .kind = .value, .has_default = true },
+        lock_opt,
+        .{ .name = "to", .kind = .value },
+        .{ .name = "latest", .kind = .flag },
+    };
+    const rollback_pos = [_]argparse.PositionalSpec{.{ .name = "run_id", .arity = .optional_one }};
     const rollback_spec = argparse.CommandSpec{
         .prog = prog ++ " rollback",
         .usage = rollback_sr.usage,
@@ -938,6 +1053,8 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "metrics-file", .kind = .value },
         .{ .name = "include-failed", .kind = .flag },
         .{ .name = "json", .kind = .flag },
+        .{ .name = "keep", .kind = .value, .validate = validateCount },
+        .{ .name = "check-in-use", .kind = .flag },
     };
     const gc_spec = argparse.CommandSpec{
         .prog = prog ++ " gc",
@@ -975,6 +1092,24 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .positionals = &status_pos,
     };
 
+    const verify_opts = [_]argparse.OptionSpec{ stateOpt(verify_sr.default != null), lock_opt };
+    const verify_pos = [_]argparse.PositionalSpec{.{ .name = "STAGE" }};
+    const verify_spec = argparse.CommandSpec{
+        .prog = prog ++ " verify",
+        .usage = verify_sr.usage,
+        .help = verify_sr.help,
+        .options = &verify_opts,
+        .positionals = &verify_pos,
+    };
+
+    const list_opts = [_]argparse.OptionSpec{stateOpt(list_sr.default != null)};
+    const list_spec = argparse.CommandSpec{
+        .prog = prog ++ " list",
+        .usage = list_sr.usage,
+        .help = list_sr.help,
+        .options = &list_opts,
+    };
+
     const resolve_pos = [_]argparse.PositionalSpec{.{ .name = "module" }};
     const resolve_spec = argparse.CommandSpec{
         .prog = prog ++ " resolve",
@@ -987,10 +1122,12 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
         .{ .name = "probe", .command = &probe_spec },
         .{ .name = "run", .command = &run_spec },
         .{ .name = "resume", .command = &resume_spec },
+        .{ .name = "verify", .command = &verify_spec },
         .{ .name = "rollback", .command = &rollback_spec },
         .{ .name = "gc", .command = &gc_spec },
         .{ .name = "retire", .command = &retire_spec },
         .{ .name = "status", .command = &status_spec },
+        .{ .name = "list", .command = &list_spec },
         .{ .name = "resolve", .command = &resolve_spec },
     };
     const top = argparse.CommandSpec{
@@ -1017,6 +1154,8 @@ fn runCli(a: Allocator, args: []const []const u8, env: probe.Env) u8 {
             if (std.mem.eql(u8, name, "gc")) return cmdGc(a, sub, env);
             if (std.mem.eql(u8, name, "run")) return cmdRun(a, sub, env);
             if (std.mem.eql(u8, name, "resume")) return cmdResume(a, sub, env);
+            if (std.mem.eql(u8, name, "verify")) return cmdVerify(a, sub, env);
+            if (std.mem.eql(u8, name, "list")) return cmdList(a, sub, env);
             unreachable;
         },
     }
@@ -1030,10 +1169,14 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const all = init.args.toSlice(a) catch return 2;
     const args: []const []const u8 = if (all.len > 1) @ptrCast(all[1..]) else &.{};
     const env: probe.Env = .{ .envp = init.environ.block.slice.ptr };
+    // Only a replaceable build reads the test clock. The release binary
+    // does not import that file, so a leaked value cannot move a run id
+    // or a journal timestamp.
+    if (comptime common.atomic.replaceable) @import("testnow.zig").bind(a, env);
     // Only the -Dtest-ops test artifact can emulate a file system's ACLs.
     if (comptime common.atomic.replaceable) @import("aclmodel.zig").installFromEnv(env);
 
-    // Internal: the live-tree snapshot as JSON, for the differential tests.
+    // Internal: the live-tree snapshot as JSON, for the golden tests.
     if (args.len == 2 and std.mem.eql(u8, args[0], "__snapshot")) {
         const snap = @import("livecheck.zig").snapshot(a, args[1]) catch |err| refuse("{s}", .{osError(a, err, args[1])});
         cli.put(1, json.dumps(a, snap, 2, true) catch return 1);
@@ -1055,6 +1198,8 @@ test {
     _ = @import("livecheck.zig");
     _ = @import("discover.zig");
     _ = @import("builders.zig");
+    _ = @import("verify.zig");
+    _ = @import("inuse.zig");
     _ = admin;
     _ = engine;
     _ = modulefile;
@@ -1072,15 +1217,24 @@ test "optionLike takes a negative number for a value, as argparse 3.14 does" {
 test "with a default, --state-root is in brackets and the usage wraps as argparse 3.14 prints it" {
     const expect = std.testing.expectEqualStrings;
     try expect(status_usage_default, status_help_default[0..status_usage_default.len]);
+    try expect("usage: eb-staged-rebuild list [-h] [--state-root STATE_ROOT]\n", StateRoot.bracketed(list_usage));
     try expect(
         \\usage: eb-staged-rebuild resume [-h] [--state-root STATE_ROOT]
-        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                [--lock-timeout LOCK_TIMEOUT] [--verify]
+        \\                                [--force]
         \\                                run_id
         \\
     , StateRoot.bracketed(resume_usage));
     try expect(
+        \\usage: eb-staged-rebuild verify [-h] [--state-root STATE_ROOT]
+        \\                                [--lock-timeout LOCK_TIMEOUT]
+        \\                                STAGE
+        \\
+    , StateRoot.bracketed(verify_usage));
+    try expect(
         \\usage: eb-staged-rebuild rollback [-h] [--state-root STATE_ROOT]
-        \\                                  [--lock-timeout LOCK_TIMEOUT]
+        \\                                  [--lock-timeout LOCK_TIMEOUT] [--to GEN]
+        \\                                  [--latest]
         \\                                  run_id
         \\
     , StateRoot.bracketed(rollback_usage));
@@ -1091,6 +1245,7 @@ test "with a default, --state-root is in brackets and the usage wraps as argpars
         \\                            [--usage-log USAGE_LOG]
         \\                            [--eb-keep-logs EB_KEEP_LOGS]
         \\                            [--metrics-file PATH] [--include-failed] [--json]
+        \\                            [--keep N] [--check-in-use]
         \\
     , StateRoot.bracketed(gc_usage));
     try expect(
@@ -1178,4 +1333,10 @@ test "probe help includes --no-create" {
     try std.testing.expect(std.mem.indexOf(u8, probe_help, "--no-create") != null);
     try std.testing.expect(std.mem.indexOf(u8, probe_usage, "[--require-eb]") != null);
     try std.testing.expect(std.mem.indexOf(u8, probe_help, "--require-eb") != null);
+}
+
+test "osError names a non-regular file without an errno" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("not a regular file: '/x'", osError(arena.allocator(), error.NotRegularFile, "/x"));
 }

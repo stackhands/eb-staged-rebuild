@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class PrepareAbsolutePathCliTests(unittest.TestCase):
@@ -31,17 +31,14 @@ class PrepareAbsolutePathCliTests(unittest.TestCase):
                 "--",
                 "demo.eb",
             )
-            py_done = run_cli(*args)
-            self.assertEqual(py_done.returncode, 2, py_done.stdout + py_done.stderr)
+            done = run_cli(*args)
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
             self.assertIn(
                 "publication preparation executable must be an absolute path",
-                py_done.stderr,
+                done.stderr,
             )
-            zig_done = run_cli_optional_binary(*args)
-            if zig_done is not None:
-                self.assertEqual(zig_done.returncode, 2, zig_done.stdout + zig_done.stderr)
-                self.assertEqual(py_done.stdout, zig_done.stdout)
-                self.assertEqual(py_done.stderr, zig_done.stderr)
+            golden(self, "stdout", scrub(done.stdout, STATE=state_root, TMP=tmp))
+            golden(self, "stderr", scrub(done.stderr, STATE=state_root, TMP=tmp))
 
 
 if __name__ == "__main__":

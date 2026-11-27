@@ -1,0 +1,14 @@
+exit 0
+--- stdout
+usage: eb-staged-rebuild probe [-h] [--path PATH] [--no-create] [--eb EB]
+                               [--require-eb] [--json]
+
+options:
+  -h, --help    show this help message and exit
+  --path PATH   directory on the filesystem to probe (default: .)
+  --no-create   refuse when --path does not exist instead of creating it for
+                the probe
+  --eb EB
+  --require-eb  refuse when the EasyBuild command is not available
+  --json
+--- stderr

@@ -44,7 +44,7 @@ eb-staged-rebuild --version
 #+end_src
 
 #+begin_example
-eb-staged-rebuild 2.0.1
+eb-staged-rebuild 3.0.0
 #+end_example
 
 ** Make an installation to rebuild

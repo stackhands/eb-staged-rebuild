@@ -1,18 +1,17 @@
 .{
     .name = .eb_staged_rebuild,
-    .version = "2.0.1",
+    .version = "3.0.0",
     .fingerprint = 0xee0442ffc6cda659,
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
-        .zig_common = .{
-            .url = "git+https://github.com/stackhands/zig-common?ref=v0.13.0#2eea6b7fe8f328e56c63647b9523c4a7fe80b56a",
-            .hash = "zig_common-0.13.0-kBaPeWL0CABmnAAv_SexG9PtG5cP3PjKE6cX7KqHJELu",
-        },
+        .zig_common = .{ .url = "git+https://github.com/stackhands/zig-common?ref=v0.14.0#831c49ec6662e1f6b146e2aad2aab05d7e89b17c", .hash = "zig_common-0.14.0-kBaPeU0jCgAcDv5ha1TEwkzIXsM_17chRRIlZ7zbLWle" },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "zig",
+        "share",
+        "eb_staged_rebuild/site_hooks.py",
         "LICENSE",
         "README.md",
     },

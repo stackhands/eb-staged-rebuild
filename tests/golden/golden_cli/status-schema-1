@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: journal schema 1 is a generation-pointer record; this program publishes by directory swap and will not apply it

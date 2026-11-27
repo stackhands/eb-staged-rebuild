@@ -38,6 +38,13 @@ pub fn build(b: *std.Build) void {
     });
     const exe = b.addExecutable(.{ .name = if (test_ops) "eb-staged-rebuild-test-ops" else "eb-staged-rebuild", .root_module = mod, .linkage = .static });
     b.installArtifact(exe);
+    // The completions and the man page are generated once from the command's
+    // help (tests/test_share.py keeps them naming every command and option),
+    // and the EasyBuild hook file the Python package also carries.
+    b.installFile("share/completions/eb-staged-rebuild.bash", "share/completions/eb-staged-rebuild.bash");
+    b.installFile("share/completions/_eb-staged-rebuild", "share/completions/_eb-staged-rebuild");
+    b.installFile("share/man/eb-staged-rebuild.1", "share/man/eb-staged-rebuild.1");
+    b.installFile("eb_staged_rebuild/site_hooks.py", "share/eb-staged-rebuild/site_hooks.py");
 
     // The Zig autodoc site, into <prefix>/docs (pixi task autodoc). A compile
     // of its own: asking the installed one for docs would add -femit-docs to

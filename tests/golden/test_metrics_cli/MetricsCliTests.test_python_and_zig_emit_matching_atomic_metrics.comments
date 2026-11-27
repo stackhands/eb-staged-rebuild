@@ -1,0 +1,6 @@
+# HELP eb_staged_rebuild_current_generation_age_seconds Age of the newest generation that remains published live.
+# HELP eb_staged_rebuild_generations_present Real generation directories present after garbage collection.
+# HELP eb_staged_rebuild_last_gc_timestamp_seconds Unix timestamp of the last completed garbage-collection pass.
+# TYPE eb_staged_rebuild_current_generation_age_seconds gauge
+# TYPE eb_staged_rebuild_generations_present gauge
+# TYPE eb_staged_rebuild_last_gc_timestamp_seconds gauge

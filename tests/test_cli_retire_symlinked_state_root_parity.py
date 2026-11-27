@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class CliRetireSymlinkedStateRootParityTests(unittest.TestCase):
@@ -23,22 +23,18 @@ class CliRetireSymlinkedStateRootParityTests(unittest.TestCase):
             with open(module_file, "w", encoding="utf-8") as handle:
                 handle.write(module_text)
 
-            proc = run_cli("retire", "--state-root", state_link, "--module-file", module_file)
-            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
-            self.assertEqual(proc.stdout, "")
-            self.assertIn("state root is unsafe", proc.stderr)
+            binary = run_cli("retire", "--state-root", state_link, "--module-file", module_file)
+            self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stdout, "")
+            self.assertIn("state root is unsafe", binary.stderr)
             with open(module_file, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), module_text)
             self.assertFalse(os.path.isdir(os.path.join(state_real, "runs")))
-
-            binary = run_cli_optional_binary("retire", "--state-root", state_link, "--module-file", module_file)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-                self.assertEqual(binary.stdout, "")
-                self.assertEqual(binary.stderr, proc.stderr)
-                with open(module_file, encoding="utf-8") as handle:
-                    self.assertEqual(handle.read(), module_text)
-                self.assertFalse(os.path.isdir(os.path.join(state_real, "runs")))
+            golden(
+                self,
+                "stderr",
+                scrub(binary.stderr, LINK=state_link, REAL=state_real, MODULE=module_file, ROOT=root),
+            )
 
 
 if __name__ == "__main__":

@@ -1,45 +1,27 @@
+"""`run` refuses an empty `--build-dir` or `--prepare` before any build."""
+
 from __future__ import annotations
 
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
-class CliRunEmptyBuildDirParityTests(unittest.TestCase):
-    def test_run_refuses_empty_build_dir(self) -> None:
+class CliRunEmptyOptionParityTests(unittest.TestCase):
+    def test_run_refuses_an_empty_option_string(self) -> None:
+        rows = (
+            ("--build-dir", "--build-dir must name a directory; it is empty"),
+            ("--prepare", "--prepare must name a program; it is empty"),
+        )
         with tempfile.TemporaryDirectory() as root:
             software = f"{root}/software"
             modules = f"{root}/modules"
-
-            proc = run_cli(
-                "run",
-                "--software",
-                software,
-                "--modules",
-                modules,
-                "--build-dir",
-                "",
-                "--",
-                "demo.eb",
-            )
-            self.assertEqual(proc.returncode, 2)
-            self.assertIn("--build-dir must name a directory; it is empty", proc.stderr)
-
-            binary = run_cli_optional_binary(
-                "run",
-                "--software",
-                software,
-                "--modules",
-                modules,
-                "--build-dir",
-                "",
-                "--",
-                "demo.eb",
-            )
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2)
-                self.assertIn("--build-dir must name a directory; it is empty", binary.stderr)
+            for flag, message in rows:
+                with self.subTest(flag=flag):
+                    binary = run_cli("run", "--software", software, "--modules", modules, flag, "", "--", "demo.eb")
+                    self.assertEqual(binary.returncode, 2)
+                    self.assertIn(message, binary.stderr)
 
 
 if __name__ == "__main__":

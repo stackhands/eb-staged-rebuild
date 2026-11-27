@@ -6,11 +6,11 @@ import tempfile
 import time
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
-    def _write_fixture(self, root: str, outbox_bytes: bytes) -> tuple[str, str]:
+    def _write_fixture(self, root: str, outbox_bytes: bytes, recorded: str = "{}") -> tuple[str, str]:
         state_root = os.path.join(root, "state")
         run_id = "run1"
         run_dir = os.path.join(state_root, "runs", run_id)
@@ -67,7 +67,7 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
             "backend": "installpath",
             "software": software_root,
             "modules": modules_root,
-            "state_root": state_root,
+            "state_root": recorded.format(state_root),
             "generation_root": os.path.join(state_root, "generations", run_id),
             "module_rels": ["pkg/1.lua"],
             "prepare_complete": False,
@@ -84,6 +84,8 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
                     "live_software": live,
                     "retired": retired,
                     "live_module": module_file,
+                    "prepared": os.path.join(state_root, "generations", run_id, "modules", "pkg", "1.lua"),
+                    "staged": os.path.join(state_root, "generations", run_id, "software", "pkg", "1"),
                     "new_hash": "a" * 64,
                     "old_hash": "b" * 64,
                     "published_at": time.time(),
@@ -103,21 +105,39 @@ class CliRollbackOutboxInvalidJsonParityTests(unittest.TestCase):
             handle.write(outbox_bytes)
         return state_root, run_id
 
+    def test_rollback_rejects_directory_outbox_with_same_message(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            state_root, run_id = self._write_fixture(root, b"{}")
+            outbox = os.path.join(state_root, "runs", run_id, "outbox.json")
+            os.unlink(outbox)
+            os.mkdir(outbox)
+
+            binary = run_cli("rollback", "--state-root", state_root, run_id)
+            self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stdout, "")
+            self.assertIn("Is a directory", binary.stderr)
+            golden(self, "stderr", scrub(binary.stderr, STATE=state_root, ROOT=root))
+
     def test_rollback_rejects_invalid_outbox_json_with_same_message(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             for outbox_bytes in (b"", b"{not json\n"):
                 state_root, run_id = self._write_fixture(root, outbox_bytes)
 
-                proc = run_cli("rollback", "--state-root", state_root, run_id)
-                self.assertEqual(proc.returncode, 2)
-                self.assertIn("outbox cannot be read:", proc.stderr)
-                self.assertIn("not valid JSON", proc.stderr)
+                binary = run_cli("rollback", "--state-root", state_root, run_id)
+                self.assertEqual(binary.returncode, 2)
+                self.assertIn("outbox cannot be read:", binary.stderr)
+                self.assertIn("not valid JSON", binary.stderr)
 
-                binary = run_cli_optional_binary("rollback", "--state-root", state_root, run_id)
-                if binary is not None:
-                    self.assertEqual(binary.returncode, 2)
-                    self.assertIn("outbox cannot be read:", binary.stderr)
-                    self.assertIn("not valid JSON", binary.stderr)
+    def test_rollback_reads_the_outbox_under_the_state_root_it_was_given(self) -> None:
+        """A journal state root of STATE/. is STATE, and the outbox is read under the spelling the caller gave."""
+        with tempfile.TemporaryDirectory() as root:
+            state_root, run_id = self._write_fixture(root, b"{not json\n", recorded="{}/.")
+            outbox = os.path.join(state_root, "runs", run_id, "outbox.json")
+            proc = run_cli("rollback", "--state-root", state_root, run_id)
+            self.assertEqual(
+                (proc.returncode, proc.stdout, proc.stderr),
+                (2, "", f"eb-staged-rebuild: outbox cannot be read: {outbox}: not valid JSON\n"),
+            )
 
 
 if __name__ == "__main__":

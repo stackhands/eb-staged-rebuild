@@ -1,4 +1,4 @@
-"""Diff argparse options in cli.py against the published docs.
+"""Diff the options in the binary's help against the published docs.
 
 Run as a script: missing names are printed, and a clean tree prints nothing.
 """
@@ -8,7 +8,6 @@ import re
 import tempfile
 import unittest
 
-from eb_staged_rebuild.cli import _parser
 from tests.support import run_cli
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +16,7 @@ INTERNAL_ID = re.compile(r"\b(?:open|ns)-\d{3}\b")
 
 def internal_ids():
     """Lines of the docs and sources that cite a design-note id such as ns-051."""
-    paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md", "TESTMAP.md")]
+    paths = [os.path.join(ROOT, name) for name in ("README.md", "DESIGN.md", "COMPAT.md", "CHANGELOG.md")]
     for sub, suffixes in (
         ("changelog.d", (".md",)),
         ("docs", (".md", ".org")),
@@ -45,25 +44,44 @@ def documentation_files():
     return found
 
 
-def argparse_names():
-    """Long options, subcommands, and choice values exposed by the parser."""
-    names = []
-    parser = _parser()
-    for action in parser._actions:
-        if action.option_strings:
-            names.extend(opt for opt in action.option_strings if opt.startswith("--"))
-        sub = getattr(action, "choices", None)
-        if not isinstance(sub, dict):
-            continue
-        for command, subparser in sub.items():
-            names.append(command)
-            for sub_action in subparser._actions:
-                names.extend(opt for opt in sub_action.option_strings if opt.startswith("--"))
-                if sub_action.choices:
-                    names.extend(str(choice) for choice in sub_action.choices)
-    with open(os.path.join(ROOT, "eb_staged_rebuild", "cli.py"), encoding="utf-8") as handle:
-        source = handle.read()
-    names.extend(re.findall(r'os\.environ\.get\(\s*"([A-Z0-9_]+)"', source))
+_OPTION = re.compile(r"--[A-Za-z0-9][A-Za-z0-9-]*")
+_CHOICES = re.compile(r"\{([^{}\s]+)\}")
+# The environment variables that stand in for command-line options.
+ENVIRONMENT_VARIABLES = (
+    "EASYBUILD_INSTALLPATH_SOFTWARE",
+    "EASYBUILD_INSTALLPATH_MODULES",
+    "EB_STAGED_REBUILD_STATE_ROOT",
+    "EB_STAGED_REBUILD_GRACE_HOURS",
+    "EB_STAGED_REBUILD_MIN_FREE_BYTES",
+    "EB_STAGED_REBUILD_EB",
+)
+
+
+def _help(*words):
+    done = run_cli(*words, "-h", cwd=ROOT)
+    if done.returncode != 0:
+        raise AssertionError(f"{' '.join(words)} -h exited {done.returncode}: {done.stderr}")
+    return done.stdout
+
+
+def _names_in(text):
+    names = _OPTION.findall(text)
+    for group in _CHOICES.findall(text):
+        names.extend(group.split(","))
+    return names
+
+
+def cli_names():
+    """Long options, subcommands, and choice values the binary's help prints."""
+    top = _help()
+    names = _OPTION.findall(top)
+    commands = _CHOICES.search(top)
+    if commands is None:
+        raise AssertionError("the top-level help names no subcommands")
+    for command in commands.group(1).split(","):
+        names.append(command)
+        names.extend(_names_in(_help(command)))
+    names.extend(ENVIRONMENT_VARIABLES)
     return names
 
 
@@ -75,7 +93,7 @@ def missing_from_docs():
     combined = "\n".join(text)
     missing = []
     seen = set()
-    for name in argparse_names():
+    for name in cli_names():
         if name in seen or name in combined:
             seen.add(name)
             continue

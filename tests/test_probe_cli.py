@@ -1,20 +1,9 @@
-import contextlib
-import io
 import json
 import os
 import tempfile
 import unittest
 
-from eb_staged_rebuild.cli import main
-from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.lockfile import FileLock
-from eb_staged_rebuild.probe import (
-    BWRAP_STAGE_KEYS_READ_FROM_SOURCE,
-    probe_all,
-    probe_rename_exchange,
-    stage_paths_from_bwrap_info,
-)
-from tests.support import run_cli_or_binary
+from tests.support import run_cli
 
 
 def _write(path, text):
@@ -31,7 +20,7 @@ class ProbeTests(unittest.TestCase):
     def test_probe_no_create_refuses_a_missing_path(self):
         with tempfile.TemporaryDirectory() as root:
             missing = os.path.join(root, "missing")
-            probe = run_cli_or_binary(
+            probe = run_cli(
                 "probe", "--path", missing, "--no-create", "--eb", "missing-eb"
             )
             self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
@@ -46,53 +35,21 @@ class ProbeTests(unittest.TestCase):
             _write(path, 'local root = "/opt/software/demo/1"\n')
             os.chmod(path, 0)
             try:
-                err = io.StringIO()
-                with contextlib.redirect_stderr(err):
-                    code = main(["resolve", path])
+                done = run_cli("resolve", path)
             finally:
                 os.chmod(path, 0o644)
-        self.assertEqual(code, 2)
-        text = err.getvalue()
-        self.assertIn("eb-staged-rebuild:", text)
-        self.assertNotIn("Traceback", text)
-
-    def test_rename_exchange_reports_a_result_for_this_directory(self):
-        with tempfile.TemporaryDirectory() as root:
-            info = probe_rename_exchange(root)
-        self.assertIn("ok", info)
-        self.assertIn("fstype", info)
-        self.assertTrue(info["ok"] or info["errno"] is not None or info["error"])
-
-    def test_probe_all_has_the_open_questions(self):
-        with tempfile.TemporaryDirectory() as root:
-            report = probe_all(root, eb="eb-not-installed-for-this-test")
-        self.assertIn("bwrap", report)
-        self.assertIn("user_namespaces", report)
-        self.assertIn("userns_sandbox", report)
-        self.assertEqual(report["flock"]["cross_node"], "unmeasured")
-        self.assertFalse(report["easybuild"]["found"])
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("eb-staged-rebuild:", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
 
     def test_probe_require_eb_fails_when_eb_is_missing(self):
         with tempfile.TemporaryDirectory() as root:
-            probe = run_cli_or_binary(
+            probe = run_cli(
                 "probe", "--path", root, "--require-eb", "--eb", "missing-eb"
             )
             self.assertEqual(probe.returncode, 1, probe.stdout + probe.stderr)
             self.assertIn("EasyBuild:", probe.stdout)
             self.assertIn("probe requires EasyBuild, but it was not found: missing-eb", probe.stderr)
-
-
-class LockTests(unittest.TestCase):
-    def test_second_lock_does_not_wait_forever(self):
-        with tempfile.TemporaryDirectory() as root:
-            first = FileLock(root)
-            first.acquire(0)
-            second = FileLock(root)
-            with self.assertRaises(Refused):
-                second.acquire(0)
-            first.release()
-            second.acquire(0)
-            second.release()
 
 
 class CliTests(unittest.TestCase):
@@ -114,7 +71,7 @@ class CliTests(unittest.TestCase):
                 module_file,
                 f'local root = "{install}"\nsetenv("EBROOTDEMO", root)\n',
             )
-            completed = run_cli_or_binary(
+            completed = run_cli(
                 "run",
                 "--software",
                 software,
@@ -133,13 +90,13 @@ class CliTests(unittest.TestCase):
             self.assertFalse(os.path.isdir(os.path.join(root, "state", "runs")))
             self.assertIn("v0\n", _read(os.path.join(install, "PAYLOAD")))
 
-            probe = run_cli_or_binary("probe", "--path", root, "--json", "--eb", "missing-eb")
+            probe = run_cli("probe", "--path", root, "--json", "--eb", "missing-eb")
             self.assertEqual(probe.returncode, 0, probe.stderr)
             report = json.loads(probe.stdout)
             self.assertIn("rename_exchange", report)
             self.assertEqual(report["flock"]["cross_node"], "unmeasured")
 
-            resolved = run_cli_or_binary("resolve", module_file)
+            resolved = run_cli("resolve", module_file)
             self.assertEqual(resolved.returncode, 0, resolved.stderr)
             body = json.loads(resolved.stdout)
             self.assertEqual(body["root"], install)
@@ -186,7 +143,7 @@ class StatusJsonTests(unittest.TestCase):
                     }
                 ),
             )
-            completed = run_cli_or_binary("status", "--state-root", state, "--json")
+            completed = run_cli("status", "--state-root", state, "--json")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         document = json.loads(completed.stdout)
         self.assertEqual(
@@ -224,27 +181,10 @@ class StatusJsonTests(unittest.TestCase):
 
     def test_status_json_of_an_empty_root_is_an_empty_document(self):
         with tempfile.TemporaryDirectory() as root:
-            completed = run_cli_or_binary("status", "--state-root", root, "--json")
+            completed = run_cli("status", "--state-root", root, "--json")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), {"runs": []})
 
-
-class BwrapKeyTableTests(unittest.TestCase):
-    def test_easybuild_5_4_1_writes_the_stage_path_keys(self):
-        self.assertTrue(BWRAP_STAGE_KEYS_READ_FROM_SOURCE[(5, 4, 1)])
-        info = {
-            "bwrap_cmd": ["bwrap", "--bind", "/", "/"],
-            "bwrap_installpath": "/stage",
-            "bwrap_installpath_software": "/stage/software",
-            "bwrap_installpath_modules": "/stage/modules",
-        }
-        software, modules, source = stage_paths_from_bwrap_info(info, (5, 4, 1), "/stage")
-        self.assertEqual((software, modules, source), ("/stage/software", "/stage/modules", "bwrap_info"))
-
-    def test_easybuild_5_4_1_without_the_keys_is_refused_not_guessed(self):
-        info = {"bwrap_cmd": ["bwrap"], "bwrap_installpath": "/stage"}
-        with self.assertRaises(Refused):
-            stage_paths_from_bwrap_info(info, (5, 4, 1), "/stage")
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,36 +29,6 @@ pub fn joinPath(a: Allocator, state_root: []const u8, name: []const u8) []const 
     return a.print("{s}/{s}", .{ state_root, name }) catch state_root;
 }
 
-/// Normalize `path` the way `os.path.abspath(os.path.normpath(path))` does,
-/// without following symbolic links in `path` itself.
-fn normalizePath(a: Allocator, path: []const u8) Allocator.Error![]u8 {
-    var owned_full: ?[]u8 = null;
-    defer if (owned_full) |buf| a.free(buf);
-    const full: []const u8 = if (path.len == 0 or path[0] != '/') blk: {
-        var rb: [sys.path_max]u8 = undefined;
-        const cwd = fsx.realpath(fsx.cwd, ".", &rb) catch ".";
-        const joined = try std.fs.path.join(a, &.{ cwd, path });
-        owned_full = joined;
-        break :blk joined;
-    } else path;
-
-    var parts: std.ArrayList([]const u8) = .empty;
-    defer parts.deinit(a);
-    var it = std.mem.splitScalar(u8, full, '/');
-    while (it.next()) |seg| {
-        if (seg.len == 0 or std.mem.eql(u8, seg, ".")) continue;
-        if (std.mem.eql(u8, seg, "..")) {
-            _ = parts.pop();
-            continue;
-        }
-        try parts.append(a, seg);
-    }
-    if (parts.items.len == 0) return a.dupe(u8, "/");
-    const joined = try std.mem.join(a, "/", parts.items);
-    defer a.free(joined);
-    return a.print("/{s}", .{joined});
-}
-
 fn isLink(path: []const u8) bool {
     const st = fsx.statAt(fsx.cwd, path, false) catch return false;
     return st.isLink();
@@ -91,7 +61,11 @@ fn tighten(fd: fsx.fd_t) bool {
 /// `detail` receives an owned copy of the symlink component when the error is
 /// `Unsafe`.
 pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]const u8) Error!state.RootLock {
-    const normalized = normalizePath(a, root) catch return error.OutOfMemory;
+    const normalized = fsx.absPath(a, root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A removed working directory leaves a relative root normalized as written.
+        else => fsx.normPath(a, root) catch return error.OutOfMemory,
+    };
     defer a.free(normalized);
     if (offendingComponent(normalized)) |component| {
         detail.* = a.dupe(u8, component) catch return error.OutOfMemory;
@@ -101,10 +75,28 @@ pub fn acquire(a: Allocator, root: []const u8, timeout_ms: ?u32, detail: *[]cons
     if (!(privateFile(a, normalized, ".lock.posix") catch return error.OutOfMemory)) return error.NotPrivate;
     const lock = try state.RootLock.acquire(a, normalized, timeout_ms);
     if (!tighten(lock.gate) or !tighten(lock.posix)) {
-        lock.release();
+        releaseAfterError(lock);
         return error.Unexpected;
     }
     return lock;
+}
+
+/// Release `lock` at the end of the command that held it. A failed release
+/// returns the text the Python tool prints for the OSError that
+/// `FileLock.release` lets out of the command, `[Errno 5] Input/output
+/// error`, with no path; null when the release succeeds.
+pub fn release(lock: state.RootLock) ?[]const u8 {
+    lock.release() catch |err| return sys.describe(err);
+    return null;
+}
+
+/// Release `lock` while another error is on its way out. That error is the
+/// one reported, so a failed release is dropped, and `sys.last_errno` is
+/// kept for the text of the first error.
+pub fn releaseAfterError(lock: state.RootLock) void {
+    const kept = sys.last_errno;
+    lock.release() catch {};
+    sys.last_errno = kept;
 }
 
 test "a hard-linked gate is not truncated and a symlink root is refused" {
@@ -171,7 +163,7 @@ test "a hard-linked gate is not truncated and a symlink root is refused" {
     defer a.free(gate_path);
     const st = try fsx.statAt(fsx.cwd, gate_path, false);
     try std.testing.expectEqual(@as(u32, 0o600), st.perm());
-    held.release();
+    try std.testing.expect(release(held) == null);
 
     const fifo = try std.fmt.allocPrint(a, "{s}/fifo", .{root});
     defer a.free(fifo);
@@ -180,4 +172,46 @@ test "a hard-linked gate is not truncated and a symlink root is refused" {
     defer a.free(pipe);
     try std.testing.expect(linux.errno(linux.mknodat(linux.AT.FDCWD, (try sys.z(&zb, pipe)).ptr, linux.S.IFIFO | 0o644, 0)) == .SUCCESS);
     try std.testing.expectError(error.Gate, acquire(a, fifo, 0, &detail));
+}
+
+fn eioFcntl(_: fsx.fd_t, _: i32, _: usize) usize {
+    return @bitCast(-@as(isize, @backingInt(linux.E.IO)));
+}
+
+fn einvalFlock(_: fsx.fd_t, _: i32) usize {
+    return @bitCast(-@as(isize, @backingInt(linux.E.INVAL)));
+}
+
+test "a failed release is reported at the end of a command and dropped after another error" {
+    const a = std.testing.allocator;
+    var pb: [64]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/rootlock-release-{d}", .{linux.getpid()});
+    var zb: [sys.path_max:0]u8 = undefined;
+    _ = linux.mkdirat(fsx.cwd, (try sys.z(&zb, root)).ptr, 0o700);
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    defer state.lock_ops.* = .{};
+    var detail: []const u8 = "";
+    const Case = struct { fcntl: bool, flock: bool, text: []const u8 };
+    for ([_]Case{
+        .{ .fcntl = true, .flock = false, .text = "[Errno 5] Input/output error" },
+        .{ .fcntl = false, .flock = true, .text = "[Errno 22] Invalid argument" },
+        .{ .fcntl = true, .flock = true, .text = "[Errno 5] Input/output error" },
+    }) |c| {
+        const held = try acquire(a, root, 0, &detail);
+        if (c.fcntl) state.lock_ops.fcntl = eioFcntl;
+        if (c.flock) state.lock_ops.flock = einvalFlock;
+        try std.testing.expectEqualStrings(c.text, release(held) orelse "released");
+        state.lock_ops.* = .{};
+
+        const busy = try acquire(a, root, 0, &detail);
+        if (c.fcntl) state.lock_ops.fcntl = eioFcntl;
+        if (c.flock) state.lock_ops.flock = einvalFlock;
+        sys.last_errno = .NOSPC;
+        releaseAfterError(busy);
+        state.lock_ops.* = .{};
+        try std.testing.expectEqual(linux.E.NOSPC, sys.last_errno);
+        try std.testing.expectEqualStrings("[Errno 28] No space left on device", sys.describe(error.NoSpace));
+    }
+    const free = try acquire(a, root, 0, &detail);
+    try std.testing.expect(release(free) == null);
 }

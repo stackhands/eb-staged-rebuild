@@ -1,4 +1,4 @@
-"""CLI parity when a staged module file is not UTF-8 text or cannot be read."""
+"""CLI behaviour when a staged module file is not UTF-8 text or cannot be read."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 _NON_UTF8_EB = """#!/usr/bin/env python3
 import os
@@ -70,17 +70,14 @@ def _setup_live_tree(tmp: str, fake_eb_source: str) -> tuple[str, str, str, str,
 
 def _run_staged_module_case(
     testcase: unittest.TestCase,
-    runner,
     fake_eb_source: str,
     expected_message_fn,
-    *,
-    env: dict[str, str] | None = None,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="staged-module-read-") as tmp:
         software, modules, state, live_root, fake_eb = _setup_live_tree(tmp, fake_eb_source)
         staged_mod = os.path.join(state, "generations", "r1", "modules", "demo", "1.lua")
         try:
-            done = runner(
+            done = run_cli(
                 "run",
                 "--software",
                 software,
@@ -99,12 +96,11 @@ def _run_staged_module_case(
                 "--skip-live-check",
                 "--",
                 "demo-1.eb",
-                env=env,
             )
             journal_path = os.path.join(state, "runs", "r1", "journal.json")
             with open(journal_path, encoding="utf-8") as handle:
                 journal = json.load(handle)
-            gc_done = runner("gc", "--state-root", state, "--dry-run", env=env)
+            gc_done = run_cli("gc", "--state-root", state, "--dry-run")
         finally:
             if os.path.exists(staged_mod):
                 os.chmod(staged_mod, 0o600)
@@ -126,21 +122,15 @@ class StagedModuleReadParityTests(unittest.TestCase):
     def test_python_refuses_non_utf8_staged_module_file(self) -> None:
         _run_staged_module_case(
             self,
-            run_cli,
             _NON_UTF8_EB,
             lambda path: f"{path} is not UTF-8 text",
-            env={"PYTHONIOENCODING": "utf-8:strict"},
         )
 
     def test_binary_refuses_non_utf8_staged_module_file(self) -> None:
-        if run_cli_optional_binary("--help") is None:
-            self.skipTest("TOOL_BIN is unset")
         _run_staged_module_case(
             self,
-            run_cli_optional_binary,
             _NON_UTF8_EB,
             lambda path: f"{path} is not UTF-8 text",
-            env={"PYTHONIOENCODING": "utf-8:strict"},
         )
 
     def test_python_refuses_unreadable_staged_module_file(self) -> None:
@@ -148,7 +138,6 @@ class StagedModuleReadParityTests(unittest.TestCase):
             self.skipTest("root ignores file read permissions")
         _run_staged_module_case(
             self,
-            run_cli,
             _UNREADABLE_EB,
             lambda path: f"cannot read staged module file {path}: [Errno 13] Permission denied: '{path}'",
         )
@@ -156,11 +145,8 @@ class StagedModuleReadParityTests(unittest.TestCase):
     def test_binary_refuses_unreadable_staged_module_file(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores file read permissions")
-        if run_cli_optional_binary("--help") is None:
-            self.skipTest("TOOL_BIN is unset")
         _run_staged_module_case(
             self,
-            run_cli_optional_binary,
             _UNREADABLE_EB,
             lambda path: f"cannot read staged module file {path}: [Errno 13] Permission denied: '{path}'",
         )

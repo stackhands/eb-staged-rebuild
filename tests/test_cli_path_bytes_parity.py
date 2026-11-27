@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, normalize_userns_helper, path_without_eb, run_cli, scrub
 
 
 class CliPathBytesParityTests(unittest.TestCase):
@@ -23,21 +23,21 @@ class CliPathBytesParityTests(unittest.TestCase):
                 modules,
                 "--state-root",
                 bad_state_root,
+                "--backend",
+                "installpath",
                 "--dry-run",
                 "--",
                 "Demo-1.0.eb",
             )
-            strict = {"PYTHONIOENCODING": "utf-8:strict"}
-            proc = run_cli(*args, env=strict)
-            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.assertEqual(proc.stderr, "")
-            self.assertNotIn("Traceback", proc.stdout)
-
-            binary = run_cli_optional_binary(*args)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
-                self.assertEqual(proc.stdout, binary.stdout)
-                self.assertEqual(proc.stderr, binary.stderr)
+            binary = run_cli(*args, env={"PATH": path_without_eb()})
+            self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
+            self.assertEqual(binary.stderr, "")
+            self.assertNotIn("Traceback", binary.stdout)
+            golden(
+                self,
+                "stdout",
+                scrub(normalize_userns_helper(binary.stdout), STATE=bad_state_root, ROOT=root),
+            )
 
 
 if __name__ == "__main__":

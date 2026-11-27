@@ -17,45 +17,6 @@ fn appendFloat(out: *std.ArrayList(u8), a: Allocator, f: f64) Allocator.Error!vo
     try out.appendSlice(a, s);
 }
 
-/// repr(str): single quotes unless the text has ' and no ", backslash
-/// escapes for the quote, backslash, \t \n \r, other control characters
-/// and the surrogate escapes of invalid bytes as \xNN.
-pub fn reprStr(out: *std.ArrayList(u8), a: Allocator, s: []const u8) Allocator.Error!void {
-    const q: u8 = if (std.mem.findScalar(u8, s, '\'') != null and std.mem.findScalar(u8, s, '"') == null) '"' else '\'';
-    try out.append(a, q);
-    var i: usize = 0;
-    while (i < s.len) {
-        const ch = pytext.nextChar(s[i..]);
-        const cp = ch.cp orelse {
-            // surrogateescape: U+DCxx, printed as \udcxx.
-            var b: [8]u8 = undefined;
-            try out.appendSlice(a, std.mem.print(&b, "\\udc{x:0>2}", .{s[i]}) catch unreachable);
-            i += 1;
-            continue;
-        };
-        switch (cp) {
-            '\\' => try out.appendSlice(a, "\\\\"),
-            '\t' => try out.appendSlice(a, "\\t"),
-            '\n' => try out.appendSlice(a, "\\n"),
-            '\r' => try out.appendSlice(a, "\\r"),
-            else => {
-                if (cp == q) {
-                    try out.append(a, '\\');
-                    try out.append(a, q);
-                } else if (cp < 0x20 or cp == 0x7f) {
-                    var b: [8]u8 = undefined;
-                    try out.appendSlice(a, std.mem.print(&b, "\\x{x:0>2}", .{cp}) catch unreachable);
-                } else if (cp >= 0x80 and cp < 0xa0) {
-                    var b: [8]u8 = undefined;
-                    try out.appendSlice(a, std.mem.print(&b, "\\x{x:0>2}", .{cp}) catch unreachable);
-                } else try out.appendSlice(a, s[i .. i + ch.len]);
-            },
-        }
-        i += ch.len;
-    }
-    try out.append(a, q);
-}
-
 /// repr(v): None, True and False, quoted text, and lists and dicts, as
 /// Python prints them.
 pub fn repr(out: *std.ArrayList(u8), a: Allocator, v: Py) Allocator.Error!void {
@@ -64,7 +25,7 @@ pub fn repr(out: *std.ArrayList(u8), a: Allocator, v: Py) Allocator.Error!void {
         .bool => |b| try out.appendSlice(a, if (b) "True" else "False"),
         .int => |n| try out.print(a, "{d}", .{n}),
         .float => |f| try appendFloat(out, a, f),
-        .str => |s| try reprStr(out, a, s),
+        .str => |s| try pytext.reprStr(out, a, s),
         .list => |items| {
             try out.append(a, '[');
             for (items, 0..) |it, i| {
@@ -77,7 +38,7 @@ pub fn repr(out: *std.ArrayList(u8), a: Allocator, v: Py) Allocator.Error!void {
             try out.append(a, '{');
             for (entries, 0..) |e, i| {
                 if (i > 0) try out.appendSlice(a, ", ");
-                try reprStr(out, a, e.key);
+                try pytext.reprStr(out, a, e.key);
                 try out.appendSlice(a, ": ");
                 try repr(out, a, e.value);
             }

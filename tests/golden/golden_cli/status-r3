@@ -1,0 +1,4 @@
+exit 0
+--- stdout
+r3  7  backend=None  modules=0/0
+--- stderr

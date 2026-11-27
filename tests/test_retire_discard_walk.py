@@ -1,100 +1,31 @@
 """A retire that refuses still removes the directories it created.
 
-The tracer has to be the parent of the interpreter. The last open under
+The tracer has to be the parent of the binary. The last open under
 the retired tree is the empty directory that would have held the module
 file. Its index is the stamp plus each component of that path.
 """
 
-import ctypes
 import os
-import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
-from tests.support import classic_install
-
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CHILD = """\
-import os, sys
-sys.path.insert(0, sys.argv[1])
-from eb_staged_rebuild.errors import Refused
-from eb_staged_rebuild.retire import retire
-state, module = sys.argv[2], sys.argv[3]
-try:
-    retire(state, module)
-except Refused as exc:
-    kids = os.listdir(os.path.join(state, "retired"))
-    sys.stdout.write("kids %s\\n" % len(kids))
-    sys.stderr.write(str(exc) + "\\n")
-    raise SystemExit(2)
-sys.stdout.write("no refuse\\n")
-raise SystemExit(1)
-"""
-
-
-def _python314():
-    if sys.version_info[:2] == (3, 14):
-        return sys.executable
-    found = shutil.which("python3.14")
-    if not found:
-        return None
-    completed = subprocess.run(
-        [found, "-c", "import sys; raise SystemExit(0 if sys.version_info[:2]==(3,14) else 1)"],
-        check=False,
-    )
-    return found if completed.returncode == 0 else None
-
-
-def _ptrace_problem():
-    libc = ctypes.CDLL(None, use_errno=True)
-    read_fd, write_fd = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        os.close(read_fd)
-        if libc.ptrace(0, 0, None, None) != 0:
-            os.write(write_fd, os.strerror(ctypes.get_errno()).encode())
-            os._exit(1)
-        os._exit(0)
-    os.close(write_fd)
-    _pid, status = os.waitpid(pid, 0)
-    detail = os.read(read_fd, 200).decode()
-    os.close(read_fd)
-    if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
-        return None
-    return detail or f"ptrace(PTRACE_TRACEME) failed with wait status {status}"
-
-
-def _tracer():
-    if shutil.which("gcc") is None:
-        return None, "gcc is not on PATH, so tests/fs_fail.c cannot be built"
-    src = os.path.join(_REPO, "tests", "fs_fail.c")
-    out = os.path.join(tempfile.gettempdir(), "eb-fs-fail-retire")
-    if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(src):
-        built = subprocess.run(["gcc", "-O2", "-o", out, src], capture_output=True, text=True, check=False)
-        if built.returncode != 0:
-            detail = (built.stderr or built.stdout or "gcc failed").strip()
-            return None, f"gcc could not build tests/fs_fail.c: {detail}"
-    problem = _ptrace_problem()
-    if problem:
-        return None, f"ptrace is unavailable: {problem}"
-    return out, None
+from tests.support import _program, classic_install, tool_bin
 
 
 class RetireDiscardWalkTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.python = _python314()
-        cls.program, cls.reason = _tracer()
-
     def setUp(self):
-        if self.python is None:
-            self.skipTest("python3.14 is not installed")
-        if self.program is None:
-            self.skipTest(self.reason)
-        shm = "/dev/shm"
-        if not os.path.isdir(shm) or os.stat(shm).st_dev == os.stat(tempfile.gettempdir()).st_dev:
+        self.program = _program(self, "eb-fs-fail-retire")
+        here = os.stat(tempfile.gettempdir()).st_dev
+        self.other = next(
+            (
+                d
+                for d in ("/dev/shm", "/var/tmp", "/tmp", os.path.expanduser("~"))
+                if os.path.isdir(d) and os.access(d, os.W_OK) and os.stat(d).st_dev != here
+            ),
+            None,
+        )
+        if self.other is None:
             self.skipTest("no second filesystem is available, so retire cannot be forced to clean up")
 
     def test_a_failed_listing_still_removes_the_retire_directory(self):
@@ -104,7 +35,7 @@ class RetireDiscardWalkTest(unittest.TestCase):
             with (
                 self.subTest(errno=number),
                 tempfile.TemporaryDirectory() as root,
-                tempfile.TemporaryDirectory(dir="/dev/shm") as other,
+                tempfile.TemporaryDirectory(dir=self.other) as other,
             ):
                 software = os.path.join(root, "software")
                 modules = os.path.join(root, "modules")
@@ -116,9 +47,6 @@ class RetireDiscardWalkTest(unittest.TestCase):
                 state = os.path.join(other, "state")
                 depth = len([part for part in os.path.dirname(module).split(os.sep) if part])
                 nth = 1 + depth
-                script = os.path.join(root, "discard.py")
-                with open(script, "w", encoding="utf-8") as handle:
-                    handle.write(_CHILD)
                 got = subprocess.run(
                     [
                         self.program,
@@ -127,23 +55,18 @@ class RetireDiscardWalkTest(unittest.TestCase):
                         str(nth),
                         os.path.join(state, "retired"),
                         "--",
-                        self.python,
-                        script,
-                        _REPO,
+                        tool_bin(),
+                        "retire",
+                        "--state-root",
                         state,
+                        "--module-file",
                         module,
                     ],
                     capture_output=True,
                     text=True,
                     check=False,
-                    env={
-                        "PYTHONPATH": _REPO,
-                        "PYTHONIOENCODING": "utf-8:strict",
-                        "LANG": "C.UTF-8",
-                        "PATH": os.environ.get("PATH", ""),
-                        "HOME": os.environ.get("HOME", ""),
-                    },
+                    env={"LANG": "C.UTF-8", "PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")},
                 )
                 self.assertEqual(got.returncode, 2, got.stderr)
                 self.assertIn("different filesystems", got.stderr)
-                self.assertEqual(got.stdout, "kids 0\n", got.stderr)
+                self.assertEqual(os.listdir(os.path.join(state, "retired")), [], got.stderr)

@@ -1,0 +1,936 @@
+#!/bin/bash
+# Run the binary (TOOL_BIN) on a long list of invocations, and compare each
+# one's exit code, stdout and stderr with the file tests/golden/golden_cli/
+# holds for its label; for commands that change a fixture, also the journals
+# and the tree they leave. Paths, times, run ids and hashes are replaced by
+# placeholders before the comparison.
+#   TOOL_BIN=zig-out/bin/eb-staged-rebuild bash tests/golden_cli.sh
+# RECORD=1 writes the files instead of comparing; read the diff before
+# committing it.
+set -u
+: "${TOOL_BIN:?}"
+export TOOL_BIN
+# verify loads module files with $LMOD_CMD and judges ELF objects against
+# EESSI, and a login shell with Lmod exports MODULEPATH; the cases that want
+# any of them set it themselves.
+unset LMOD_CMD EESSI_CVMFS_REPO EESSI_EPREFIX MODULEPATH
+# A dry run reports the EasyBuild it finds on PATH, and the recorded output
+# is the one for a host with none: leave out the directories that hold an eb.
+PATH=$(printf '%s' "${PATH}" | tr ':' '\n' | while IFS= read -r d || [ -n "${d}" ]; do
+    [ -n "${d}" ] && [ ! -x "${d}/eb" ] && printf '%s:' "${d}"
+done)
+PATH=${PATH%:}
+export PATH
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+golden_dir=${repo_root}/tests/golden/golden_cli
+work=$(mktemp -d "${TMPDIR:-/tmp}/esr-golden.XXXXXX")
+trap 'chmod -R u+rwX "${work}" 2>/dev/null; rm -rf -- "${work}"' EXIT
+# verify lists the temporary directories it knows; the cases see the default.
+unset TMPDIR
+site=${work}/site
+diffs=0
+declare -A seen
+
+# settle LABEL FILE: FILE must be what the golden file of LABEL holds. A label
+# used twice names its second case LABEL-2, and so on.
+settle() {
+    local label=$1 file=$2 name n=1 path
+    name=$(printf '%s' "${label}" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+    seen[${name}]=$(( ${seen[${name}]:-0} + 1 ))
+    n=${seen[${name}]}
+    [ "${n}" -gt 1 ] && name=${name}-${n}
+    path=${golden_dir}/${name}
+    if [ "${RECORD:-}" = 1 ]; then
+        mkdir -p "${golden_dir}"
+        cp "${file}" "${path}"
+        echo "recorded ${label}"
+    elif [ ! -f "${path}" ]; then
+        echo "DIFF ${label}: no golden file ${path#"${repo_root}"/}"
+        diffs=$((diffs + 1))
+    elif cmp -s "${file}" "${path}"; then
+        echo "same ${label}"
+    else
+        echo "DIFF ${label}"
+        diff "${path}" "${file}" | head -20 | sed 's/^/     /'
+        diffs=$((diffs + 1))
+    fi
+}
+
+# hostfacts: what the probe reads from this host's kernel, file system and
+# bwrap, and the --version text of the /bin/false some cases give as eb
+# (GNU or uutils coreutils). The stub bwrap's version, 0.11.0, stays.
+hostfacts() {
+    sed -E -e 's/(user\.max_user_namespaces|kernel\.unprivileged_userns_clone): [0-9]+/\1: HOST/' \
+        -e 's/RENAME_EXCHANGE on [A-Za-z0-9_.]+:/RENAME_EXCHANGE on HOST:/' \
+        -e '/bubblewrap 0\.11\.0/!s/(\(|"version": ")bubblewrap [0-9][0-9.]*/\1bubblewrap HOST/g' \
+        -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
+        -e 's#"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+#"\1": HOST#g' \
+        -e 's#"unprivileged_userns_clone": null#"unprivileged_userns_clone": HOST#g' \
+        -e 's#"version_text": "false \([^"]*"#"version_text": "HOST"#g'
+}
+
+# sandbox: the user-namespace sandbox command, as one line or as the items of
+# a journal's eb_command list, becomes SANDBOX. It runs before any path is
+# masked, since TOOL_BIN may sit under HOME or the work directory.
+sandbox() {
+    perl -0pe 's/"\Q$ENV{TOOL_BIN}\E",\n\s*"__userns-sandbox",/"SANDBOX",/g; s/\Q$ENV{TOOL_BIN}\E __userns-sandbox/SANDBOX/g'
+}
+
+# scrub: the scratch directory is a different path on every run.
+scrub() {
+    sandbox | sed -e "s#${work}/site#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" | hostfacts
+}
+
+compare() {
+    local label=$1; shift
+    (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    {
+        printf 'exit %s\n--- stdout\n' "${nc}"
+        scrub < "${work}/n.out"
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "${label}" "${work}/n.all"
+}
+
+# Module files.
+m="${work}/modules"
+s="${work}/software"
+mkdir -p "${m}" "${s}/done/1/easybuild" "${s}/stamp/1" "${s}/payload/1" "${s}/empty/1" "${s}/ebdir/1/easybuild/x.eb"
+touch "${s}/done/1/easybuild/done-1.eb" "${s}/stamp/1/.eb-staged-rebuild-complete" "${s}/payload/1/PAYLOAD"
+printf 'local root = "%s/done/1"\nsetenv("EBROOTDONE", root)\n' "${s}" > "${m}/lua.lua"
+printf 'set root %s/stamp/1\n' "${s}" > "${m}/tcl"
+printf 'set root "%s/payload/1"\n' "${s}" > "${m}/tclq"
+printf 'local root = "%s/empty/1"\n' "${s}" > "${m}/empty.lua"
+printf 'local root = "%s/ebdir/1"\n' "${s}" > "${m}/ebdir.lua"
+printf 'local root = "%s/missing/1"\n' "${s}" > "${m}/missing.lua"
+printf 'whatis("no root")\n' > "${m}/noroot.lua"
+printf 'local root\n=\n"%s/done/1"\n' "${s}" > "${m}/spread.lua"
+printf 'local root = "a\\"b\\u00e9"\n' > "${m}/escaped.lua"
+printf 'local root = "/tmp/\xc3\xa9t\xc3\xa9"\n' > "${m}/utf8.lua"
+ln -s "${m}/lua.lua" "${m}/link.lua"
+ln -s "${s}/done/1" "${s}/linkroot"
+printf 'local root = "%s/linkroot"\n' "${s}" > "${m}/linkroot.lua"
+printf 'local root = "/bad\300\252"\n' > "${m}/non-utf8.lua"
+for f in lua.lua tcl tclq empty.lua ebdir.lua missing.lua noroot.lua spread.lua escaped.lua utf8.lua non-utf8.lua link.lua linkroot.lua; do
+    compare "resolve ${f}" resolve "${m}/${f}"
+done
+compare "resolve a directory" resolve "${m}"
+compare "resolve nothing there" resolve "${m}/nope.lua"
+compare "resolve relative" resolve modules/lua.lua
+compare "resolve, no argument" resolve
+compare "resolve, two arguments" resolve a b
+compare "resolve -h" resolve -h
+if [ "$(id -u)" != 0 ]; then
+    cp "${m}/lua.lua" "${m}/unreadable.lua"; chmod 0 "${m}/unreadable.lua"
+    compare "resolve an unreadable file" resolve "${m}/unreadable.lua"
+    rm -f "${m}/unreadable.lua"
+fi
+
+# Journals.
+st="${work}/state"
+mkdir -p "${st}/runs/r1" "${st}/runs/r2" "${st}/runs/r3" "${st}/runs/r0"
+cat > "${st}/runs/r1/journal.json" <<'EOF'
+{"schema": 2, "run_id": "r1", "state": "done", "backend": "bwrap", "message": "all published",
+ "modules_plan": [
+  {"rel": "demo/1", "status": "published", "live_software": "/sw/demo/1", "retired": "/sw/demo/.1.old"},
+  {"rel": "other/2", "status": "pending", "live_software": "/sw/other/2", "retired": null}
+ ]}
+EOF
+cat > "${st}/runs/r2/journal.json" <<'EOF'
+{"schema": 2, "kind": "retire", "run_id": "r2", "state": "retired", "module_path": "/m/x/1.lua", "software_dir": "/sw/x/1"}
+EOF
+cat > "${st}/runs/r3/journal.json" <<'EOF'
+{"schema": 4, "publication": "directory-swap", "ledger_policy": {"mode": "x"}, "run_id": "r3", "state": 7, "backend": null, "modules_plan": [], "message": ""}
+EOF
+cat > "${st}/runs/r0/journal.json" <<'EOF'
+{"schema": 2, "run_id": "r0", "state": "planned", "backend": "userns", "message": ["a", 1, null, 1.5, true], "modules_plan": [{"rel": "z/9", "status": "built", "live_software": "/x", "retired": "/y é"}]}
+EOF
+compare "status, four journals" status --state-root "${st}"
+compare "status --json, four journals" status --state-root "${st}" --json
+compare "status --json, one run" status --state-root "${st}" --json r1
+compare "status r3" status --state-root "${st}" r3
+compare "status, no such run" status --state-root "${st}" r9
+compare "status --json, no such run" status --state-root "${st}" --json r9
+compare "status, no runs dir" status --state-root "${work}/nostate"
+compare "status --json, no runs dir" status --state-root "${work}/nostate" --json
+compare "status, abbreviated option" status --state "${st}"
+compare "status, no option" status
+mkdir -p "${st}/runs/r4"; echo '{"schema": 1}' > "${st}/runs/r4/journal.json"
+compare "status, schema 1" status --state-root "${st}"
+echo '{"schema": 5}' > "${st}/runs/r4/journal.json"
+compare "status, schema 5" status --state-root "${st}"
+echo '{"schema": 2, "publication": "pointer"}' > "${st}/runs/r4/journal.json"
+compare "status, other publication" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": [{"rel": "a"}]}' > "${st}/runs/r4/journal.json"
+compare "status, plan without a swap" status --state-root "${st}"
+echo '[]' > "${st}/runs/r4/journal.json"
+compare "status, journal array" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": "entry"}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan string" status --state-root "${st}"
+echo '{"schema": 2, "modules_plan": [1]}' > "${st}/runs/r4/journal.json"
+compare "status, journal plan number" status --state-root "${st}"
+rm -rf "${st}/runs/r4"
+# list skips entries without the paths it needs; these journals have no
+# software root.
+compare "list, journals without a software root" list --state-root "${st}"
+mkdir -p "${st}/runs/r5" "${work}/sw/demo/1" "${work}/sw/demo/.1.r5" "${work}/sw/demo/.1.r6"
+printf '{"run_id": "r5"}' > "${work}/sw/demo/.1.r5/.eb-staged-rebuild-complete"
+printf '{"run_id": 5}' > "${work}/sw/demo/.1.r6/.eb-staged-rebuild-complete"
+cat > "${st}/runs/r5/journal.json" <<JOURNAL
+{"schema": 2, "run_id": "r5", "state": "complete", "software": "${work}/sw", "verify": {"result": "fail", "forced": 1, "checks": {"elf": 2, "references": true, "modules": null, "access": "x"}},
+ "modules_plan": [{"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r5", "published_at": "soon"}, {"live_software": "${work}/sw/demo/1", "retired": "${work}/sw/demo/.1.r6"}, {"live_software": "", "retired": "x"}]}
+JOURNAL
+compare "list, odd values" list --state-root "${st}"
+sed -i 's/"published_at": "soon"/"published_at": 1.5e9/' "${st}/runs/r5/journal.json"
+compare "list, a published tree" list --state-root "${st}"
+rm -rf "${st}/runs/r5"
+compare "list, no runs dir" list --state-root "${work}/nostate"
+compare "list, no option" list
+compare "list, a positional" list --state-root "${st}" extra
+
+# Probe.
+# probe reports this host's sandboxes and file system; the cases keep its
+# structure: the exit code and the key paths with the type of each value.
+probe_shape() {
+    local label=$1; shift
+    (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    {
+        printf 'exit %s\n--- keys\n' "${nc}"
+        # The sysctl is an int or null, depending on the kernel. The golden keeps neither.
+        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out" | sed -e 's/^\.user_namespaces\.unprivileged_userns_clone .*/.user_namespaces.unprivileged_userns_clone host/'
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "${label}" "${work}/n.all"
+}
+probe_shape "probe --json" probe --path "${work}/p" --json --eb missing-eb
+compare_probe_text() {
+    (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    {
+        printf 'exit %s\n--- labels\n' "${nc}"
+        # Printed only by a kernel that has kernel.unprivileged_userns_clone.
+        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | grep -v '^kernel\.unprivileged_userns_clone' | hostfacts
+        printf -- '--- stderr\n'
+        scrub < "${work}/n.err"
+    } > "${work}/n.all"
+    settle "probe text" "${work}/n.all"
+}
+compare_probe_text probe --path "${work}/p" --eb missing-eb
+compare "probe -h" probe -h
+compare "probe --path without a value" probe --path
+compare "top level, nothing"
+compare "top level --help" --help
+# --version names the program, its version and its build.
+if zig_version=$("${TOOL_BIN}" --version 2>&1) && [[ "${zig_version}" =~ ^eb-staged-rebuild\ [0-9]+\.[0-9]+\.[0-9]+\ \(.*\)$ ]]; then
+    echo "same --version, the program, its version and its build"
+else
+    echo "DIFF --version: '${zig_version:-}'"; diffs=$((diffs + 1))
+fi
+for c in run resume verify rollback status list gc retire; do compare "${c} -h" "${c}" -h; done
+compare "verify, nothing" verify
+compare "verify, two stages" verify --state-root x a b
+# The version the binary reports is the one build.zig.zon declares.
+zon_version=$(sed -nE 's/^ *\.version = "([^"]+)".*/\1/p' "${repo_root}/build.zig.zon")
+if "${TOOL_BIN}" --version | grep -qF -- "${zon_version}"; then echo "same version as build.zig.zon"; else echo "DIFF version: build.zig.zon says ${zon_version}"; diffs=$((diffs + 1)); fi
+compare "unknown command" bogus
+compare "a negative number for a command" -5
+compare "a dash for a command" -
+compare "status, a run id that looks like a negative number" status --state-root "${st}" -5
+compare "resume, a lock timeout below 0" resume --state-root "${st}" --lock-timeout -5 r9
+compare "run, a run id with path components" run --software software --modules modules --state-root state --run-id ../escaped -- demo-1.eb
+compare "resume, a run id with path components" resume --state-root state ../escaped
+compare "rollback, a run id with path components" rollback --state-root state ../escaped
+# argparse quotes a value it refuses with repr().
+compare "resume, a lock timeout with a quote" resume --state-root "${st}" --lock-timeout "a'b" r9
+compare "gc, a grace period with a quote" gc --state-root "${st}" --grace-hours "a'b"
+compare "a command with a quote" "a'b"
+compare "run, a backend with a quote" run --backend "a'b" -- x.eb
+compare "gc, a value with a quote for a flag" gc --state-root "${st}" --dry-run="a'b"
+compare "run, a value with a quote for a flag" run --dry-run="a'b" -- x.eb
+
+# Commands that change a fixture: run ids and timestamps are normalized
+# before the comparison.
+norm() {
+    sandbox | sed -E -e 's/[0-9]{8}T[0-9]{6}Z(-[0-9]+)?/STAMP/g' \
+        -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z/ISO/g' \
+        -e 's/[0-9]{10}\.[0-9]+/TIME/g' -e "s#${site}#@SITE@#g" -e "s#${work}#@WORK@#g" -e "s#${HOME:-/nonexistent}#@HOME@#g" \
+        -e 's/generation filesystem has [0-9]+ bytes/generation filesystem has BYTES bytes/g' \
+        -e 's#(retired/STAMP)/[^ ]*#\1/PATH#' \
+        -e 's#"(mount|fstype|device)": "[^"]*"#"\1": "HOST"#g' \
+        -e 's#"(device|inode)": [0-9]+#"\1": HOST#' -e 's#^( {6})[0-9]{5,}(,?)$#\1INO\2#' \
+        -e 's#pid [0-9]+ has a file open#pid PID has a file open#' | hostfacts |
+    if [ -n "${NORM_HASH:-}" ]; then sed -E -e 's/[0-9a-f]{64}/HASH/g' -e 's#eb-staged-rebuild/[0-9a-f]{16}/#eb-staged-rebuild/SCOPE/#g'; else cat; fi |
+    # What the host reports about its sandboxes is not what the cases test.
+    perl -0pe 's/("(?:bwrap|userns_sandbox|user_namespaces)": )\{[^{}]*\}/$1HOST/g'
+}
+fixture() {
+    local root=$1
+    mkdir -p "${root}/modules/all/demo" "${root}/software/demo/1/easybuild" "${root}/state/runs/r1"
+    touch "${root}/software/demo/1/easybuild/demo-1.eb"
+    # A relative root, so both copies of the module file have the same bytes
+    # and the same hash wherever the run happens.
+    printf 'local root = "software/demo/1"\n' > "${root}/modules/all/demo/1.lua"
+    mkdir -p "${root}/software/old/.2.0001/sub" "${root}/software/old/2"
+    touch "${root}/software/old/.2.0001/sub/file"
+    printf '{"schema": 2, "run_id": "r1", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "old/2", "status": "published", "live_software": "%s/software/old/2", "retired": "%s/software/old/.2.0001", "published_at": 1000.5}]}\n' "${root}" "${root}" > "${root}/state/runs/r1/journal.json"
+    printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb.py" "$@"\n' "${repo_root}" > "${root}/eb"
+    chmod +x "${root}/eb"
+    printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_stack.py" "$@"\n' "${repo_root}" > "${root}/ebstack"
+    chmod +x "${root}/ebstack"
+    printf '#!/bin/sh\nexec python3 "%s/tests/fake_eb_keep_logs.py" "$@"\n' "${repo_root}" > "${root}/keep-logs"
+    chmod +x "${root}/keep-logs"
+    printf '{"record":"x"}\n' > "${root}/usage.log"
+    printf '{"eb_stack": "%s/ebstack", "log": "%s/ledger.jsonl", "key": "%s/key.pem", "head": "%s/head.json", "actor": "ci", "stack": "s", "target": "t"}\n' "${root}" "${root}" "${root}" "${root}" > "${root}/ledger.json"
+    # Refusal fixtures: a symlinked rebuild target, a symlinked state root,
+    # a symlinked module file, a module file without a root assignment, and
+    # a second module whose root names a hidden tree through a symlink.
+    mkdir -p "${root}/software/real/1/easybuild" "${root}/software/link" "${root}/modules/all/link"
+    ln -s ../real/1 "${root}/software/link/1"
+    printf 'local root = "software/link/1"\n' > "${root}/modules/all/link/1.lua"
+    ln -s state "${root}/statelink"
+    ln -s 1.lua "${root}/modules/all/demo/symlink.lua"
+    printf 'whatis("no root")\n' > "${root}/modules/all/demo/noroot.lua"
+    # A module with module class links: absolute, as EasyBuild makes them,
+    # and relative.
+    mkdir -p "${root}/software/classy/1" "${root}/modules/all/classy" "${root}/modules/tools/classy" "${root}/modules/lib/classy"
+    printf 'local root = "software/classy/1"\n' > "${root}/modules/all/classy/1.lua"
+    ln -s "${root}/modules/all/classy/1.lua" "${root}/modules/tools/classy/1.lua"
+    ln -s ../../all/classy/1.lua "${root}/modules/lib/classy/1.lua"
+    mkdir -p "${root}/software/kept/.3.0001" "${root}/software/kept/3" "${root}/modules/all/kept" "${root}/state/runs/r9"
+    ln -s .3.0001 "${root}/software/kept/alias"
+    printf 'local root = "%s/software/kept/alias"\n' "${root}" > "${root}/modules/all/kept/3.lua"
+    printf '{"schema": 2, "run_id": "r9", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "kept/3", "status": "published", "live_software": "%s/software/kept/3", "retired": "%s/software/kept/.3.0001", "live_module": "%s/modules/all/kept/3.lua", "published_at": 1000.5}]}\n' "${root}" "${root}" "${root}" > "${root}/state/runs/r9/journal.json"
+    # Publication policies for --prepare.
+    printf '#!/bin/sh\nexit 42\n' > "${root}/prepare-fails"
+    printf '#!/bin/sh\ncount=0\n[ -f "%s/prepare-count" ] && count=$(cat "%s/prepare-count")\necho $((count + 1)) > "%s/prepare-count"\nexit 0\n' "${root}" "${root}" "${root}" > "${root}/prepare-ok"
+    chmod +x "${root}/prepare-fails" "${root}/prepare-ok"
+    # A bwrap that answers the probe: EasyBuild runs the sandbox itself, so
+    # the tool only asks for the version and runs "--dev-bind / / true".
+    mkdir -p "${root}/bin"
+    printf '#!/bin/sh\nif [ "$1" = --version ]; then echo "bubblewrap 0.11.0"; exit 0; fi\nif [ -n "${FAKE_BWRAP_FAIL:-}" ]; then echo "setting up uid map: Permission denied (user namespaces disabled)" >&2; exit 1; fi\nexit 0\n' > "${root}/bin/bwrap"
+    chmod +x "${root}/bin/bwrap"
+    # unshare: the real one, or a refusal when FAKE_UNSHARE_FAIL is set, so
+    # auto can find no sandbox at all.
+    printf '#!/bin/sh\nif [ -n "${FAKE_UNSHARE_FAIL:-}" ]; then echo "unshare: unshare failed: Operation not permitted" >&2; exit 1; fi\nexec %s "$@"\n' "$(command -v unshare)" > "${root}/bin/unshare"
+    chmod +x "${root}/bin/unshare"
+    # Two modules for the publication barrier, and policies that see their
+    # context: two remove the second generation's PAYLOAD and then disable
+    # or make unreadable its easybuild directory, the remaining evidence;
+    # one keeps a copy of the context and restricts each staged tree.
+    for mod in alpha beta; do
+        mkdir -p "${root}/software/${mod}/1/easybuild" "${root}/modules/all/${mod}"
+        touch "${root}/software/${mod}/1/easybuild/${mod}-1.eb"
+        printf 'local root = "software/%s/1"\n' "${mod}" > "${root}/modules/all/${mod}/1.lua"
+    done
+    printf '#!%s\nimport json, os, sys\nfor m in json.load(open(sys.argv[1]))["modules"]:\n    if m["rel"] == "all/beta/1.lua":\n        os.unlink(os.path.join(m["generation"], "PAYLOAD"))\n        os.rename(os.path.join(m["generation"], "easybuild"), os.path.join(m["generation"], "disabled-metadata"))\n' "$(command -v python3)" > "${root}/prepare-barrier-rename"
+    printf '#!%s\nimport json, os, sys\nfor m in json.load(open(sys.argv[1]))["modules"]:\n    if m["rel"] == "all/beta/1.lua":\n        os.unlink(os.path.join(m["generation"], "PAYLOAD"))\n        os.chmod(os.path.join(m["generation"], "easybuild"), 0)\n' "$(command -v python3)" > "${root}/prepare-barrier-chmod"
+    printf '#!%s\nimport json, os, shutil, sys\nshutil.copyfile(sys.argv[1], "%s/context.json")\nfor m in json.load(open(sys.argv[1]))["modules"]:\n    os.chmod(m["staged"], 0o750)\n' "$(command -v python3)" "${root}" > "${root}/prepare-context"
+    chmod +x "${root}/prepare-barrier-rename" "${root}/prepare-barrier-chmod" "${root}/prepare-context"
+}
+compare_admin() {
+    local label=$1; shift
+    local root=${site} out=${work}/admin a f rid d
+    local -a cmd=("${TOOL_BIN}") args=() before=() after=()
+    # The retire record the last successful retire created. Names sort by the
+    # second only, so two retires in one second do not order by name.
+    rid=$(cat "${root}/.last-retire" 2>/dev/null)
+    for d in "${root}"/state/runs/retire-*; do [ -e "${d}" ] && before+=("${d##*/}"); done
+    for a in "$@"; do
+        a="${a//@ROOT@/${root}}"
+        if [ "${a}" = "@CMD@" ]; then args+=("${cmd[@]}"); else args+=("${a//@RETIRE@/${rid}}"); fi
+    done
+    if [ "${args[0]}" = env ]; then
+        (cd "${root}" && "${args[@]}") > "${out}.out" 2> "${out}.err"
+    else
+        (cd "${root}" && "${cmd[@]}" "${args[@]}") > "${out}.out" 2> "${out}.err"
+    fi
+    echo $? > "${out}.rc"
+    for d in "${root}"/state/runs/retire-*; do
+        [ -e "${d}" ] || continue
+        [[ " ${before[*]} " == *" ${d##*/} "* ]] || after+=("${d##*/}")
+    done
+    [ "${#after[@]}" -gt 0 ] && echo "${after[-1]}" > "${root}/.last-retire"
+    # Ordered by run directory: by path, "retire-STAMP-2/journal.json" sorts
+    # before "retire-STAMP/journal.json".
+    find "${root}" -name journal.json -printf '%h\0' 2>/dev/null | LC_ALL=C sort -z |
+        while IFS= read -r -d '' d; do cat "${d}/journal.json"; done > "${out}.journals"
+    (cd "${root}" && find . -not -name '.lock*' -not -name .last-retire 2>/dev/null) > "${out}.tree"
+    find "${root}" -name '*.prom' -type f -print0 2>/dev/null | LC_ALL=C sort -z |
+        while IFS= read -r -d '' f; do printf '%s\n' "${f#"${root}"/}"; cat "${f}"; done > "${out}.metrics"
+    for f in out err journals metrics; do
+        norm < "${out}.${f}" |
+            sed -E 's/^(eb_staged_rebuild_(current_generation_age|last_gc_timestamp)_seconds) .*/\1 TIME/' \
+            > "${out}.${f}.n"
+    done
+    # Sorted after normalizing, so names that differ only in a stamp compare
+    # by what is left.
+    norm < "${out}.tree" | LC_ALL=C sort -u > "${out}.tree.n"
+    {
+        printf 'exit %s\n' "$(cat "${out}.rc")"
+        for f in out err journals metrics tree; do
+            printf -- '--- %s\n' "${f}"
+            cat "${out}.${f}.n"
+        done
+    } > "${out}.all"
+    settle "${label}" "${out}.all"
+}
+fixture "${site}"
+
+# other_fs_base: the first writable directory on another device than the
+# work directory, or nothing.
+other_fs_base() {
+    local candidate
+    for candidate in /dev/shm /var/tmp /tmp "${HOME:-}"; do
+        if [ -n "${candidate}" ] && [ -d "${candidate}" ] && [ -w "${candidate}" ] \
+            && [ "$(stat -c %d "${candidate}")" != "$(stat -c %d "${work}")" ]; then
+            printf '%s\n' "${candidate}"
+            return
+        fi
+    done
+}
+
+compare_cross_filesystem() {
+    local label="run refuses a state root on another filesystem before the build"
+    local base
+    base=$(other_fs_base)
+    if [ -z "${base}" ]; then
+        echo "DIFF ${label}: no second filesystem among /dev/shm, /var/tmp, /tmp and HOME"
+        diffs=$((diffs + 1))
+        return
+    fi
+    local other root=${site} state out=${work}/cross-filesystem builds runs generations
+    other=$(mktemp -d "${base}/esr-golden.XXXXXX")
+    state="${other}/state"
+    env FAKE_EB_ARGV="${root}/cross-filesystem-argv" \
+        "${TOOL_BIN}" run \
+        --software "${root}/software" --modules "${root}/modules" \
+        --state-root "${state}" --backend installpath --eb "${root}/eb" \
+        --run-id cross-filesystem --skip-live-check --module demo/1 -- demo-1.eb \
+        > "${out}.out" 2> "${out}.err"
+    echo $? > "${out}.rc"
+    builds=$(awk '/--installpath-software/{n++} END{print n+0}' "${root}/cross-filesystem-argv")
+    runs=$([ -e "${state}/runs" ] && echo yes || echo no)
+    generations=$([ -e "${state}/generations" ] && echo yes || echo no)
+    {
+        printf 'exit %s\n' "$(cat "${out}.rc")"
+        printf -- '--- stdout\n'; sed -e "s#${other}#@OTHER@#g" < "${out}.out" | norm
+        printf -- '--- stderr\n'; sed -e "s#${other}#@OTHER@#g" < "${out}.err" | norm
+        printf -- '--- state\nbuilds=%s runs=%s generations=%s\n' "${builds}" "${runs}" "${generations}"
+    } > "${out}.all"
+    rm -rf "${other}"
+    settle "${label}" "${out}.all"
+}
+
+compare_cross_filesystem
+compare_admin "retire --dry-run" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --dry-run
+compare_admin "retire, --usage-log in use" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "retire, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "retire" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua --reason moved
+compare_admin "retire again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
+compare_admin "status after retire" status --state-root @ROOT@/state
+compare_admin "gc keeps within grace" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc --json keeps within grace" gc --state-root @ROOT@/state --dry-run --json
+compare_admin "gc, --usage-log keeps an in-use tree" env FAKE_KEEP_LOGS_MODE=in-use @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+compare_admin "gc, --usage-log helper failure" env FAKE_KEEP_LOGS_MODE=error @CMD@ gc --state-root @ROOT@/state --grace-hours 0 --usage-log @ROOT@/usage.log --eb-keep-logs @ROOT@/keep-logs
+if [ "$(id -u)" != 0 ]; then
+    chmod 0 "${site}/modules/all/kept"
+    compare_admin "gc, an unreadable live module" gc --state-root @ROOT@/state --grace-hours 0
+    chmod 755 "${site}/modules/all/kept"
+fi
+compare_admin "gc removes past grace" gc --state-root @ROOT@/state --grace-hours 0
+compare_admin "gc again" gc --state-root @ROOT@/state --grace-hours 0
+# gc removes a run's generation once the run's hidden trees are settled, and
+# a failed build's only with --include-failed.
+r="${site}"
+mkdir -p "${r}/gstate/runs/g1" "${r}/gstate/runs/g2" "${r}/gstate/runs/g3" "${r}/gstate/generations/g1/modules/all/gen" \
+    "${r}/gstate/generations/g2/software/gen/1/lib" "${r}/gstate/generations/g3/software/gen" "${r}/software/gen/.1.g1" "${r}/software/gen/.1.g3"
+touch "${r}/gstate/generations/g1/modules/all/gen/1.lua" "${r}/gstate/generations/g2/software/gen/1/lib/partial.so"
+printf '{"schema": 2, "run_id": "g1", "state": "complete", "backend": "installpath", "generation_removed_at": null, "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g1", "published_at": 1000.5}], "message": ""}\n' "${r}" "${r}" > "${r}/gstate/runs/g1/journal.json"
+printf '{"schema": 2, "run_id": "g2", "state": "failed", "backend": "installpath", "created_at": 900.5, "updated_at": 1000.5, "generation_removed_at": null, "modules_plan": [], "message": "eb exited 1"}\n' > "${r}/gstate/runs/g2/journal.json"
+printf '{"schema": 2, "run_id": "g3", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g3", "published_at": 4102444800.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g3/journal.json"
+compare_admin "gc --dry-run, generations" gc --state-root @ROOT@/gstate --dry-run
+compare_admin "gc removes a complete run's generation" gc --state-root @ROOT@/gstate
+compare_admin "gc --include-failed removes a failed build's generation" gc --state-root @ROOT@/gstate --include-failed
+r="${site}"
+mkdir -p "${r}/gstate/runs/g4" "${r}/gstate/generations/g4"
+printf '{"schema": 2, "run_id": "../runs", "state": "complete", "backend": "installpath", "modules_plan": [{"rel": "gen/1", "status": "published", "live_software": "%s/software/gen/1", "retired": "%s/software/gen/.1.g4", "published_at": 1000.5}]}\n' "${r}" "${r}" > "${r}/gstate/runs/g4/journal.json"
+compare_admin "gc refuses a generation for a run id that is not a plain name" gc --state-root @ROOT@/gstate
+rm -rf "${site}/gstate" "${site}/software/gen"
+compare_admin "run, a failed build" env FAKE_EB_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/fstate --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "gc --include-failed removes the failed build's generation" gc --state-root @ROOT@/fstate --grace-hours 0 --include-failed
+compare_admin "resume builds the removed generation again" env FAKE_EB_FAIL=1 @CMD@ resume --state-root @ROOT@/fstate f1
+rm -rf "${site}/fstate"
+compare_admin "rollback the retire" rollback --state-root @ROOT@/state @RETIRE@
+compare_admin "rollback again" rollback --state-root @ROOT@/state @RETIRE@
+compare_admin "retire --dry-run, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua --dry-run
+compare_admin "retire, class links" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/classy/1.lua
+ln -s /elsewhere/1.lua "${site}/modules/tools/classy/1.lua"
+compare_admin "rollback over a new class link" rollback --state-root @ROOT@/state @RETIRE@
+rm "${site}/modules/tools/classy/1.lua"
+compare_admin "rollback the retire with class links" rollback --state-root @ROOT@/state @RETIRE@
+bw='env PATH=@ROOT@/bin:'"${PATH}"
+compare_admin "run --dry-run, auto" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
+compare_admin "run --dry-run, free-space environment unset" env -u EB_STAGED_REBUILD_MIN_FREE_BYTES @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb --robot --prefix /x
+compare_admin "run --dry-run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --dry-run -- demo-1.eb -f
+compare_admin "run, no easyconfig" run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, no software" run --dry-run -- x.eb
+compare_admin "run, bad backend" run --backend nope -- x.eb
+compare_admin "run, empty prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare= --dry-run -- x.eb
+compare_admin "run, relative prepare" run --software @ROOT@/software --modules @ROOT@/modules --prepare=rel --dry-run -- x.eb
+compare_admin "run, negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --min-free-bytes=-1 -- x.eb
+compare_admin "run, whitespace-padded negative --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules "--min-free-bytes= -1 " -- x.eb
+compare_admin "run --dry-run, whitespace-padded --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run "--min-free-bytes= 4096 " --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, maximum u128 --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --min-free-bytes 340282366920938463463374607431768211455 --module demo/1 -- demo-1.eb
+compare_admin "retire, no module file" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/none.lua
+compare_admin "retire, missing options" retire
+compare_admin "gc, bad grace" gc --state-root @ROOT@/state --grace-hours x
+# A whole run with tests/fake_eb.py as eb. The module text names each
+# copy's own paths, so hashes are compared only through the files they name.
+export NORM_HASH=1
+compare_admin "run refuses below --min-free-bytes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-state --backend installpath --eb @ROOT@/eb --run-id space1 --skip-live-check --min-free-bytes 18446744073709551615 --module demo/1 -- demo-1.eb
+compare_admin "run refuses below --min-free-bytes above u64" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space64-state --backend installpath --eb @ROOT@/eb --run-id space65 --skip-live-check --min-free-bytes 18446744073709551616 --module demo/1 -- demo-1.eb
+compare_admin "run refuses below the environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551615 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/space-env-state --backend installpath --eb @ROOT@/eb --run-id space-env --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, installpath" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "gc writes metrics" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics.prom
+compare_admin "gc refuses metrics on a dry run" gc --state-root @ROOT@/state --dry-run --metrics-file @ROOT@/dry.prom
+compare_admin "gc refuses an empty metrics path" gc --state-root @ROOT@/state --metrics-file=
+printf 'unchanged\n' > "${site}/metrics-target"
+ln -s metrics-target "${site}/metrics-link.prom"
+compare_admin "gc refuses a symlinked metrics path" gc --state-root @ROOT@/state --metrics-file @ROOT@/metrics-link.prom
+compare_admin "run, installpath, recorded prefix" env FAKE_EB_RECORD_PREFIX=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id rp1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "status after the run" status --state-root @ROOT@/state r2
+compare_admin "resume a complete run" resume --state-root @ROOT@/state r2
+compare_admin "rollback the run" rollback --state-root @ROOT@/state r2
+compare_admin "rollback the run again" rollback --state-root @ROOT@/state r2
+compare_admin "run, installpath, exchange required" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r-required --skip-live-check --require-exchange --module demo/1 -- demo-1.eb
+compare_admin "rollback the exchange-required run" rollback --state-root @ROOT@/state r-required
+compare_admin "resume a rolled-back run" resume --state-root @ROOT@/state r2
+compare_admin "run, userns" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id r4 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r5 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback a run a later run replaced" rollback --state-root @ROOT@/state r4
+compare_admin "status, ledger run" status --state-root @ROOT@/state r5
+compare_admin "resume a complete ledger run" resume --state-root @ROOT@/state r5
+compare_admin "rollback a ledger run" rollback --state-root @ROOT@/state r5
+compare_admin "rollback a ledger run again" rollback --state-root @ROOT@/state r5
+# The module list from eb --dry-run alone: wrapped as rich wraps it off a
+# terminal, and with --robot listing installed dependencies as [x]. The
+# dependencies marked [ ] are kept only if eb --extended-dry-run builds them.
+compare_admin "run, wrapped dry-run lines" env FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id w1 --skip-live-check -- demo-1.eb
+compare_admin "rollback the wrapped run" rollback --state-root @ROOT@/state w1
+compare_admin "run, --robot with installed dependencies" env FAKE_EB_DEPS=M4/1.4.20,GCCcore/15.2.0 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d1 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the --robot run" rollback --state-root @ROOT@/state d1
+compare_admin "run, --robot with dependencies eb would not build" env FAKE_EB_DEPS=GCCcore/15.2.0 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d2 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the run with unbuilt dependencies" rollback --state-root @ROOT@/state d2
+compare_admin "run, --robot, wrapped extended dry-run lines" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d3 --skip-live-check -- demo-1.eb --robot
+compare_admin "rollback the wrapped --robot run" rollback --state-root @ROOT@/state d3
+compare_admin "run, --robot with a missing dependency eb would build" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d4 --skip-live-check -- demo-1.eb --robot
+compare_admin "run, --robot, the extended dry run fails" env FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_XFAIL=31 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id d5 --skip-live-check -- demo-1.eb --robot
+# With rich, EasyBuild colours its output once FORCE_COLOR is set and not
+# empty, even to 0: the dry runs get EASYBUILD_OUTPUT_STYLE=basic, the
+# build keeps the caller's style, and escape sequences that reach the
+# module preflight all the same, as with --output-style=rich, are left out.
+compare_admin "run, --robot with FORCE_COLOR=0" env FAKE_EB_RICH=1 FORCE_COLOR=0 TERM=xterm-256color EASYBUILD_OUTPUT_STYLE=rich FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_STYLE=@ROOT@/styles @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c1 --skip-live-check -- demo-1.eb --robot
+compare_admin "the output style each eb run got" env cat @ROOT@/styles
+compare_admin "remove the record of output styles" env rm @ROOT@/styles
+compare_admin "rollback the run with FORCE_COLOR=0" rollback --state-root @ROOT@/state c1
+compare_admin "run, --robot, --output-style=rich with FORCE_COLOR=1" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_UNBUILT=M4/1.4.20 FAKE_EB_WRAP=24 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c2 --skip-live-check -- demo-1.eb --robot --output-style=rich
+compare_admin "rollback the run with --output-style=rich" rollback --state-root @ROOT@/state c2
+compare_admin "run, --module, --robot with FORCE_COLOR=1 and a missing dependency eb would build" env FAKE_EB_RICH=1 FORCE_COLOR=1 TERM=xterm-256color FAKE_EB_MISSING=dep/2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id c3 --skip-live-check --module demo/1 -- demo-1.eb --robot
+# EasyBuild finds the dependencies installed in the live tree by their module
+# files: all/ under --modules, or the suffix EasyBuild reads.
+compare_admin "run, MODULEPATH names the live module files" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the MODULEPATH run" rollback --state-root @ROOT@/state m1
+compare_admin "run, MODULEPATH with the suffix EasyBuild reads" env MODULEPATH=/elsewhere/modules/all EASYBUILD_SUFFIX_MODULES_PATH=mods FAKE_EB_MODULEPATH=- @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id m2 --skip-live-check --module demo/1 -- demo-1.eb --suffix-modules-path one
+compare_admin "rollback the run with a modules suffix" rollback --state-root @ROOT@/state m2
+# Relative trees reach EasyBuild, the sandbox and the journal as absolute
+# paths, so the run can be rolled back from any directory.
+compare_admin "run, relative trees" env MODULEPATH=/elsewhere/modules/all FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend installpath --eb @ROOT@/eb --run-id rel1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run on relative trees from another directory" env -C @ROOT@/state @CMD@ rollback --state-root @ROOT@/state rel1
+compare_admin "run --dry-run, userns, relative trees" run --software software --modules modules --state-root state --backend userns --dry-run -- demo-1.eb
+compare_admin "run, userns, relative trees" env FAKE_EB_MODULEPATH=- @CMD@ run --software software --modules modules --state-root state --backend userns --eb @ROOT@/eb --run-id rel2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the userns run on relative trees" rollback --state-root state rel2
+# EB_STAGED_REBUILD_FAIL_AT is a test hook that neither tool reads.
+compare_admin "run, the test hook EB_STAGED_REBUILD_FAIL_AT set" env EB_STAGED_REBUILD_FAIL_AT=build.invoke @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with the test hook set" rollback --state-root @ROOT@/state f1
+# A rollback needs the run's tree live: a later run is rolled back first.
+compare_admin "run, an earlier run" env FAKE_EB_PAYLOAD=earlier @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, a later run" env FAKE_EB_PAYLOAD=later @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id o2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "rollback the earlier run while the later one is live" rollback --state-root @ROOT@/state o1
+compare_admin "rollback the later run" rollback --state-root @ROOT@/state o2
+compare_admin "move the marker of the earlier run away" env mv @ROOT@/software/demo/1/.eb-staged-rebuild-complete @ROOT@/marker
+compare_admin "rollback, the live tree has no marker of the run" rollback --state-root @ROOT@/state o1
+compare_admin "put the marker back" env mv @ROOT@/marker @ROOT@/software/demo/1/.eb-staged-rebuild-complete
+compare_admin "rollback the earlier run after the later one" rollback --state-root @ROOT@/state o1
+# gc keeps a tree for the grace period its run recorded. --grace-hours
+# replaces it, EB_STAGED_REBUILD_GRACE_HOURS does not, and a recorded value
+# that is not a number of hours, at least 0, is not used.
+compare_admin "run, a grace period of 0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g1 --skip-live-check --grace-hours 0 --module demo/1 -- demo-1.eb
+compare_admin "gc, the run's grace period" gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of the run's" gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, the environment does not replace the run's" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "record a grace period below 0" env python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["grace_hours"] = -5; json.dump(d, open(p, "w"))' @ROOT@/state/runs/g1/journal.json
+compare_admin "gc, a recorded grace period below 0" env EB_STAGED_REBUILD_GRACE_HOURS=1 @CMD@ gc --state-root @ROOT@/state --dry-run
+# A grace period given as an option or in EB_STAGED_REBUILD_GRACE_HOURS must
+# be a number of hours, 0 or more. A word that looks like a negative number
+# is an option's value, as argparse takes it.
+compare_admin "gc, --grace-hours below 0" gc --state-root @ROOT@/state --grace-hours -5 --dry-run
+compare_admin "gc, --grace-hours=-5" gc --state-root @ROOT@/state --grace-hours=-5 --dry-run
+compare_admin "gc, --grace-hours -1e3" gc --state-root @ROOT@/state --grace-hours -1e3 --dry-run
+compare_admin "gc, --grace-hours nan" gc --state-root @ROOT@/state --grace-hours nan --dry-run
+compare_admin "gc, --grace-hours inf" gc --state-root @ROOT@/state --grace-hours inf --dry-run
+compare_admin "gc, --grace-hours -inf" gc --state-root @ROOT@/state --grace-hours -inf --dry-run
+compare_admin "gc, --grace-hours -0" gc --state-root @ROOT@/state --grace-hours -0 --dry-run
+compare_admin "gc, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, nan in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=nan @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, inf and white space in the environment" env $'EB_STAGED_REBUILD_GRACE_HOURS= inf\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=5h @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, an empty grace period in the environment" env EB_STAGED_REBUILD_GRACE_HOURS= @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, a grace period in the environment that needs quoting" env $'EB_STAGED_REBUILD_GRACE_HOURS=it\'s\t' @CMD@ gc --state-root @ROOT@/state --dry-run
+compare_admin "gc, --grace-hours instead of a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --grace-hours 1 --dry-run
+compare_admin "gc, a bad --lock-timeout before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ gc --state-root @ROOT@/state --lock-timeout x --dry-run
+compare_admin "gc, --lock-timeout -5" gc --state-root @ROOT@/state --lock-timeout -5 --dry-run
+compare_admin "run, --grace-hours below 0" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --grace-hours -5 --dry-run -- demo-1.eb
+compare_admin "run, a grace period below 0 in the environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a grace period in the environment that is not a number" env EB_STAGED_REBUILD_GRACE_HOURS=abc @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad environment" env EB_STAGED_REBUILD_GRACE_HOURS=-5 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run, a free-space reserve below 0 in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, a free-space reserve in the environment that is not an integer" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an empty free-space reserve in the environment" env EB_STAGED_REBUILD_MIN_FREE_BYTES= @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, an environment reserve above the supported range" env EB_STAGED_REBUILD_MIN_FREE_BYTES=18446744073709551616 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, --min-free-bytes instead of a bad environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=site-policy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --min-free-bytes 0 --dry-run -- demo-1.eb
+compare_admin "run, no easyconfig before a bad free-space environment reserve" env EB_STAGED_REBUILD_MIN_FREE_BYTES=-1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --dry-run
+compare_admin "run --dry-run, whitespace-padded free-space environment" env "EB_STAGED_REBUILD_MIN_FREE_BYTES=	4096 " @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run, whitespace-padded negative free-space environment" env "EB_STAGED_REBUILD_MIN_FREE_BYTES= -1 " @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -- demo-1.eb
+compare_admin "run, eb arguments from a negative number on" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --dry-run -5 demo-1.eb
+compare_admin "rollback the run with a grace period of 0 hours" rollback --state-root @ROOT@/state g1
+compare_admin "run, a grace period of -0 hours" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id g2 --skip-live-check --grace-hours -0 --module demo/1 -- demo-1.eb
+compare_admin "rollback the run with a grace period of -0 hours" rollback --state-root @ROOT@/state g2
+# EB_STAGED_REBUILD_STATE_ROOT is the default of --state-root for every
+# command: --state-root wins, an empty value is no default, and the usage
+# shows the option in brackets.
+compare_admin "run, for the state root from the environment" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id s1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "status, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status s1
+compare_admin "resume, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume s1
+compare_admin "verify, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify s1
+compare_admin "list, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list
+compare_admin "gc, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --dry-run
+compare_admin "retire --dry-run, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire --module-file @ROOT@/modules/all/demo/1.lua --dry-run
+compare_admin "rollback, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback s1
+compare_admin "status, --state-root instead of the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/nostate @CMD@ status --state-root @ROOT@/state s1
+compare_admin "status, an empty state root in the environment" env EB_STAGED_REBUILD_STATE_ROOT= @CMD@ status
+compare_admin "status --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --help
+compare_admin "status, an unknown option with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ status --nope
+compare_admin "resume --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ resume --help
+compare_admin "verify --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ verify --help
+compare_admin "list --help, the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ list --help
+compare_admin "rollback, no run id with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ rollback
+compare_admin "gc, bad grace with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ gc --grace-hours x
+compare_admin "retire, no module file with the state root from the environment" env EB_STAGED_REBUILD_STATE_ROOT=@ROOT@/state @CMD@ retire
+# A module to rebuild has to be an installed directory; the refusal says
+# what the path is instead, as "run, no installed target" does for one
+# that is missing.
+compare_admin "put a file where an installation would be" env touch @ROOT@/software/demo/file
+compare_admin "run, --module names a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id n2 --skip-live-check --module demo/file -- demo-1.eb
+compare_admin "remove the file" env rm @ROOT@/software/demo/file
+echo fail-before > "${site}/plan"
+export FAKE_LEDGER_PLAN_NAME=plan
+compare_admin "run, ledger append fails" env FAKE_LEDGER_PLAN=@ROOT@/plan @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r6 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume delivers the record" resume --state-root @ROOT@/state r6
+compare_admin "ledger records so far" env cat @ROOT@/ledger.jsonl
+# The ledger policy a run started with is frozen in its journal: a change
+# while a record is pending, after the run completed, or during the build
+# is refused, and nothing is appended.
+ledger_edit() {
+    python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d[sys.argv[2]] = json.loads(sys.argv[3]); json.dump(d, open(p, "w"))' \
+        "${site}/ledger.json" "$1" "${2//@ROOT@/${site}}"
+}
+cp "${site}/ledger.json" "${site}/ledger.json.orig"; echo fail-before > "${site}/plan3"
+ledger_restore() { cp "${site}/ledger.json.orig" "${site}/ledger.json"; }
+compare_admin "run, ledger append fails again" env FAKE_LEDGER_PLAN=@ROOT@/plan3 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r14 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+ledger_edit required false
+compare_admin "resume after the ledger became optional" resume --state-root @ROOT@/state r14
+ledger_restore; ledger_edit actor '"other"'
+compare_admin "resume after the ledger actor changed" resume --state-root @ROOT@/state r14
+ledger_restore
+compare_admin "resume after the policy is restored" resume --state-root @ROOT@/state r14
+ledger_edit log '"@ROOT@/redirected.jsonl"'
+compare_admin "resume a completed run with its ledger redirected" resume --state-root @ROOT@/state r14
+ledger_restore
+compare_admin "run, the build changes the ledger policy" env FAKE_EB_LEDGER_EDIT=@ROOT@/ledger.json @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r15 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+ledger_restore
+compare_admin "ledger records after the policy cases" env cat @ROOT@/ledger.jsonl
+# A correction the ledger did not acknowledge is delivered by rollback, not
+# resume: refused before anything changes when the ledger is required, rolled
+# back with its records waiting when it is not. The line is printed once.
+echo fail-before > "${site}/plan4"
+printf 'fail-before\nfail-before\n' > "${site}/plan5"
+printf 'ok\nfail-before\n' > "${site}/plan6"
+compare_admin "run, a ledger run to roll back" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r16 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the ledger refuses the correction" env FAKE_LEDGER_PLAN=@ROOT@/plan4 @CMD@ rollback --state-root @ROOT@/state r16
+compare_admin "rollback again delivers the correction" rollback --state-root @ROOT@/state r16
+ledger_edit required false
+compare_admin "run, an optional ledger" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r17 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "rollback, the correction records wait" env FAKE_LEDGER_PLAN=@ROOT@/plan5 @CMD@ rollback --state-root @ROOT@/state r17
+compare_admin "rollback again delivers the waiting records" rollback --state-root @ROOT@/state r17
+ledger_restore
+compare_admin "run, the finished record waits" env FAKE_LEDGER_PLAN=@ROOT@/plan6 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r18 --skip-live-check --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume delivers the finished record" resume --state-root @ROOT@/state r18
+compare_admin "rollback the run whose finished record waited" rollback --state-root @ROOT@/state r18
+compare_admin "ledger records after the rollback cases" env cat @ROOT@/ledger.jsonl
+# A stage that run --verify refuses, then published with --force: its
+# started and finished records carry build.verify, the rollback's
+# corrections do not.
+compare_admin "run --verify, ledger, a stage that fails verify" env 'FAKE_EB_EXTRA={"elf": {"bin/demo": {"needed": ["libgone.so.1"], "runpath": "$ORIGIN/../lib"}}}' @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id f1 --skip-live-check --verify --ledger-config @ROOT@/ledger.json --module demo/1 -- demo-1.eb
+compare_admin "resume it with --force, ledger" resume --state-root @ROOT@/state --force f1
+compare_admin "rollback the forced ledger run" rollback --state-root @ROOT@/state f1
+compare_admin "ledger records after the forced run" env cat @ROOT@/ledger.jsonl
+# A generation-pointer record (schema 3) is not applied as a directory swap.
+mkdir -p "${site}/state/runs/foreign"
+printf '{"schema": 3, "publication": "generation-pointer", "kind": "publish", "run_id": "foreign", "state": "built", "software": "%s/software", "modules": "%s/modules", "state_root": "%s/state", "modules_plan": [{"rel": "all/demo/1.lua", "generation": "%s/hidden-generation", "live_module": "%s/modules/all/demo/1.lua"}], "ledger_policy": {"actor": "x"}}\n' \
+    "${site}" "${site}" "${site}" "${site}" "${site}" > "${site}/state/runs/foreign/journal.json"
+compare_admin "resume a generation-pointer record" resume --state-root @ROOT@/state foreign
+compare_admin "status of a generation-pointer record" status --state-root @ROOT@/state foreign
+rm -rf "${site}/state/runs/foreign"
+compare_admin "run, eb fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb /bin/false --run-id r3 --skip-live-check --module demo/1 -- demo-1.eb
+# The bwrap backend, with the fake bwrap first on PATH and eb answering
+# --version: present stage keys (5.4.2), the 5.3 layout without them, an
+# unknown release without them, an overlay mount, and a failed probe.
+bw='env PATH=@ROOT@/bin:'"${PATH}"
+compare_admin "run, bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b1 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, 5.3 layout without stage keys" ${bw} FAKE_EB_VERSION=5.3.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b2 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, unknown release without stage keys" ${bw} FAKE_EB_VERSION=5.5.0 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b3 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, 5.4.1 without stage keys" ${bw} FAKE_EB_VERSION=5.4.1 FAKE_EB_KEYS=legacy @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b7 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap, --robot leaves no mount point behind" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_UNBUILT=M4/1.4.20,zlib/1.3.1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b9 --skip-live-check -- demo-1.eb --robot
+compare_admin "run, bwrap, overlay" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_OVERLAY=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b4 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, bwrap probe fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id b5 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, auto prefers bwrap" ${bw} FAKE_EB_VERSION=5.4.2 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --run-id b6 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, auto when bwrap fails" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run, auto with no sandbox uses installpath" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_BWRAP_FAIL=1 FAKE_UNSHARE_FAIL=1 @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend auto --eb @ROOT@/eb --run-id b8 --skip-live-check --module demo/1 -- demo-1.eb
+for v in 5.3.0 5.3.1 5.4.0 5.4.1 5.4.2 5.5.0; do
+    compare_admin "probe, EasyBuild ${v} stage keys" ${bw} FAKE_EB_VERSION=${v} @CMD@ probe --path @ROOT@/state --json --eb @ROOT@/eb
+done
+compare_admin "gc, retire, gc and keeps" gc --state-root @ROOT@/state --dry-run
+compare_admin "retire --dry-run, a directory" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo --dry-run
+compare_admin "retire, a directory" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo
+compare_admin "retire, a symlinked module file" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/symlink.lua
+compare_admin "retire, no root assignment" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/noroot.lua
+compare_admin "resume a retire record" resume --state-root @ROOT@/state @RETIRE@
+compare_admin "retire after a rollback" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
+printf 'local root = "software/demo/1"\n-- rewritten\n' > "${site}/modules/all/demo/1.lua"
+compare_admin "rollback over a new module file" rollback --state-root @ROOT@/state @RETIRE@
+rm "${site}/modules/all/demo/1.lua"
+compare_admin "rollback after the new file is gone" rollback --state-root @ROOT@/state @RETIRE@
+compare_admin "gc after the retire is rolled back" gc --state-root @ROOT@/state --grace-hours 0
+# A software directory another tracked module still names is kept: the
+# alias is tracked through a rolled-back retire, then the module is retired.
+cp "${site}/modules/all/demo/1.lua" "${site}/modules/all/demo/alias.lua"
+compare_admin "retire an alias" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/alias.lua
+compare_admin "rollback the alias retire" rollback --state-root @ROOT@/state @RETIRE@
+compare_admin "retire the module again" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
+compare_admin "gc keeps a directory a live module names" gc --state-root @ROOT@/state --grace-hours 0 --dry-run
+compare_admin "rollback the module retire" rollback --state-root @ROOT@/state @RETIRE@
+other_base=$(other_fs_base)
+if [ -n "${other_base}" ]; then
+    shm=$(mktemp -d "${other_base}/esr-diff.XXXXXX")
+    compare_admin "retire, state root on another filesystem" retire --state-root "${shm}/state" --module-file @ROOT@/modules/all/link/1.lua
+    rm -rf -- "${shm}"
+else
+    echo "DIFF retire, state root on another filesystem: no second filesystem among /dev/shm, /var/tmp, /tmp and HOME"
+    diffs=$((diffs + 1))
+fi
+compare_admin "run, no installed target" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module nope/1 -- nope-1.eb
+compare_admin "run, symlinked target" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module link/1 -- demo-1.eb
+compare_admin "run, module escapes" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module ../outside/1 -- demo-1.eb
+compare_admin "run, symlinked state root" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/statelink --backend installpath --eb @ROOT@/eb --run-id r10 --skip-live-check --module demo/1 -- demo-1.eb
+compare_admin "run, missing prepare" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r11 --skip-live-check --prepare @ROOT@/no-such-policy --module demo/1 -- demo-1.eb
+compare_admin "run, prepare fails" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id r12 --skip-live-check --prepare @ROOT@/prepare-fails --module demo/1 -- demo-1.eb
+cp "${site}/prepare-ok" "${site}/prepare-fails"
+python3 - "${site}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["saved_prepared"] = journal["modules_plan"][0].pop("prepared")
+path.write_text(json.dumps(journal))
+PY
+compare_admin "resume reports an incomplete publication plan" resume --state-root @ROOT@/state r12
+python3 - "${site}/state/journal/r12.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+journal = json.loads(path.read_text())
+journal["modules_plan"][0]["prepared"] = journal["modules_plan"][0].pop("saved_prepared")
+path.write_text(json.dumps(journal))
+PY
+compare_admin "resume after the prepare is fixed" resume --state-root @ROOT@/state r12
+compare_admin "the prepare ran once" env cat @ROOT@/prepare-count
+compare_admin "rollback a prepared run" rollback --state-root @ROOT@/state r12
+# The publication barrier: a policy that leaves the second of two staged
+# generations without build evidence, or unreadable, publishes neither.
+pr='--software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --skip-live-check'
+# shellcheck disable=SC2086
+compare_admin "run, prepare barrier, second generation incomplete" env FAKE_EB_RELS=alpha/1,beta/1 @CMD@ run ${pr} --run-id p1 --prepare @ROOT@/prepare-barrier-rename --module alpha/1 --module beta/1 -- alpha-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, prepare barrier, second generation unreadable" env FAKE_EB_RELS=alpha/1,beta/1 @CMD@ run ${pr} --run-id p2 --prepare @ROOT@/prepare-barrier-chmod --module alpha/1 --module beta/1 -- alpha-1.eb
+chmod -R u+rwX "${site}/state/generations/p2"
+compare_admin "module files after the barrier" env cat @ROOT@/modules/all/alpha/1.lua @ROOT@/modules/all/beta/1.lua
+# A policy sees the publication context and restricts the staged tree
+# before the module file changes.
+# shellcheck disable=SC2086
+compare_admin "run, prepare restricts the staged tree" run ${pr} --run-id p3 --prepare @ROOT@/prepare-context --module demo/1 -- demo-1.eb
+compare_admin "the context the prepare saw" env cat @ROOT@/context.json
+compare_admin "modes after a restricting prepare" env sh -c 'cd "$1" && find . -printf "%m %p\n" | LC_ALL=C sort' sh @ROOT@/software/demo/1
+# A published module retired: gc removes the hidden sibling and leaves the
+# live tree for the operator.
+compare_admin "retire a published module" retire --state-root @ROOT@/state --module-file @ROOT@/modules/all/demo/1.lua
+compare_admin "gc after a published module is retired" gc --state-root @ROOT@/state --grace-hours 0
+compare_admin "rollback the published module retire" rollback --state-root @ROOT@/state @RETIRE@
+# --build-dir passes --buildpath to eb when set, preserves eb_args and
+# EASYBUILD_BUILDPATH when unset, persists through resume, and refuses
+# paths inside the generation or the live prefix.
+r="${site}"
+mkdir -p "${r}/scratch-outside"
+ln -s "${r}/scratch-outside" "${r}/scratch-link"
+ln -s "${r}/software/demo/via-link" "${r}/bad-sw-link"
+ln -s "${r}/modules/all/via-link" "${r}/bad-mod-link"
+ln -s "${r}/state/generations/via-link" "${r}/bad-gen-link"
+printf 'file\n' > "${r}/build-file"
+compare_admin "run --dry-run, --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir @ROOT@/scratch-outside --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run --dry-run, relative --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --build-dir rel/build --dry-run --module demo/1 -- demo-1.eb
+compare_admin "run, --build-dir overrides EASYBUILD_BUILDPATH and --buildpath" env EASYBUILD_BUILDPATH=@ROOT@/ignored-env FAKE_EB_ARGV=@ROOT@/bp_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd1 --skip-live-check --build-dir @ROOT@/scratch-link --module demo/1 -- demo-1.eb --buildpath=@ROOT@/ignored-arg
+compare_admin "the argv with --build-dir" env cat @ROOT@/bp_argv
+compare_admin "rollback the --build-dir run" rollback --state-root @ROOT@/state bd1
+compare_admin "run, without --build-dir keeps --buildpath" env EASYBUILD_BUILDPATH=@ROOT@/kept-env FAKE_EB_ARGV=@ROOT@/nobp_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd2 --skip-live-check --module demo/1 -- demo-1.eb --buildpath=@ROOT@/kept-arg
+compare_admin "the argv without --build-dir" env cat @ROOT@/nobp_argv
+compare_admin "rollback the run without --build-dir" rollback --state-root @ROOT@/state bd2
+compare_admin "run, --build-dir, bwrap" ${bw} FAKE_EB_VERSION=5.4.2 FAKE_EB_ARGV=@ROOT@/bw_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend bwrap --eb @ROOT@/eb --run-id bd3 --skip-live-check --build-dir @ROOT@/scratch-outside --module demo/1 -- demo-1.eb
+compare_admin "the bwrap argv with --build-dir" env cat @ROOT@/bw_argv
+compare_admin "rollback the bwrap --build-dir run" rollback --state-root @ROOT@/state bd3
+compare_admin "run, --build-dir, userns" env FAKE_EB_ARGV=@ROOT@/ns_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend userns --eb @ROOT@/eb --run-id bd4 --skip-live-check --build-dir @ROOT@/scratch-outside --module demo/1 -- demo-1.eb
+compare_admin "the userns argv with --build-dir" env cat @ROOT@/ns_argv
+compare_admin "rollback the userns --build-dir run" rollback --state-root @ROOT@/state bd4
+compare_admin "run, --build-dir fails then resume" env FAKE_EB_FAIL=1 FAKE_EB_ARGV=@ROOT@/res_argv @CMD@ run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --run-id bd5 --skip-live-check --build-dir rel/resume-build --module demo/1 -- demo-1.eb
+compare_admin "resume reuses recorded --build-dir" env FAKE_EB_ARGV=@ROOT@/res_argv @CMD@ resume --state-root @ROOT@/state bd5
+compare_admin "the resume argv with --build-dir" env cat @ROOT@/res_argv
+compare_admin "rollback the resumed --build-dir run" rollback --state-root @ROOT@/state bd5
+compare_admin "run, empty --build-dir" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir= --dry-run -- demo-1.eb
+compare_admin "run, --build-dir is generations" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/state/generations --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside generation" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/state/generations/r1/build --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside live software" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/software/demo --dry-run -- demo-1.eb
+compare_admin "run, --build-dir inside live modules" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/modules/all --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into software" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-sw-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into modules" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-mod-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir symlink into generation" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/bad-gen-link --dry-run -- demo-1.eb
+compare_admin "run, --build-dir is a file" run --software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --build-dir @ROOT@/build-file --dry-run -- demo-1.eb
+# verify: a stage with a missing library, a build directory reference and a
+# link into an EasyBuild temporary directory. A run publishes it as before;
+# with --verify it is not published until it is forced, and a missing Lmod
+# refuses one until Lmod loads it from the stage.
+vx='{"elf": {"bin/demo": {"needed": ["libgone.so.1", "libdemo.so.1"], "runpath": "$ORIGIN/../lib"}, "lib/libdemo.so.1": {"wide": false, "machine": 3}}, "text": {"share/demo.pc": "prefix=@ROOT@/build/demo/1\n"}, "links": {"lib/libt.so": "/tmp/eb-abcd1234/libt.so"}}'
+vr='--software @ROOT@/software --modules @ROOT@/modules --state-root @ROOT@/state --backend installpath --eb @ROOT@/eb --skip-live-check --module demo/1'
+# shellcheck disable=SC2086
+compare_admin "run, a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v0 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "a run without --verify writes no report" env ls @ROOT@/state/runs/v0
+compare_admin "rollback the run without --verify" rollback --state-root @ROOT@/state v0
+# shellcheck disable=SC2086
+compare_admin "run, --force without --verify" run ${vr} --force --run-id v9 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run --verify, verify fails" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --verify --run-id v1 -- demo-1.eb --buildpath=@ROOT@/build
+compare_admin "the verify report" env cat @ROOT@/state/runs/v1/verify.json
+compare_admin "verify the refused stage" verify --state-root @ROOT@/state v1
+compare_admin "verify, no such run" verify --state-root @ROOT@/state nope
+compare_admin "verify a complete run" verify --state-root @ROOT@/state r2
+compare_admin "verify a retire record" verify --state-root @ROOT@/state @RETIRE@
+compare_admin "resume, the journal keeps --verify" resume --state-root @ROOT@/state v1
+compare_admin "resume --force" resume --state-root @ROOT@/state --force v1
+compare_admin "rollback the forced run" rollback --state-root @ROOT@/state v1
+compare_admin "resume --force, a run without --verify" resume --state-root @ROOT@/state --force r2
+compare_admin "resume --verify, a complete run" resume --state-root @ROOT@/state --verify r2
+printf '#!/bin/sh\nexit 42\n' > "${site}/prepare-later"; chmod +x "${site}/prepare-later"
+# shellcheck disable=SC2086
+compare_admin "run, the prepare fails before a stage verify would refuse" env FAKE_EB_EXTRA="${vx}" @CMD@ run ${vr} --run-id v3 --prepare @ROOT@/prepare-later -- demo-1.eb --buildpath=@ROOT@/build
+printf '#!/bin/sh\nexit 0\n' > "${site}/prepare-later"
+compare_admin "resume --verify checks the stage" resume --state-root @ROOT@/state --verify v3
+compare_admin "a later resume checks it too" resume --state-root @ROOT@/state v3
+compare_admin "resume --force publishes it" resume --state-root @ROOT@/state --force v3
+compare_admin "rollback the run resumed with --verify" rollback --state-root @ROOT@/state v3
+# shellcheck disable=SC2086
+compare_admin "run --verify, Lmod missing" env LMOD_CMD=@ROOT@/no-lmod @CMD@ run ${vr} --verify --run-id v2 -- demo-1.eb
+compare_admin "verify with Lmod" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ verify --state-root @ROOT@/state v2
+compare_admin "resume the verified stage" env LMOD_CMD="${repo_root}/tests/fake_lmod.py" @CMD@ resume --state-root @ROOT@/state v2
+compare_admin "rollback the verified run" rollback --state-root @ROOT@/state v2
+compare_admin "list every generation" list --state-root @ROOT@/state
+# rollback --latest, and rollback --to over more than one run. The
+# prepare-context run left the live tree group-only; verify refuses a stage
+# that would widen it.
+chmod 755 "${site}/software/demo/1"
+for g in g1 g2 g3; do
+    # shellcheck disable=SC2086
+    compare_admin "run, generation ${g}" env FAKE_EB_MODULE_NOTE="${g}" @CMD@ run ${vr} --run-id "${g}" -- demo-1.eb
+done
+compare_admin "rollback, no run id" rollback --state-root @ROOT@/state
+compare_admin "rollback, a run id and --to" rollback --state-root @ROOT@/state --to g1 g2
+compare_admin "rollback, a run id and --latest" rollback --state-root @ROOT@/state --latest g2
+compare_admin "rollback, --latest and --to" rollback --state-root @ROOT@/state --latest --to g1
+compare_admin "rollback, --to without a value" rollback --state-root @ROOT@/state --to
+compare_admin "rollback, two run ids" rollback --state-root @ROOT@/state g2 g3
+compare_admin "rollback --to, no such run" rollback --state-root @ROOT@/state --to nope
+compare_admin "rollback --to a retire record" rollback --state-root @ROOT@/state --to @RETIRE@
+compare_admin "rollback --to a rolled-back run" rollback --state-root @ROOT@/state --to v1
+compare_admin "rollback --to over two runs" rollback --state-root @ROOT@/state --to g1
+compare_admin "rollback --to the live run" rollback --state-root @ROOT@/state --to g1
+compare_admin "list after rollback --to" list --state-root @ROOT@/state
+compare_admin "rollback --latest" rollback --state-root @ROOT@/state --latest
+# shellcheck disable=SC2086
+compare_admin "run, generation l1" run ${vr} --run-id l1 -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, a ledger generation" run ${vr} --run-id l2 --ledger-config @ROOT@/ledger.json -- demo-1.eb
+# shellcheck disable=SC2086
+compare_admin "run, generation l3" run ${vr} --run-id l3 -- demo-1.eb
+compare_admin "rollback --to over a ledger run" rollback --state-root @ROOT@/state --to l1
+compare_admin "rollback --latest, no complete run" rollback --latest --state-root @ROOT@/empty
+# gc --keep, and with --check-in-use a tree and a generation kept because a
+# process on this node has them open: one holder opens the paths, and
+# the output names its pid. Without the option gc does not look.
+compare_admin "gc --keep within grace" gc --state-root @ROOT@/state --keep 2 --dry-run
+compare_admin "gc --keep past grace, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --keep, not a count" gc --state-root @ROOT@/state --keep x
+compare_admin "gc --keep, negative" gc --state-root @ROOT@/state --keep=-1
+compare_admin "gc --keep, a negative number as the next word" gc --state-root @ROOT@/state --keep -1
+compare_admin "gc --keep, a value with a quote" gc --state-root @ROOT@/state --keep "a'b"
+# The holder prints a line once it has every path open and lets go when it
+# reads one back.
+coproc HOLDER {
+    exec python3 -c 'import os, sys; fds = [os.open(p, os.O_RDONLY) for p in sys.argv[1:]]; print("ready", flush=True); sys.stdin.readline()' \
+        "${site}/software/demo/.1.l2" "${site}/state/generations/l1"
+}
+holder_out=${HOLDER[0]} holder_in=${HOLDER[1]}
+read -r _ <&"${holder_out}"
+compare_admin "gc --keep, a tree in use without --check-in-use, dry run" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --dry-run
+compare_admin "gc --check-in-use keeps a tree and a generation in use" gc --state-root @ROOT@/state --keep 1 --grace-hours 0 --check-in-use
+echo release >&"${holder_in}"
+wait "${HOLDER_PID}"
+compare_admin "gc --keep once the tree is free" gc --state-root @ROOT@/state --keep 1 --grace-hours 0
+compare_admin "list after gc --keep" list --state-root @ROOT@/state
+unset NORM_HASH
+
+# The live-tree snapshot a journal records, as JSON.
+snap="${work}/snaptree"
+mkdir -p "${snap}/a/b" "${snap}/c"
+printf 'x' > "${snap}/a/b/f"
+printf 'y' > "${snap}/top"
+ln -s ../c "${snap}/a/dirlink"
+ln -s top "${snap}/filelink"
+for p in "${snap}" "${snap}/top" "${snap}/filelink" "${snap}/missing"; do
+    "${TOOL_BIN}" __snapshot "${p}" 2>&1 | scrub | norm > "${work}/snap.out"
+    settle "snapshot ${p##*/}" "${work}/snap.out"
+done
+
+echo "${diffs} differences"
+[ "${diffs}" -eq 0 ]

@@ -1,0 +1,221 @@
+exit 0
+--- out
+remove: @SITE@/fstate/generations/f1 (generation of a failed run)
+--- err
+--- journals
+{
+  "backend": "installpath",
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/fstate/generations/f1/software",
+    "--installpath-modules=@SITE@/fstate/generations/f1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 3,
+  "generation_removed_at": TIME,
+  "generation_root": "@SITE@/fstate/generations/f1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [],
+  "manifests": {},
+  "message": "generation removed",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 3",
+      "stage_path_keys": null,
+      "version_text": "fake eb forced failure"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "run_id": "f1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "state": "failed",
+  "state_root": "@SITE@/fstate",
+  "updated_at": TIME
+}
+{
+  "backend": "bwrap",
+  "message": "retired tree removed",
+  "modules_plan": [
+    {
+      "live_software": "@SITE@/software/old/2",
+      "published_at": 1000.5,
+      "rel": "old/2",
+      "retired": "@SITE@/software/old/.2.0001",
+      "retired_removed_at": TIME,
+      "status": "published"
+    }
+  ],
+  "publication": "directory-swap",
+  "run_id": "r1",
+  "schema": 2,
+  "state": "complete"
+}
+{"schema": 2, "run_id": "r9", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "kept/3", "status": "published", "live_software": "@SITE@/software/kept/3", "retired": "@SITE@/software/kept/.3.0001", "live_module": "@SITE@/modules/all/kept/3.lua", "published_at": 1000.5}]}
+{
+  "created_at": TIME,
+  "kind": "retire",
+  "links_plan": [
+    {
+      "live_path": "@SITE@/modules/all/demo/symlink.lua",
+      "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/symlink.lua",
+      "status": "retired",
+      "target": "1.lua"
+    }
+  ],
+  "message": "module file retired",
+  "module_hash": "0ae2e664fdec4ecfb3cf06d1d693dd5879a1a1e0ec32784b135d0ac517fbffc6",
+  "module_path": "@SITE@/modules/all/demo/1.lua",
+  "modules_plan": [],
+  "reason": "moved",
+  "retired_at": TIME,
+  "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/1.lua",
+  "rolled_back_at": null,
+  "run_id": "retire-STAMP",
+  "schema": 2,
+  "software_dir": "@SITE@/software/demo/1",
+  "state": "retired",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+--- metrics
+--- tree
+.
+./bin
+./bin/bwrap
+./bin/unshare
+./cross-filesystem-argv
+./eb
+./ebstack
+./fstate
+./fstate/generations
+./fstate/runs
+./fstate/runs/f1
+./fstate/runs/f1/journal.json
+./keep-logs
+./ledger.json
+./modules
+./modules/all
+./modules/all/alpha
+./modules/all/alpha/1.lua
+./modules/all/beta
+./modules/all/beta/1.lua
+./modules/all/classy
+./modules/all/classy/1.lua
+./modules/all/demo
+./modules/all/demo/noroot.lua
+./modules/all/kept
+./modules/all/kept/3.lua
+./modules/all/link
+./modules/all/link/1.lua
+./modules/lib
+./modules/lib/classy
+./modules/lib/classy/1.lua
+./modules/tools
+./modules/tools/classy
+./modules/tools/classy/1.lua
+./prepare-barrier-chmod
+./prepare-barrier-rename
+./prepare-context
+./prepare-fails
+./prepare-ok
+./software
+./software/alpha
+./software/alpha/1
+./software/alpha/1/easybuild
+./software/alpha/1/easybuild/alpha-1.eb
+./software/beta
+./software/beta/1
+./software/beta/1/easybuild
+./software/beta/1/easybuild/beta-1.eb
+./software/classy
+./software/classy/1
+./software/demo
+./software/demo/1
+./software/demo/1/easybuild
+./software/demo/1/easybuild/demo-1.eb
+./software/kept
+./software/kept/.3.0001
+./software/kept/3
+./software/kept/alias
+./software/link
+./software/link/1
+./software/old
+./software/old/2
+./software/real
+./software/real/1
+./software/real/1/easybuild
+./state
+./state/retired
+./state/retired/STAMP
+./state/retired/STAMP/PATH
+./state/retired/STAMP@SITE@
+./state/retired/STAMP@SITE@/modules
+./state/retired/STAMP@SITE@/modules/all
+./state/retired/STAMP@SITE@/modules/all/demo
+./state/retired/STAMP@SITE@/modules/all/demo/1.lua
+./state/retired/STAMP@SITE@/modules/all/demo/symlink.lua
+./state/retired/STAMP@WORK@
+./state/runs
+./state/runs/r1
+./state/runs/r1/journal.json
+./state/runs/r9
+./state/runs/r9/journal.json
+./state/runs/retire-STAMP
+./state/runs/retire-STAMP/journal.json
+./statelink
+./usage.log

@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 class CliRetireNoRootAssignmentParityTests(unittest.TestCase):
@@ -17,16 +17,9 @@ class CliRetireNoRootAssignmentParityTests(unittest.TestCase):
             with open(module_file, "w", encoding="utf-8") as handle:
                 handle.write('whatis("no root here")\n')
 
-            proc = run_cli("retire", "--state-root", state_root, "--module-file", module_file, "--dry-run")
-            self.assertEqual(proc.returncode, 2)
-            self.assertIn("has no root assignment, so its software directory is unknown", proc.stderr)
-
-            binary = run_cli_optional_binary(
-                "retire", "--state-root", state_root, "--module-file", module_file, "--dry-run"
-            )
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2)
-                self.assertIn("has no root assignment, so its software directory is unknown", binary.stderr)
+            binary = run_cli("retire", "--state-root", state_root, "--module-file", module_file, "--dry-run")
+            self.assertEqual(binary.returncode, 2)
+            self.assertIn("has no root assignment, so its software directory is unknown", binary.stderr)
 
 
 if __name__ == "__main__":

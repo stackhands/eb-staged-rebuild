@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 class ProbeBlackBoxExtraTests(unittest.TestCase):
@@ -36,11 +36,7 @@ class ProbeBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
             self.assertEqual(proc.stdout, "")
             self.assertIn("[Errno 17] File exists", proc.stderr)
-            binary = run_cli_optional_binary("probe", "--path", path, "--json")
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2, binary.stdout + binary.stderr)
-                self.assertEqual(proc.stdout, binary.stdout)
-                self.assertEqual(proc.stderr, binary.stderr)
+            golden(self, "stderr", scrub(proc.stderr, TMP=tmp, PATH=path))
 
     def test_probe_json_accepts_non_utf8_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,11 +47,6 @@ class ProbeBlackBoxExtraTests(unittest.TestCase):
             self.assertEqual(proc.stderr, "")
             data = json.loads(proc.stdout)
             self.assertEqual(data["filesystem"]["path"], path)
-            binary = run_cli_optional_binary("probe", "--path", path, "--json")
-            if binary is not None:
-                self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
-                self.assertEqual(binary.stderr, "")
-                self.assertEqual(json.loads(binary.stdout), data)
 
     def test_probe_empty_path_does_not_search_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,11 +59,6 @@ class ProbeBlackBoxExtraTests(unittest.TestCase):
             proc = run_cli("probe", "--json", "--eb", "probe-empty-path-eb", env=env, cwd=tmp)
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(proc.stderr, "")
-            binary = run_cli_optional_binary("probe", "--json", "--eb", "probe-empty-path-eb", env=env, cwd=tmp)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 0, binary.stdout + binary.stderr)
-                self.assertEqual(proc.stdout, binary.stdout)
-                self.assertEqual(proc.stderr, binary.stderr)
             report = json.loads(proc.stdout)
             self.assertFalse(report["easybuild"]["found"])
             self.assertIsNone(report["easybuild"]["path"])

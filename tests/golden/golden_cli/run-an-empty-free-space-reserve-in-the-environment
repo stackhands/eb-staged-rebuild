@@ -1,0 +1,2793 @@
+exit 2
+--- out
+--- err
+eb-staged-rebuild: EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: ''
+--- journals
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--robot"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/c1/software",
+    "--installpath-modules=@SITE@/state/generations/c1/modules",
+    "demo-1.eb",
+    "--robot",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/c1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/c1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/c1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.c1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/c1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "c1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/c1/modules",
+  "stage_software": "@SITE@/state/generations/c1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--robot",
+    "--output-style=rich"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/c2/software",
+    "--installpath-modules=@SITE@/state/generations/c2/modules",
+    "demo-1.eb",
+    "--robot",
+    "--output-style=rich",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/c2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/c2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/c2/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.c2",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/c2/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "c2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/c2/modules",
+  "stage_software": "@SITE@/state/generations/c2/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--robot"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/d1/software",
+    "--installpath-modules=@SITE@/state/generations/d1/modules",
+    "demo-1.eb",
+    "--robot",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/d1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/d1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/d1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.d1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/d1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "d1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/d1/modules",
+  "stage_software": "@SITE@/state/generations/d1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--robot"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/d2/software",
+    "--installpath-modules=@SITE@/state/generations/d2/modules",
+    "demo-1.eb",
+    "--robot",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/d2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/d2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/d2/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.d2",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/d2/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "d2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/d2/modules",
+  "stage_software": "@SITE@/state/generations/d2/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--robot"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/d3/software",
+    "--installpath-modules=@SITE@/state/generations/d3/modules",
+    "demo-1.eb",
+    "--robot",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/d3",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/d3/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/d3/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.d3",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/d3/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "d3",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/d3/modules",
+  "stage_software": "@SITE@/state/generations/d3/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/f1/software",
+    "--installpath-modules=@SITE@/state/generations/f1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/f1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/f1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/f1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.f1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/f1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "f1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/f1/modules",
+  "stage_software": "@SITE@/state/generations/f1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{"backend": "installpath", "completed_at": TIME, "created_at": TIME, "eb_args": ["demo-1.eb"], "eb_command": ["@SITE@/eb", "--installpath-software=@SITE@/state/generations/g1/software", "--installpath-modules=@SITE@/state/generations/g1/modules", "demo-1.eb", "--rebuild"], "eb_executable": "@SITE@/eb", "eb_returncode": 0, "generation_removed_at": null, "generation_root": "@SITE@/state/generations/g1", "grace_hours": -5, "ledger_config": null, "ledger_policy": null, "links_plan": [{"created": false, "live_path": "@SITE@/modules/tools/demo/1.lua", "rel": "tools/demo/1.lua", "status": "present", "target": "@SITE@/modules/all/demo/1.lua"}], "manifests": {}, "message": "published", "module_rels": ["demo/1"], "modules": "@SITE@/modules", "modules_plan": [{"backup": "@SITE@/state/runs/g1/backups/all/demo/1.lua", "existed": true, "live_module": "@SITE@/modules/all/demo/1.lua", "live_software": "@SITE@/software/demo/1", "new_hash": "HASH", "old_hash": "HASH", "prepared": "@SITE@/state/runs/g1/prepared/all/demo/1.lua", "previous_root": "@SITE@/software/demo/1", "published_at": TIME, "rel": "all/demo/1.lua", "retired": "@SITE@/software/demo/.1.g1", "staged": "@SITE@/state/generations/g1/software/demo/1", "status": "published", "swap_method": "renameat2-exchange"}], "mount_points": [], "prepare_complete": false, "prepare_executable": null, "prepare_returncode": null, "probes": {"bwrap": HOST, "easybuild": {"bwrap_info_keys": null, "eb": "@SITE@/eb", "found": true, "framework_version": null, "keys_source": null, "legacy_layout_versions": ["5.3.0", "5.3.1"], "path": "@SITE@/eb", "reason": "eb --version exited 2", "stage_path_keys": null, "version_text": "missing installpath"}, "filesystem": {"device": "HOST", "fstype": "HOST", "mount": "HOST", "path": "@SITE@/software"}, "flock": {"cross_node": "unmeasured", "method": "flock", "scope": "one kernel, the host that runs this process"}, "rename_exchange": {"device": "HOST", "errno": null, "error": null, "flag": 2, "fstype": "HOST", "mount": "HOST", "ok": true, "path": "@SITE@/software"}, "user_namespaces": HOST, "userns_sandbox": HOST}, "publication": "directory-swap", "require_exchange": false, "retired_at": null, "run_id": "g1", "schema": 2, "skip_live_check": true, "software": "@SITE@/software", "stage_how": "installpath", "stage_modules": "@SITE@/state/generations/g1/modules", "stage_software": "@SITE@/state/generations/g1/software", "state": "complete", "state_root": "@SITE@/state", "updated_at": TIME}{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/m1/software",
+    "--installpath-modules=@SITE@/state/generations/m1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/m1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/m1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/m1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.m1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/m1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "MODULEPATH=/elsewhere/modules/all\n\nmissing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "m1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/m1/modules",
+  "stage_software": "@SITE@/state/generations/m1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb",
+    "--suffix-modules-path",
+    "one"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/m2/software",
+    "--installpath-modules=@SITE@/state/generations/m2/modules",
+    "demo-1.eb",
+    "--suffix-modules-path",
+    "one",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/m2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/m2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/m2/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.m2",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/m2/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "MODULEPATH=/elsewhere/modules/all\n\nmissing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "m2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/m2/modules",
+  "stage_software": "@SITE@/state/generations/m2/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/o1/software",
+    "--installpath-modules=@SITE@/state/generations/o1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/o1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/o1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/o1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.o1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/o1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "o1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/o1/modules",
+  "stage_software": "@SITE@/state/generations/o1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/o2/software",
+    "--installpath-modules=@SITE@/state/generations/o2/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/o2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/o2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/o2/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.o2",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/o2/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "o2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/o2/modules",
+  "stage_software": "@SITE@/state/generations/o2/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/r-required/software",
+    "--installpath-modules=@SITE@/state/generations/r-required/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/r-required",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/r-required/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/r-required/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.r-required",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/r-required/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": true,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "r-required",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/r-required/modules",
+  "stage_software": "@SITE@/state/generations/r-required/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "bwrap",
+  "message": "retired tree removed",
+  "modules_plan": [
+    {
+      "live_software": "@SITE@/software/old/2",
+      "published_at": 1000.5,
+      "rel": "old/2",
+      "retired": "@SITE@/software/old/.2.0001",
+      "retired_removed_at": TIME,
+      "status": "published"
+    }
+  ],
+  "publication": "directory-swap",
+  "run_id": "r1",
+  "schema": 2,
+  "state": "complete"
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/r2/software",
+    "--installpath-modules=@SITE@/state/generations/r2/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/r2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": true,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "created",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "published",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/r2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/r2/prepared/all/demo/1.lua",
+      "previous_root": "software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.r2",
+      "staged": "@SITE@/state/generations/r2/software/demo/1",
+      "status": "published",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "run_id": "r2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/r2/modules",
+  "stage_software": "@SITE@/state/generations/r2/software",
+  "state": "complete",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "userns",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "/usr/bin/unshare",
+    "--user",
+    "--map-root-user",
+    "--mount",
+    "--fork",
+    "--kill-child",
+    "SANDBOX",
+    "--read-only",
+    "@SITE@/software",
+    "--read-only",
+    "@SITE@/modules",
+    "--",
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/r4/software",
+    "--installpath-modules=@SITE@/state/generations/r4/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/r4",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "published",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/r4/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/r4/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.r4",
+      "staged": "@SITE@/state/generations/r4/software/demo/1",
+      "status": "published",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "run_id": "r4",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/r4/modules",
+  "stage_software": "@SITE@/state/generations/r4/software",
+  "state": "complete",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/r5/software",
+    "--installpath-modules=@SITE@/state/generations/r5/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/r5",
+  "grace_hours": 144.0,
+  "ledger_config": "@SITE@/ledger.json",
+  "ledger_policy": {
+    "action": "rebuild-inplace",
+    "actor": "ci",
+    "eb_stack": "@SITE@/ebstack",
+    "head": "@SITE@/head.json",
+    "key": "@SITE@/key.pem",
+    "log": "@SITE@/ledger.jsonl",
+    "path": "@SITE@/ledger.json",
+    "required": true,
+    "stack": "s",
+    "target": "t",
+    "timeout": 120
+  },
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/r5/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/r5/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.r5",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/r5/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "r5",
+  "schema": 4,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/r5/modules",
+  "stage_software": "@SITE@/state/generations/r5/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{"schema": 2, "run_id": "r9", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "kept/3", "status": "published", "live_software": "@SITE@/software/kept/3", "retired": "@SITE@/software/kept/.3.0001", "live_module": "@SITE@/modules/all/kept/3.lua", "published_at": 1000.5}]}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/rel1/software",
+    "--installpath-modules=@SITE@/state/generations/rel1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/rel1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/rel1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/rel1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.rel1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/rel1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "MODULEPATH=/elsewhere/modules/all\n\nmissing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "rel1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/rel1/modules",
+  "stage_software": "@SITE@/state/generations/rel1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "userns",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "/usr/bin/unshare",
+    "--user",
+    "--map-root-user",
+    "--mount",
+    "--fork",
+    "--kill-child",
+    "SANDBOX",
+    "--read-only",
+    "@SITE@/software",
+    "--read-only",
+    "@SITE@/modules",
+    "--",
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/rel2/software",
+    "--installpath-modules=@SITE@/state/generations/rel2/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/rel2",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/rel2/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/rel2/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.rel2",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/rel2/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "MODULEPATH=\n\nmissing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "rel2",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/rel2/modules",
+  "stage_software": "@SITE@/state/generations/rel2/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "created_at": TIME,
+  "kind": "retire",
+  "links_plan": [
+    {
+      "live_path": "@SITE@/modules/all/demo/symlink.lua",
+      "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/symlink.lua",
+      "status": "restored",
+      "target": "1.lua"
+    }
+  ],
+  "message": "rolled back",
+  "module_hash": "HASH",
+  "module_path": "@SITE@/modules/all/demo/1.lua",
+  "modules_plan": [],
+  "reason": "moved",
+  "retired_at": TIME,
+  "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/1.lua",
+  "rolled_back_at": TIME,
+  "run_id": "retire-STAMP",
+  "schema": 2,
+  "software_dir": "@SITE@/software/demo/1",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "created_at": TIME,
+  "kind": "retire",
+  "links_plan": [
+    {
+      "live_path": "@SITE@/modules/lib/classy/1.lua",
+      "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/lib/classy/1.lua",
+      "status": "restored",
+      "target": "../../all/classy/1.lua"
+    },
+    {
+      "live_path": "@SITE@/modules/tools/classy/1.lua",
+      "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/tools/classy/1.lua",
+      "status": "restored",
+      "target": "@SITE@/modules/all/classy/1.lua"
+    }
+  ],
+  "message": "rolled back",
+  "module_hash": "HASH",
+  "module_path": "@SITE@/modules/all/classy/1.lua",
+  "modules_plan": [],
+  "reason": "",
+  "retired_at": TIME,
+  "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/classy/1.lua",
+  "rolled_back_at": TIME,
+  "run_id": "retire-STAMP",
+  "schema": 2,
+  "software_dir": "@SITE@/software/classy/1",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/rp1/software",
+    "--installpath-modules=@SITE@/state/generations/rp1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/rp1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "published",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/rp1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/rp1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.rp1",
+      "staged": "@SITE@/state/generations/rp1/software/demo/1",
+      "status": "published",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "run_id": "rp1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/rp1/modules",
+  "stage_software": "@SITE@/state/generations/rp1/software",
+  "state": "complete",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+{
+  "backend": "installpath",
+  "completed_at": TIME,
+  "created_at": TIME,
+  "eb_args": [
+    "demo-1.eb"
+  ],
+  "eb_command": [
+    "@SITE@/eb",
+    "--installpath-software=@SITE@/state/generations/w1/software",
+    "--installpath-modules=@SITE@/state/generations/w1/modules",
+    "demo-1.eb",
+    "--rebuild"
+  ],
+  "eb_executable": "@SITE@/eb",
+  "eb_returncode": 0,
+  "generation_removed_at": null,
+  "generation_root": "@SITE@/state/generations/w1",
+  "grace_hours": 144.0,
+  "ledger_config": null,
+  "ledger_policy": null,
+  "links_plan": [
+    {
+      "created": false,
+      "live_path": "@SITE@/modules/tools/demo/1.lua",
+      "rel": "tools/demo/1.lua",
+      "status": "present",
+      "target": "@SITE@/modules/all/demo/1.lua"
+    }
+  ],
+  "manifests": {},
+  "message": "rolled back",
+  "module_rels": [
+    "demo/1"
+  ],
+  "modules": "@SITE@/modules",
+  "modules_plan": [
+    {
+      "backup": "@SITE@/state/runs/w1/backups/all/demo/1.lua",
+      "existed": true,
+      "live_module": "@SITE@/modules/all/demo/1.lua",
+      "live_software": "@SITE@/software/demo/1",
+      "new_hash": "HASH",
+      "old_hash": "HASH",
+      "prepared": "@SITE@/state/runs/w1/prepared/all/demo/1.lua",
+      "previous_root": "@SITE@/software/demo/1",
+      "published_at": TIME,
+      "rel": "all/demo/1.lua",
+      "retired": "@SITE@/software/demo/.1.w1",
+      "rollback_method": "renameat2-exchange",
+      "staged": "@SITE@/state/generations/w1/software/demo/1",
+      "status": "restored",
+      "swap_method": "renameat2-exchange"
+    }
+  ],
+  "mount_points": [],
+  "prepare_complete": false,
+  "prepare_executable": null,
+  "prepare_returncode": null,
+  "probes": {
+    "bwrap": HOST,
+    "easybuild": {
+      "bwrap_info_keys": null,
+      "eb": "@SITE@/eb",
+      "found": true,
+      "framework_version": null,
+      "keys_source": null,
+      "legacy_layout_versions": [
+        "5.3.0",
+        "5.3.1"
+      ],
+      "path": "@SITE@/eb",
+      "reason": "eb --version exited 2",
+      "stage_path_keys": null,
+      "version_text": "missing installpath"
+    },
+    "filesystem": {
+      "device": "HOST",
+      "fstype": "HOST",
+      "mount": "HOST",
+      "path": "@SITE@/software"
+    },
+    "flock": {
+      "cross_node": "unmeasured",
+      "method": "flock",
+      "scope": "one kernel, the host that runs this process"
+    },
+    "rename_exchange": {
+      "device": "HOST",
+      "errno": null,
+      "error": null,
+      "flag": 2,
+      "fstype": "HOST",
+      "mount": "HOST",
+      "ok": true,
+      "path": "@SITE@/software"
+    },
+    "user_namespaces": HOST,
+    "userns_sandbox": HOST
+  },
+  "publication": "directory-swap",
+  "require_exchange": false,
+  "retired_at": null,
+  "rolled_back_at": TIME,
+  "run_id": "w1",
+  "schema": 2,
+  "skip_live_check": true,
+  "software": "@SITE@/software",
+  "stage_how": "installpath",
+  "stage_modules": "@SITE@/state/generations/w1/modules",
+  "stage_software": "@SITE@/state/generations/w1/software",
+  "state": "rolled_back",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+--- metrics
+metrics.prom
+# HELP eb_staged_rebuild_generations_present Real generation directories present after garbage collection.
+# TYPE eb_staged_rebuild_generations_present gauge
+eb_staged_rebuild_generations_present 1
+# HELP eb_staged_rebuild_current_generation_age_seconds Age of the newest generation that remains published live.
+# TYPE eb_staged_rebuild_current_generation_age_seconds gauge
+eb_staged_rebuild_current_generation_age_seconds TIME
+# HELP eb_staged_rebuild_last_gc_timestamp_seconds Unix timestamp of the last completed garbage-collection pass.
+# TYPE eb_staged_rebuild_last_gc_timestamp_seconds gauge
+eb_staged_rebuild_last_gc_timestamp_seconds TIME
+--- tree
+.
+./bin
+./bin/bwrap
+./bin/unshare
+./cross-filesystem-argv
+./eb
+./ebstack
+./head.json
+./keep-logs
+./ledger.json
+./ledger.jsonl
+./metrics-link.prom
+./metrics-target
+./metrics.prom
+./modules
+./modules/all
+./modules/all/alpha
+./modules/all/alpha/1.lua
+./modules/all/beta
+./modules/all/beta/1.lua
+./modules/all/classy
+./modules/all/classy/1.lua
+./modules/all/demo
+./modules/all/demo/1.lua
+./modules/all/demo/noroot.lua
+./modules/all/demo/symlink.lua
+./modules/all/kept
+./modules/all/kept/3.lua
+./modules/all/link
+./modules/all/link/1.lua
+./modules/lib
+./modules/lib/classy
+./modules/lib/classy/1.lua
+./modules/tools
+./modules/tools/classy
+./modules/tools/classy/1.lua
+./modules/tools/demo
+./modules/tools/demo/1.lua
+./prepare-barrier-chmod
+./prepare-barrier-rename
+./prepare-context
+./prepare-fails
+./prepare-ok
+./software
+./software/alpha
+./software/alpha/1
+./software/alpha/1/easybuild
+./software/alpha/1/easybuild/alpha-1.eb
+./software/beta
+./software/beta/1
+./software/beta/1/easybuild
+./software/beta/1/easybuild/beta-1.eb
+./software/classy
+./software/classy/1
+./software/demo
+./software/demo/.1.c1
+./software/demo/.1.c1/.eb-staged-rebuild-complete
+./software/demo/.1.c1/PAYLOAD
+./software/demo/.1.c1/easybuild
+./software/demo/.1.c1/easybuild/demo-1.eb
+./software/demo/.1.c2
+./software/demo/.1.c2/.eb-staged-rebuild-complete
+./software/demo/.1.c2/PAYLOAD
+./software/demo/.1.c2/easybuild
+./software/demo/.1.c2/easybuild/demo-1.eb
+./software/demo/.1.d1
+./software/demo/.1.d1/.eb-staged-rebuild-complete
+./software/demo/.1.d1/PAYLOAD
+./software/demo/.1.d1/easybuild
+./software/demo/.1.d1/easybuild/demo-1.eb
+./software/demo/.1.d2
+./software/demo/.1.d2/.eb-staged-rebuild-complete
+./software/demo/.1.d2/PAYLOAD
+./software/demo/.1.d2/easybuild
+./software/demo/.1.d2/easybuild/demo-1.eb
+./software/demo/.1.d3
+./software/demo/.1.d3/.eb-staged-rebuild-complete
+./software/demo/.1.d3/PAYLOAD
+./software/demo/.1.d3/easybuild
+./software/demo/.1.d3/easybuild/demo-1.eb
+./software/demo/.1.f1
+./software/demo/.1.f1/.eb-staged-rebuild-complete
+./software/demo/.1.f1/PAYLOAD
+./software/demo/.1.f1/easybuild
+./software/demo/.1.f1/easybuild/demo-1.eb
+./software/demo/.1.g1
+./software/demo/.1.g1/.eb-staged-rebuild-complete
+./software/demo/.1.g1/PAYLOAD
+./software/demo/.1.g1/easybuild
+./software/demo/.1.g1/easybuild/demo-1.eb
+./software/demo/.1.m1
+./software/demo/.1.m1/.eb-staged-rebuild-complete
+./software/demo/.1.m1/PAYLOAD
+./software/demo/.1.m1/easybuild
+./software/demo/.1.m1/easybuild/demo-1.eb
+./software/demo/.1.m2
+./software/demo/.1.m2/.eb-staged-rebuild-complete
+./software/demo/.1.m2/PAYLOAD
+./software/demo/.1.m2/easybuild
+./software/demo/.1.m2/easybuild/demo-1.eb
+./software/demo/.1.o1
+./software/demo/.1.o1/.eb-staged-rebuild-complete
+./software/demo/.1.o1/PAYLOAD
+./software/demo/.1.o1/easybuild
+./software/demo/.1.o1/easybuild/demo-1.eb
+./software/demo/.1.o2
+./software/demo/.1.o2/.eb-staged-rebuild-complete
+./software/demo/.1.o2/PAYLOAD
+./software/demo/.1.o2/easybuild
+./software/demo/.1.o2/easybuild/demo-1.eb
+./software/demo/.1.r-required
+./software/demo/.1.r-required/.eb-staged-rebuild-complete
+./software/demo/.1.r-required/PAYLOAD
+./software/demo/.1.r-required/easybuild
+./software/demo/.1.r-required/easybuild/demo-1.eb
+./software/demo/.1.r2
+./software/demo/.1.r2/easybuild
+./software/demo/.1.r2/easybuild/demo-1.eb
+./software/demo/.1.r4
+./software/demo/.1.r4/.eb-staged-rebuild-complete
+./software/demo/.1.r4/PAYLOAD
+./software/demo/.1.r4/bin
+./software/demo/.1.r4/bin/demo
+./software/demo/.1.r4/easybuild
+./software/demo/.1.r4/easybuild/demo-1.eb
+./software/demo/.1.r4/lib
+./software/demo/.1.r4/lib/libdemo.so
+./software/demo/.1.r4/lib/pkgconfig
+./software/demo/.1.r4/lib/pkgconfig/demo.pc
+./software/demo/.1.r5
+./software/demo/.1.r5/.eb-staged-rebuild-complete
+./software/demo/.1.r5/PAYLOAD
+./software/demo/.1.r5/easybuild
+./software/demo/.1.r5/easybuild/demo-1.eb
+./software/demo/.1.rel1
+./software/demo/.1.rel1/.eb-staged-rebuild-complete
+./software/demo/.1.rel1/PAYLOAD
+./software/demo/.1.rel1/easybuild
+./software/demo/.1.rel1/easybuild/demo-1.eb
+./software/demo/.1.rel2
+./software/demo/.1.rel2/.eb-staged-rebuild-complete
+./software/demo/.1.rel2/PAYLOAD
+./software/demo/.1.rel2/easybuild
+./software/demo/.1.rel2/easybuild/demo-1.eb
+./software/demo/.1.rp1
+./software/demo/.1.rp1/.eb-staged-rebuild-complete
+./software/demo/.1.rp1/PAYLOAD
+./software/demo/.1.rp1/easybuild
+./software/demo/.1.rp1/easybuild/demo-1.eb
+./software/demo/.1.w1
+./software/demo/.1.w1/.eb-staged-rebuild-complete
+./software/demo/.1.w1/PAYLOAD
+./software/demo/.1.w1/easybuild
+./software/demo/.1.w1/easybuild/demo-1.eb
+./software/demo/1
+./software/demo/1/.eb-staged-rebuild-complete
+./software/demo/1/PAYLOAD
+./software/demo/1/easybuild
+./software/demo/1/easybuild/demo-1.eb
+./software/kept
+./software/kept/.3.0001
+./software/kept/3
+./software/kept/alias
+./software/link
+./software/link/1
+./software/old
+./software/old/2
+./software/real
+./software/real/1
+./software/real/1/easybuild
+./space-env-state
+./space-state
+./space64-state
+./state
+./state/generations
+./state/generations/c1
+./state/generations/c1/modules
+./state/generations/c1/modules/all
+./state/generations/c1/modules/all/demo
+./state/generations/c1/modules/all/demo/1.lua
+./state/generations/c1/modules/tools
+./state/generations/c1/modules/tools/demo
+./state/generations/c1/modules/tools/demo/1.lua
+./state/generations/c1/software
+./state/generations/c1/software/demo
+./state/generations/c2
+./state/generations/c2/modules
+./state/generations/c2/modules/all
+./state/generations/c2/modules/all/demo
+./state/generations/c2/modules/all/demo/1.lua
+./state/generations/c2/modules/tools
+./state/generations/c2/modules/tools/demo
+./state/generations/c2/modules/tools/demo/1.lua
+./state/generations/c2/software
+./state/generations/c2/software/demo
+./state/generations/d1
+./state/generations/d1/modules
+./state/generations/d1/modules/all
+./state/generations/d1/modules/all/demo
+./state/generations/d1/modules/all/demo/1.lua
+./state/generations/d1/modules/tools
+./state/generations/d1/modules/tools/demo
+./state/generations/d1/modules/tools/demo/1.lua
+./state/generations/d1/software
+./state/generations/d1/software/demo
+./state/generations/d2
+./state/generations/d2/modules
+./state/generations/d2/modules/all
+./state/generations/d2/modules/all/demo
+./state/generations/d2/modules/all/demo/1.lua
+./state/generations/d2/modules/tools
+./state/generations/d2/modules/tools/demo
+./state/generations/d2/modules/tools/demo/1.lua
+./state/generations/d2/software
+./state/generations/d2/software/demo
+./state/generations/d3
+./state/generations/d3/modules
+./state/generations/d3/modules/all
+./state/generations/d3/modules/all/demo
+./state/generations/d3/modules/all/demo/1.lua
+./state/generations/d3/modules/tools
+./state/generations/d3/modules/tools/demo
+./state/generations/d3/modules/tools/demo/1.lua
+./state/generations/d3/software
+./state/generations/d3/software/demo
+./state/generations/f1
+./state/generations/f1/modules
+./state/generations/f1/modules/all
+./state/generations/f1/modules/all/demo
+./state/generations/f1/modules/all/demo/1.lua
+./state/generations/f1/modules/tools
+./state/generations/f1/modules/tools/demo
+./state/generations/f1/modules/tools/demo/1.lua
+./state/generations/f1/software
+./state/generations/f1/software/demo
+./state/generations/g1
+./state/generations/g1/modules
+./state/generations/g1/modules/all
+./state/generations/g1/modules/all/demo
+./state/generations/g1/modules/all/demo/1.lua
+./state/generations/g1/modules/tools
+./state/generations/g1/modules/tools/demo
+./state/generations/g1/modules/tools/demo/1.lua
+./state/generations/g1/software
+./state/generations/g1/software/demo
+./state/generations/m1
+./state/generations/m1/modules
+./state/generations/m1/modules/all
+./state/generations/m1/modules/all/demo
+./state/generations/m1/modules/all/demo/1.lua
+./state/generations/m1/modules/tools
+./state/generations/m1/modules/tools/demo
+./state/generations/m1/modules/tools/demo/1.lua
+./state/generations/m1/software
+./state/generations/m1/software/demo
+./state/generations/m2
+./state/generations/m2/modules
+./state/generations/m2/modules/all
+./state/generations/m2/modules/all/demo
+./state/generations/m2/modules/all/demo/1.lua
+./state/generations/m2/modules/tools
+./state/generations/m2/modules/tools/demo
+./state/generations/m2/modules/tools/demo/1.lua
+./state/generations/m2/software
+./state/generations/m2/software/demo
+./state/generations/o1
+./state/generations/o1/modules
+./state/generations/o1/modules/all
+./state/generations/o1/modules/all/demo
+./state/generations/o1/modules/all/demo/1.lua
+./state/generations/o1/modules/tools
+./state/generations/o1/modules/tools/demo
+./state/generations/o1/modules/tools/demo/1.lua
+./state/generations/o1/software
+./state/generations/o1/software/demo
+./state/generations/o2
+./state/generations/o2/modules
+./state/generations/o2/modules/all
+./state/generations/o2/modules/all/demo
+./state/generations/o2/modules/all/demo/1.lua
+./state/generations/o2/modules/tools
+./state/generations/o2/modules/tools/demo
+./state/generations/o2/modules/tools/demo/1.lua
+./state/generations/o2/software
+./state/generations/o2/software/demo
+./state/generations/r-required
+./state/generations/r-required/modules
+./state/generations/r-required/modules/all
+./state/generations/r-required/modules/all/demo
+./state/generations/r-required/modules/all/demo/1.lua
+./state/generations/r-required/modules/tools
+./state/generations/r-required/modules/tools/demo
+./state/generations/r-required/modules/tools/demo/1.lua
+./state/generations/r-required/software
+./state/generations/r-required/software/demo
+./state/generations/r2
+./state/generations/r2/modules
+./state/generations/r2/modules/all
+./state/generations/r2/modules/all/demo
+./state/generations/r2/modules/all/demo/1.lua
+./state/generations/r2/modules/tools
+./state/generations/r2/modules/tools/demo
+./state/generations/r2/modules/tools/demo/1.lua
+./state/generations/r2/software
+./state/generations/r2/software/demo
+./state/generations/r4
+./state/generations/r4/modules
+./state/generations/r4/modules/all
+./state/generations/r4/modules/all/demo
+./state/generations/r4/modules/all/demo/1.lua
+./state/generations/r4/modules/tools
+./state/generations/r4/modules/tools/demo
+./state/generations/r4/modules/tools/demo/1.lua
+./state/generations/r4/software
+./state/generations/r4/software/demo
+./state/generations/r5
+./state/generations/r5/modules
+./state/generations/r5/modules/all
+./state/generations/r5/modules/all/demo
+./state/generations/r5/modules/all/demo/1.lua
+./state/generations/r5/modules/tools
+./state/generations/r5/modules/tools/demo
+./state/generations/r5/modules/tools/demo/1.lua
+./state/generations/r5/software
+./state/generations/r5/software/demo
+./state/generations/rel1
+./state/generations/rel1/modules
+./state/generations/rel1/modules/all
+./state/generations/rel1/modules/all/demo
+./state/generations/rel1/modules/all/demo/1.lua
+./state/generations/rel1/modules/tools
+./state/generations/rel1/modules/tools/demo
+./state/generations/rel1/modules/tools/demo/1.lua
+./state/generations/rel1/software
+./state/generations/rel1/software/demo
+./state/generations/rel2
+./state/generations/rel2/modules
+./state/generations/rel2/modules/all
+./state/generations/rel2/modules/all/demo
+./state/generations/rel2/modules/all/demo/1.lua
+./state/generations/rel2/modules/tools
+./state/generations/rel2/modules/tools/demo
+./state/generations/rel2/modules/tools/demo/1.lua
+./state/generations/rel2/software
+./state/generations/rel2/software/demo
+./state/generations/rp1
+./state/generations/rp1/modules
+./state/generations/rp1/modules/all
+./state/generations/rp1/modules/all/demo
+./state/generations/rp1/modules/all/demo/1.lua
+./state/generations/rp1/modules/tools
+./state/generations/rp1/modules/tools/demo
+./state/generations/rp1/modules/tools/demo/1.lua
+./state/generations/rp1/software
+./state/generations/rp1/software/demo
+./state/generations/w1
+./state/generations/w1/modules
+./state/generations/w1/modules/all
+./state/generations/w1/modules/all/demo
+./state/generations/w1/modules/all/demo/1.lua
+./state/generations/w1/modules/tools
+./state/generations/w1/modules/tools/demo
+./state/generations/w1/modules/tools/demo/1.lua
+./state/generations/w1/software
+./state/generations/w1/software/demo
+./state/retired
+./state/retired/STAMP
+./state/retired/STAMP/PATH
+./state/retired/STAMP@SITE@
+./state/retired/STAMP@SITE@/modules
+./state/retired/STAMP@SITE@/modules/all
+./state/retired/STAMP@SITE@/modules/all/classy
+./state/retired/STAMP@SITE@/modules/all/demo
+./state/retired/STAMP@SITE@/modules/lib
+./state/retired/STAMP@SITE@/modules/lib/classy
+./state/retired/STAMP@SITE@/modules/tools
+./state/retired/STAMP@SITE@/modules/tools/classy
+./state/retired/STAMP@WORK@
+./state/runs
+./state/runs/c1
+./state/runs/c1/backups
+./state/runs/c1/backups/all
+./state/runs/c1/backups/all/demo
+./state/runs/c1/backups/all/demo/1.lua
+./state/runs/c1/journal.json
+./state/runs/c1/prepared
+./state/runs/c1/prepared/all
+./state/runs/c1/prepared/all/demo
+./state/runs/c1/prepared/all/demo/1.lua
+./state/runs/c2
+./state/runs/c2/backups
+./state/runs/c2/backups/all
+./state/runs/c2/backups/all/demo
+./state/runs/c2/backups/all/demo/1.lua
+./state/runs/c2/journal.json
+./state/runs/c2/prepared
+./state/runs/c2/prepared/all
+./state/runs/c2/prepared/all/demo
+./state/runs/c2/prepared/all/demo/1.lua
+./state/runs/d1
+./state/runs/d1/backups
+./state/runs/d1/backups/all
+./state/runs/d1/backups/all/demo
+./state/runs/d1/backups/all/demo/1.lua
+./state/runs/d1/journal.json
+./state/runs/d1/prepared
+./state/runs/d1/prepared/all
+./state/runs/d1/prepared/all/demo
+./state/runs/d1/prepared/all/demo/1.lua
+./state/runs/d2
+./state/runs/d2/backups
+./state/runs/d2/backups/all
+./state/runs/d2/backups/all/demo
+./state/runs/d2/backups/all/demo/1.lua
+./state/runs/d2/journal.json
+./state/runs/d2/prepared
+./state/runs/d2/prepared/all
+./state/runs/d2/prepared/all/demo
+./state/runs/d2/prepared/all/demo/1.lua
+./state/runs/d3
+./state/runs/d3/backups
+./state/runs/d3/backups/all
+./state/runs/d3/backups/all/demo
+./state/runs/d3/backups/all/demo/1.lua
+./state/runs/d3/journal.json
+./state/runs/d3/prepared
+./state/runs/d3/prepared/all
+./state/runs/d3/prepared/all/demo
+./state/runs/d3/prepared/all/demo/1.lua
+./state/runs/f1
+./state/runs/f1/backups
+./state/runs/f1/backups/all
+./state/runs/f1/backups/all/demo
+./state/runs/f1/backups/all/demo/1.lua
+./state/runs/f1/journal.json
+./state/runs/f1/prepared
+./state/runs/f1/prepared/all
+./state/runs/f1/prepared/all/demo
+./state/runs/f1/prepared/all/demo/1.lua
+./state/runs/g1
+./state/runs/g1/backups
+./state/runs/g1/backups/all
+./state/runs/g1/backups/all/demo
+./state/runs/g1/backups/all/demo/1.lua
+./state/runs/g1/journal.json
+./state/runs/g1/prepared
+./state/runs/g1/prepared/all
+./state/runs/g1/prepared/all/demo
+./state/runs/g1/prepared/all/demo/1.lua
+./state/runs/m1
+./state/runs/m1/backups
+./state/runs/m1/backups/all
+./state/runs/m1/backups/all/demo
+./state/runs/m1/backups/all/demo/1.lua
+./state/runs/m1/journal.json
+./state/runs/m1/prepared
+./state/runs/m1/prepared/all
+./state/runs/m1/prepared/all/demo
+./state/runs/m1/prepared/all/demo/1.lua
+./state/runs/m2
+./state/runs/m2/backups
+./state/runs/m2/backups/all
+./state/runs/m2/backups/all/demo
+./state/runs/m2/backups/all/demo/1.lua
+./state/runs/m2/journal.json
+./state/runs/m2/prepared
+./state/runs/m2/prepared/all
+./state/runs/m2/prepared/all/demo
+./state/runs/m2/prepared/all/demo/1.lua
+./state/runs/o1
+./state/runs/o1/backups
+./state/runs/o1/backups/all
+./state/runs/o1/backups/all/demo
+./state/runs/o1/backups/all/demo/1.lua
+./state/runs/o1/journal.json
+./state/runs/o1/prepared
+./state/runs/o1/prepared/all
+./state/runs/o1/prepared/all/demo
+./state/runs/o1/prepared/all/demo/1.lua
+./state/runs/o2
+./state/runs/o2/backups
+./state/runs/o2/backups/all
+./state/runs/o2/backups/all/demo
+./state/runs/o2/backups/all/demo/1.lua
+./state/runs/o2/journal.json
+./state/runs/o2/prepared
+./state/runs/o2/prepared/all
+./state/runs/o2/prepared/all/demo
+./state/runs/o2/prepared/all/demo/1.lua
+./state/runs/r-required
+./state/runs/r-required/backups
+./state/runs/r-required/backups/all
+./state/runs/r-required/backups/all/demo
+./state/runs/r-required/backups/all/demo/1.lua
+./state/runs/r-required/journal.json
+./state/runs/r-required/prepared
+./state/runs/r-required/prepared/all
+./state/runs/r-required/prepared/all/demo
+./state/runs/r-required/prepared/all/demo/1.lua
+./state/runs/r1
+./state/runs/r1/journal.json
+./state/runs/r2
+./state/runs/r2/backups
+./state/runs/r2/backups/all
+./state/runs/r2/backups/all/demo
+./state/runs/r2/backups/all/demo/1.lua
+./state/runs/r2/journal.json
+./state/runs/r2/prepared
+./state/runs/r2/prepared/all
+./state/runs/r2/prepared/all/demo
+./state/runs/r2/prepared/all/demo/1.lua
+./state/runs/r4
+./state/runs/r4/backups
+./state/runs/r4/backups/all
+./state/runs/r4/backups/all/demo
+./state/runs/r4/backups/all/demo/1.lua
+./state/runs/r4/journal.json
+./state/runs/r4/prepared
+./state/runs/r4/prepared/all
+./state/runs/r4/prepared/all/demo
+./state/runs/r4/prepared/all/demo/1.lua
+./state/runs/r5
+./state/runs/r5/backups
+./state/runs/r5/backups/all
+./state/runs/r5/backups/all/demo
+./state/runs/r5/backups/all/demo/1.lua
+./state/runs/r5/events
+./state/runs/r5/events/0000.json
+./state/runs/r5/events/0001.json
+./state/runs/r5/events/0002.json
+./state/runs/r5/events/0003.json
+./state/runs/r5/journal.json
+./state/runs/r5/outbox.json
+./state/runs/r5/prepared
+./state/runs/r5/prepared/all
+./state/runs/r5/prepared/all/demo
+./state/runs/r5/prepared/all/demo/1.lua
+./state/runs/r9
+./state/runs/r9/journal.json
+./state/runs/rel1
+./state/runs/rel1/backups
+./state/runs/rel1/backups/all
+./state/runs/rel1/backups/all/demo
+./state/runs/rel1/backups/all/demo/1.lua
+./state/runs/rel1/journal.json
+./state/runs/rel1/prepared
+./state/runs/rel1/prepared/all
+./state/runs/rel1/prepared/all/demo
+./state/runs/rel1/prepared/all/demo/1.lua
+./state/runs/rel2
+./state/runs/rel2/backups
+./state/runs/rel2/backups/all
+./state/runs/rel2/backups/all/demo
+./state/runs/rel2/backups/all/demo/1.lua
+./state/runs/rel2/journal.json
+./state/runs/rel2/prepared
+./state/runs/rel2/prepared/all
+./state/runs/rel2/prepared/all/demo
+./state/runs/rel2/prepared/all/demo/1.lua
+./state/runs/retire-STAMP
+./state/runs/retire-STAMP/journal.json
+./state/runs/rp1
+./state/runs/rp1/backups
+./state/runs/rp1/backups/all
+./state/runs/rp1/backups/all/demo
+./state/runs/rp1/backups/all/demo/1.lua
+./state/runs/rp1/journal.json
+./state/runs/rp1/prepared
+./state/runs/rp1/prepared/all
+./state/runs/rp1/prepared/all/demo
+./state/runs/rp1/prepared/all/demo/1.lua
+./state/runs/w1
+./state/runs/w1/backups
+./state/runs/w1/backups/all
+./state/runs/w1/backups/all/demo
+./state/runs/w1/backups/all/demo/1.lua
+./state/runs/w1/journal.json
+./state/runs/w1/prepared
+./state/runs/w1/prepared/all
+./state/runs/w1/prepared/all/demo
+./state/runs/w1/prepared/all/demo/1.lua
+./statelink
+./usage.log

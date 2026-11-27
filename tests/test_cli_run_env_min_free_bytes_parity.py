@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 class CliRunEnvMinFreeBytesParityTests(unittest.TestCase):
@@ -15,17 +15,9 @@ class CliRunEnvMinFreeBytesParityTests(unittest.TestCase):
             env["EASYBUILD_INSTALLPATH_MODULES"] = f"{root}/modules"
             env["EB_STAGED_REBUILD_MIN_FREE_BYTES"] = "bogus"
 
-            proc = run_cli("run", "--", "demo.eb", env=env)
-            self.assertEqual(proc.returncode, 2)
-            self.assertIn("EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: 'bogus'", proc.stderr)
-
-            binary = run_cli_optional_binary("run", "--", "demo.eb", env=env)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2)
-                self.assertIn(
-                    "EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: 'bogus'",
-                    binary.stderr,
-                )
+            binary = run_cli("run", "--", "demo.eb", env=env)
+            self.assertEqual(binary.returncode, 2)
+            self.assertIn("EB_STAGED_REBUILD_MIN_FREE_BYTES is not an integer: 'bogus'", binary.stderr)
 
     def test_dry_run_refuses_when_the_reserve_exceeds_free_space(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -50,18 +42,13 @@ class CliRunEnvMinFreeBytesParityTests(unittest.TestCase):
                 "--",
                 "demo.eb",
             )
-            proc = run_cli(*args)
-            self.assertEqual(proc.returncode, 2)
-            self.assertIn("dry-run would refuse:", proc.stdout)
-            self.assertIn("--min-free-bytes requires 18446744073709551615", proc.stdout)
-            self.assertIn("backend:", proc.stdout)
+            binary = run_cli(*args)
+            self.assertEqual(binary.returncode, 2)
+            self.assertIn("dry-run would refuse:", binary.stdout)
+            self.assertIn("--min-free-bytes requires 18446744073709551615", binary.stdout)
+            self.assertIn("backend:", binary.stdout)
             self.assertFalse(os.path.lexists(state))
-            binary = run_cli_optional_binary(*args)
-            if binary is not None:
-                self.assertEqual(binary.returncode, 2)
-                self.assertIn("dry-run would refuse:", binary.stdout)
-                self.assertIn("--min-free-bytes requires 18446744073709551615", binary.stdout)
-                self.assertFalse(os.path.lexists(os.path.join(root, "state")))
+            self.assertFalse(os.path.lexists(os.path.join(root, "state")))
 
 
 if __name__ == "__main__":

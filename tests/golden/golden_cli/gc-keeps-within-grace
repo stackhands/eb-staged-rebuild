@@ -1,0 +1,120 @@
+exit 0
+--- out
+remove: @SITE@/software/old/.2.0001 (previous live tree)
+keep: @SITE@/software/kept/.3.0001 (a live module resolves inside it)
+keep: @SITE@/software/demo/1 (within grace (retired module); ready to remove by hand after ISO)
+--- err
+--- journals
+{"schema": 2, "run_id": "r1", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "old/2", "status": "published", "live_software": "@SITE@/software/old/2", "retired": "@SITE@/software/old/.2.0001", "published_at": 1000.5}]}
+{"schema": 2, "run_id": "r9", "state": "complete", "backend": "bwrap", "modules_plan": [{"rel": "kept/3", "status": "published", "live_software": "@SITE@/software/kept/3", "retired": "@SITE@/software/kept/.3.0001", "live_module": "@SITE@/modules/all/kept/3.lua", "published_at": 1000.5}]}
+{
+  "created_at": TIME,
+  "kind": "retire",
+  "links_plan": [
+    {
+      "live_path": "@SITE@/modules/all/demo/symlink.lua",
+      "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/symlink.lua",
+      "status": "retired",
+      "target": "1.lua"
+    }
+  ],
+  "message": "module file retired",
+  "module_hash": "0ae2e664fdec4ecfb3cf06d1d693dd5879a1a1e0ec32784b135d0ac517fbffc6",
+  "module_path": "@SITE@/modules/all/demo/1.lua",
+  "modules_plan": [],
+  "reason": "moved",
+  "retired_at": TIME,
+  "retired_path": "@SITE@/state/retired/STAMP@SITE@/modules/all/demo/1.lua",
+  "rolled_back_at": null,
+  "run_id": "retire-STAMP",
+  "schema": 2,
+  "software_dir": "@SITE@/software/demo/1",
+  "state": "retired",
+  "state_root": "@SITE@/state",
+  "updated_at": TIME
+}
+--- metrics
+--- tree
+.
+./bin
+./bin/bwrap
+./bin/unshare
+./cross-filesystem-argv
+./eb
+./ebstack
+./keep-logs
+./ledger.json
+./modules
+./modules/all
+./modules/all/alpha
+./modules/all/alpha/1.lua
+./modules/all/beta
+./modules/all/beta/1.lua
+./modules/all/classy
+./modules/all/classy/1.lua
+./modules/all/demo
+./modules/all/demo/noroot.lua
+./modules/all/kept
+./modules/all/kept/3.lua
+./modules/all/link
+./modules/all/link/1.lua
+./modules/lib
+./modules/lib/classy
+./modules/lib/classy/1.lua
+./modules/tools
+./modules/tools/classy
+./modules/tools/classy/1.lua
+./prepare-barrier-chmod
+./prepare-barrier-rename
+./prepare-context
+./prepare-fails
+./prepare-ok
+./software
+./software/alpha
+./software/alpha/1
+./software/alpha/1/easybuild
+./software/alpha/1/easybuild/alpha-1.eb
+./software/beta
+./software/beta/1
+./software/beta/1/easybuild
+./software/beta/1/easybuild/beta-1.eb
+./software/classy
+./software/classy/1
+./software/demo
+./software/demo/1
+./software/demo/1/easybuild
+./software/demo/1/easybuild/demo-1.eb
+./software/kept
+./software/kept/.3.0001
+./software/kept/3
+./software/kept/alias
+./software/link
+./software/link/1
+./software/old
+./software/old/.2.0001
+./software/old/.2.0001/sub
+./software/old/.2.0001/sub/file
+./software/old/2
+./software/real
+./software/real/1
+./software/real/1/easybuild
+./state
+./state/retired
+./state/retired/STAMP
+./state/retired/STAMP/PATH
+./state/retired/STAMP@SITE@
+./state/retired/STAMP@SITE@/modules
+./state/retired/STAMP@SITE@/modules/all
+./state/retired/STAMP@SITE@/modules/all/demo
+./state/retired/STAMP@SITE@/modules/all/demo/1.lua
+./state/retired/STAMP@SITE@/modules/all/demo/symlink.lua
+./state/retired/STAMP@WORK@
+./state/runs
+./state/runs/r1
+./state/runs/r1/journal.json
+./state/runs/r9
+./state/runs/r9/journal.json
+./state/runs/retire-STAMP
+./state/runs/retire-STAMP/journal.json
+./statelink
+./usage.log

@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "kind": "file",
+  "path": "@ROOT@/demo.tcl",
+  "root": "@ROOT@/space dir/pkg/1.0",
+  "root_kind": "dir",
+  "syntax": "tcl"
+}

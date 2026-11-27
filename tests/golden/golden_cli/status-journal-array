@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+eb-staged-rebuild: journal is not a JSON object: @WORK@/state/runs/r4/journal.json

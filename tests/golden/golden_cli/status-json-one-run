@@ -1,0 +1,30 @@
+exit 0
+--- stdout
+{
+  "runs": [
+    {
+      "backend": "bwrap",
+      "kind": "rebuild",
+      "message": "all published",
+      "modules": [
+        {
+          "live_software": "/sw/demo/1",
+          "rel": "demo/1",
+          "retired": "/sw/demo/.1.old",
+          "status": "published"
+        },
+        {
+          "live_software": "/sw/other/2",
+          "rel": "other/2",
+          "retired": null,
+          "status": "pending"
+        }
+      ],
+      "modules_published": 1,
+      "modules_total": 2,
+      "run_id": "r1",
+      "state": "done"
+    }
+  ]
+}
+--- stderr

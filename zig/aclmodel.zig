@@ -144,11 +144,11 @@ fn save(s: Store) void {
     for (s.keys(), s.values()) |key, at| for (at, 0..) |v, i| if (v) |bytes| {
         out.print(A(), "{s} {s} {x}\n", .{ key, names[i], bytes }) catch return;
     };
-    const tmp = A().print("{s}.tmp", .{store_path}) catch return;
-    const fd = sys.openat(fsx.cwd, tmp, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o600) catch return;
-    sys.writeAll(fd, out.items) catch {};
-    sys.close(fd);
-    sys.renameat(fsx.cwd, tmp, fsx.cwd, store_path) catch {};
+    const parent = std.fs.path.dirname(store_path) orelse ".";
+    const name = std.fs.path.basename(store_path);
+    const dir = fsx.openDir(fsx.cwd, parent, false) catch return;
+    defer sys.close(dir);
+    common.state.writePrivate(A(), dir, name, out.items) catch return;
 }
 
 fn keyOf(fd: sys.fd_t) []const u8 {

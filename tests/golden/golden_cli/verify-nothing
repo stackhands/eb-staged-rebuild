@@ -1,0 +1,7 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild verify [-h] --state-root STATE_ROOT
+                                [--lock-timeout LOCK_TIMEOUT]
+                                STAGE
+eb-staged-rebuild verify: error: the following arguments are required: --state-root, STAGE

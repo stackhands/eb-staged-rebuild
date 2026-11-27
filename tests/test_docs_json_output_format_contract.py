@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 def _assert_sorted_json_stdout(testcase: unittest.TestCase, runner) -> None:
@@ -30,22 +30,24 @@ def _assert_sorted_json_stdout(testcase: unittest.TestCase, runner) -> None:
 
 
 class JsonOutputFormatDocTests(unittest.TestCase):
-    def test_docs_describe_sorted_json_and_trailing_newline(self) -> None:
+    def test_docs_describe_the_json_contracts(self) -> None:
         with open("docs/orgmode/reference/json-output.org", encoding="utf-8") as handle:
             text = handle.read()
-        self.assertIn("sorted keys", text)
-        self.assertIn("indented by two spaces", text)
-        self.assertIn("single trailing", text)
-        self.assertIn("newline.", text)
-
-    def test_python_cli_matches_documented_json_format(self) -> None:
-        _assert_sorted_json_stdout(self, run_cli)
+        rows = (
+            ("format", ("sorted keys", "indented by two spaces", "single trailing", "newline.")),
+            (
+                "probe exit 1",
+                ("=--no-create= refused a missing =--path=", "=--require-eb= did not find the =--eb= command"),
+            ),
+            ("resolve", ("when the path was read", "unreadable file")),
+        )
+        for contract, phrases in rows:
+            with self.subTest(contract=contract):
+                for phrase in phrases:
+                    self.assertIn(phrase, text)
 
     def test_binary_cli_matches_documented_json_format(self) -> None:
-        binary = run_cli_optional_binary("--help")
-        if binary is None:
-            self.skipTest("TOOL_BIN is unset")
-        _assert_sorted_json_stdout(self, run_cli_optional_binary)
+        _assert_sorted_json_stdout(self, run_cli)
 
 
 if __name__ == "__main__":

@@ -20,17 +20,19 @@ After the build and its checks, the run goes through these steps under the state
 
 1. A /preparation program/, if =--prepare= names one, gets the path of a JSON file that describes the publication, and may set permissions on the new tree and on the new module file; [[file:../howto/set-permissions.org][Set the permissions of a rebuild before it goes live]] has an example.
    It has to exit 0 and leave the tree complete.
-2. A =started= record for each module goes to the ledger, if =--ledger-config= names one; [[file:ledger.org][What the ledger records]] has the rest.
-3. For each module, the live module file is copied to =runs/RUN_ID/backups/=, the paths the build wrote are changed to the stable path, and the new tree moves to its hidden name, =software/NAME/.VERSION.RUN_ID=.
-4. For each module, the hidden tree and the live one are exchanged.
-5. For each module, the new module file replaces the live one.
+2. With =--verify=, the checks of =verify=: that the libraries each program needs are found, that no file names the build directory or a temporary directory of EasyBuild, that Lmod loads the new module files, and that publishing would not change who may use the installation; [[file:../reference/verify.org][The checks before publication]] lists them.
+   A generation that fails stays =built=, with nothing recorded in the ledger, unless =--force= publishes it all the same.
+3. A =started= record for each module goes to the ledger, if =--ledger-config= names one; [[file:ledger.org][What the ledger records]] has the rest.
+4. For each module, the live module file is copied to =runs/RUN_ID/backups/=, the paths the build wrote are changed to the stable path, and the new tree moves to its hidden name, =software/NAME/.VERSION.RUN_ID=.
+5. For each module, the hidden tree and the live one are exchanged.
+6. For each module, the new module file replaces the live one.
    It keeps the owner, the mode and the access-control list of the module file it replaces, unless the preparation program set others on the new one.
-6. Links that EasyBuild made in the generation's module tree, such as the module files of a module class, are made in the live tree where nothing is at their path.
-7. The run is =complete=, and the ledger gets a =finished= record for each module.
+7. Links that EasyBuild made in the generation's module tree, such as the module files of a module class, are made in the live tree where nothing is at their path.
+8. The run is =complete=, and the ledger gets a =finished= record for each module.
 
 Every directory is exchanged before any module file is replaced, so a module file never names a tree of another run.
-Step 3 changes nothing live.
-When a step from 4 to 6 fails, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
+Steps 2 and 4 change nothing live.
+When a step from 5 to 7 fails, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
 
 *** The exchange
 
@@ -42,7 +44,7 @@ Any other error from the exchange leaves both names as they were.
 The journal records which of the two each module got, as =swap_method=.
 With =--require-exchange=, an unavailable exchange is refused before the journal and build.
 The journal records that policy, and publication, recovery and rollback refuse an unsupported exchange instead of entering the ordinary-rename sequence.
-[[py:eb_staged_rebuild.swap.swap_directories]] and [[zig:eb-staged-rebuild.engine.run_mod.swap.swapDirectories]] do the exchange.
+[[zig:swap.swapDirectories]] does the exchange.
 
 *** The module file
 
@@ -58,6 +60,24 @@ A failure part way exchanges back to the published state, and the rollback can r
 The tree the run published stays under its hidden name until =gc= removes it.
 With a ledger, the rollback adds a =correction= of each =finished= record.
 
+*** Rolling back several runs
+
+=rollback --latest= rolls back the newest =complete= run, by the time its publication completed.
+=rollback --to GEN= rolls back every =complete= run published after the run =GEN= over one of its installations, so that each of them holds the tree =GEN= published again.
+With one such run, that is the rollback of the run.
+With more, it checks everything first, and then makes one pass:
+
+1. Each run to roll back is marked =rolling_back=, with =rollback_to= set to =GEN=.
+2. For each installation, the runs over it are taken oldest first, and the tree to put back moves along their hidden names, one exchange for each run, the last one at the stable path.
+   The stable path changes once, from the newest tree straight to the tree of =GEN=, and the tree of each run ends at its own hidden name, where the rollback of that run alone would have left it.
+   The exchange is the one publication uses, or the three renames when the newest run recorded that the filesystem cannot exchange.
+3. The module file goes back to the one the oldest run saved, or is removed when that run made it.
+4. Newest first, the links each run made are removed, and the run is marked =rolled_back=, with the message =rolled back to GEN=.
+
+A pass that stops part way is finished by the same command: the =.eb-staged-rebuild-complete= in each tree says how far it got.
+Until then the runs stay =rolling_back=, =list= shows their trees as =rolling back=, and =resume= or =rollback= of one of them refuses.
+A pass refuses runs that record to a ledger, since a =correction= names a single publication; those are rolled back one at a time.
+
 ** What was considered and turned down
 
 - /Replacing the module files first./
@@ -66,12 +86,16 @@ With a ledger, the rollback adds a =correction= of each =finished= record.
   A failure in the second module would leave the first one published and the second one not, for a build that installs both.
 - /=chmod= on the live module file./
   On NFSv4 it rewrites the access-control list; the new file is written with the old file's metadata instead.
+- /Rolling back several runs one after the other, newest first./
+  The stable path would hold each tree in between, if only for a moment, and a failure half way would leave a tree live that the operator did not ask for.
 
 ** Limits
 
 - Other programs do not take the state root's lock: one that reads the module files while a run publishes several of them can see some new and some old.
 - Without =RENAME_EXCHANGE=, the stable path is missing for the time between two renames, unless =--require-exchange= disables that fallback.
 - The copy of access-control lists has been tested on ext4 only.
+- =rollback --to= needs the hidden tree of every run it rolls back: once =gc= has removed one of them, it refuses.
+  =gc --keep N= keeps the trees that going back =N= runs needs.
 
 ** Further reading
 

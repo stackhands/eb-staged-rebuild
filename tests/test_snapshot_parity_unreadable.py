@@ -1,36 +1,12 @@
-"""Parity checks for snapshot behavior on unreadable directories."""
+"""Snapshot behavior on unreadable directories."""
 
 from __future__ import annotations
 
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 
-from tests.support import run_cli_optional_binary
-
-
-def _python_snapshot(path: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import json,sys\n"
-                "from eb_staged_rebuild.livecheck import snapshot\n"
-                "try:\n"
-                "  print(json.dumps(snapshot(sys.argv[1]), indent=2, sort_keys=True))\n"
-                "except OSError as exc:\n"
-                "  print(f'eb-staged-rebuild: {exc}', file=sys.stderr)\n"
-                "  raise SystemExit(2)\n"
-            ),
-            path,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+from tests.support import golden, run_cli, scrub
 
 
 class SnapshotParityUnreadableTests(unittest.TestCase):
@@ -48,17 +24,13 @@ class SnapshotParityUnreadableTests(unittest.TestCase):
             os.makedirs(unreadable, exist_ok=True)
             os.chmod(unreadable, 0)
             try:
-                py = _python_snapshot(tmp)
-                zig = run_cli_optional_binary("__snapshot", tmp)
+                zig = run_cli("__snapshot", tmp)
             finally:
                 os.chmod(unreadable, 0o700)
 
-            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
-            self.assertEqual(py.stdout, "")
-            if zig is not None:
-                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
-                self.assertEqual(zig.stdout, "")
-                self.assertEqual(py.stderr, zig.stderr)
+            self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+            self.assertEqual(zig.stdout, "")
+            golden(self, "stderr", scrub(zig.stderr, TMP=tmp))
 
 
 if __name__ == "__main__":

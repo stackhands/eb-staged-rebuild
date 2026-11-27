@@ -2,9 +2,8 @@
 
 The install directory is flushed once while the build is recorded.
 The next flush has to make the rewritten file's directory entry
-durable before that name points at the new inode. Python raises.
-The binary used to ignore the flush after the rename and publish
-the generation anyway.
+durable before that name points at the new inode; a failure there
+refuses publication.
 """
 
 from __future__ import annotations
@@ -12,55 +11,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import textwrap
-import time
 import unittest
 
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "faultfs.c")
-
-
-def _skip(case: unittest.TestCase, reason: str) -> None:
-    if os.environ.get("EB_STAGED_REBUILD_REQUIRE_TESTS") == "1":
-        case.fail(reason)
-    case.skipTest(reason)
-
-
-def _fuse_ready() -> str | None:
-    if not os.path.exists("/dev/fuse"):
-        return "FUSE is not available"
-    if shutil.which("fusermount3") is None or shutil.which("cc") is None:
-        return "FUSE is not available"
-    flags = subprocess.run(
-        ["pkg-config", "--cflags", "--libs", "fuse3"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if flags.returncode != 0:
-        return "FUSE is not available"
-    return None
-
-
-def _compile(binary: str) -> None:
-    flags = subprocess.run(
-        ["pkg-config", "--cflags", "--libs", "fuse3"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    done = subprocess.run(
-        ["cc", "-O2", "-Wall", "-Wextra", "-o", binary, _SRC, *flags.stdout.split()],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if done.returncode != 0:
-        raise AssertionError(done.stderr)
+from tests.support import _compile_fuse_faultfs, _fuse_ready, _skip, _wait_mount
 
 
 class PrefixDirFsyncTests(unittest.TestCase):
@@ -73,22 +28,15 @@ class PrefixDirFsyncTests(unittest.TestCase):
         tool = os.environ.get("TOOL_BIN")
         if not tool:
             _skip(self, "TOOL_BIN is unset")
-        python = self._run("python")
         binary = self._run(tool)
-        detail_py = python.stdout + python.stderr
         detail_bin = binary.stdout + binary.stderr
-        self.assertEqual(python.returncode, 2, detail_py)
         self.assertEqual(binary.returncode, 2, detail_bin)
-        self.assertIn("Input/output error", detail_py)
         self.assertIn("Input/output error", detail_bin)
-        self.assertIn("LIVE old", detail_py)
         self.assertIn("LIVE old", detail_bin)
-        self.assertIn("generations/r1", detail_py)
         self.assertIn("generations/r1", detail_bin)
 
     def _run(self, tool: str) -> subprocess.CompletedProcess[str]:
-        label = "python" if tool == "python" else "zig"
-        work = f"/tmp/dir-fsync-{os.getpid()}-{label}"
+        work = f"/tmp/dir-fsync-{os.getpid()}-zig"
         mnt = os.path.join(work, "mnt")
         if os.path.isdir(mnt) and os.path.ismount(mnt):
             subprocess.run(["fusermount3", "-u", mnt], check=False, timeout=30)
@@ -119,7 +67,7 @@ class PrefixDirFsyncTests(unittest.TestCase):
             )
         os.chmod(eb, 0o755)
         binary = os.path.join(work, "faultfs")
-        _compile(binary)
+        _compile_fuse_faultfs(_SRC, binary)
         os.makedirs(mnt)
         env = dict(os.environ)
         env["FAULTFS_FSYNC_DIR"] = "/generations/r1/software/demo/1"
@@ -133,16 +81,12 @@ class PrefixDirFsyncTests(unittest.TestCase):
             env=env,
         )
         try:
-            self._wait_mount(mnt, mounted)
+            _wait_mount(self, mnt, mounted)
             with open(os.path.join(mnt, "modules", "all", "demo", "1.lua"), "w", encoding="utf-8") as handle:
                 handle.write(f'local root = "{mnt}/software/demo/1"\n')
-            run_env = dict(os.environ)
-            run_env["PYTHONPATH"] = _REPO
-            run_env["PYTHONIOENCODING"] = "utf-8:strict"
-            argv = [sys.executable, "-m", "eb_staged_rebuild"] if tool == "python" else [tool]
             done = subprocess.run(
                 [
-                    *argv,
+                    tool,
                     "run",
                     "--software",
                     os.path.join(mnt, "software"),
@@ -163,7 +107,6 @@ class PrefixDirFsyncTests(unittest.TestCase):
                 ],
                 check=False,
                 capture_output=True,
-                env=run_env,
                 timeout=60,
             )
             live = os.path.join(mnt, "software", "demo", "1", "PAYLOAD")
@@ -189,18 +132,6 @@ class PrefixDirFsyncTests(unittest.TestCase):
         stdout = done.stdout.decode("utf-8", "surrogateescape") + f"\nLIVE {live_text}\nKEPT {kept_text}\n"
         stderr = done.stderr.decode("utf-8", "surrogateescape")
         return subprocess.CompletedProcess(done.args, done.returncode, stdout, stderr)
-
-    def _wait_mount(self, mnt: str, mounted: subprocess.Popen[bytes]) -> None:
-        for _ in range(50):
-            with open("/proc/self/mountinfo", encoding="utf-8") as handle:
-                if f" {mnt} " in handle.read():
-                    return
-            if mounted.poll() is not None:
-                err = mounted.stderr.read().decode() if mounted.stderr else ""
-                self.fail(f"FUSE exited: {err}")
-            time.sleep(0.05)
-        self.fail("FUSE mount did not appear")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import run_cli
 
 
 def _assert_probe_exit_one_contract(testcase: unittest.TestCase, runner) -> None:
@@ -33,14 +33,8 @@ class ProbeJsonExitOneContractDocTests(unittest.TestCase):
         self.assertIn("=--no-create= refused a missing =--path=", text)
         self.assertIn("=--require-eb= did not find the =--eb= command", text)
 
-    def test_python_cli_matches_probe_exit_one_contract(self) -> None:
-        _assert_probe_exit_one_contract(self, run_cli)
-
     def test_binary_cli_matches_probe_exit_one_contract(self) -> None:
-        binary = run_cli_optional_binary("--help")
-        if binary is None:
-            self.skipTest("TOOL_BIN is unset")
-        _assert_probe_exit_one_contract(self, run_cli_optional_binary)
+        _assert_probe_exit_one_contract(self, run_cli)
 
 
 if __name__ == "__main__":

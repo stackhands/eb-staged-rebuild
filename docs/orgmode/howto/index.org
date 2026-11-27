@@ -16,6 +16,7 @@ The title names the task.
    check-a-copied-install
    set-a-build-directory
    set-permissions
+   verify-a-stage
    recover
    roll-back
    remove-old-trees

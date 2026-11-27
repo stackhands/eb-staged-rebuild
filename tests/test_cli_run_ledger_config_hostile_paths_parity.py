@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 
-from tests.support import run_cli, run_cli_optional_binary
+from tests.support import golden, run_cli, scrub
 
 
 @contextmanager
@@ -24,6 +24,33 @@ def _deadline(seconds: float):
 
 
 class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
+    def test_dangling_config_escapes_nbsp_and_soft_hyphen(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            software = os.path.join(root, "software")
+            modules = os.path.join(root, "modules")
+            config = os.path.join(root, "ledger-\u00a0-\u00ad.json")
+            os.makedirs(software, exist_ok=True)
+            os.makedirs(modules, exist_ok=True)
+
+            args = (
+                "run",
+                "--software",
+                software,
+                "--modules",
+                modules,
+                "--dry-run",
+                "--ledger-config",
+                config,
+                "--",
+                "demo.eb",
+            )
+            zig = run_cli(*args)
+            self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+            self.assertEqual(zig.stdout, "")
+            self.assertIn(r"\xa0", zig.stderr)
+            self.assertIn(r"\xad", zig.stderr)
+            golden(self, "stderr", scrub(zig.stderr, ROOT=root))
+
     def test_run_dry_refuses_hostile_ledger_config_paths(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             software = os.path.join(root, "software")
@@ -37,12 +64,22 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
             os.makedirs(directory_path, exist_ok=True)
             fifo_path = os.path.join(root, "ledger-fifo")
             os.mkfifo(fifo_path)
+            symlink_dir_path = os.path.join(root, "ledger-dir-link")
+            os.symlink(directory_path, symlink_dir_path)
+            symlink_loop_path = os.path.join(root, "ledger-loop")
+            os.symlink(symlink_loop_path, symlink_loop_path)
             dangling_path = os.path.join(root, "ledger-dangling.json")
             os.symlink(os.path.join(root, "absent-ledger.json"), dangling_path)
 
             for label, path, needle in (
                 ("directory", directory_path, "Invalid argument"),
                 ("fifo", fifo_path, "Invalid argument"),
+                ("symlink-directory", symlink_dir_path, "Invalid argument"),
+                (
+                    "symlink-loop",
+                    symlink_loop_path,
+                    "Too many levels of symbolic links",
+                ),
                 ("dangling", dangling_path, "No such file or directory"),
             ):
                 with self.subTest(path_kind=label):
@@ -66,18 +103,12 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
                     )
 
                     with _deadline(5):
-                        py = run_cli(*args)
-                    self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
-                    self.assertEqual(py.stdout, "")
-                    self.assertIn("cannot read ledger config", py.stderr)
-                    self.assertIn(needle, py.stderr)
-
-                    with _deadline(5):
-                        zig = run_cli_optional_binary(*args)
-                    if zig is not None:
-                        self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
-                        self.assertEqual(zig.stdout, "")
-                        self.assertEqual(zig.stderr, py.stderr)
+                        zig = run_cli(*args)
+                    self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+                    self.assertEqual(zig.stdout, "")
+                    self.assertIn("cannot read ledger config", zig.stderr)
+                    self.assertIn(needle, zig.stderr)
+                    golden(self, f"stderr.{label}", scrub(zig.stderr, ROOT=root))
 
     def test_run_dry_missing_ledger_config_refuses_before_installpath_log(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -99,18 +130,13 @@ class CliRunLedgerConfigHostilePathsParityTests(unittest.TestCase):
                 "demo.eb",
             )
             env = {"PATH": ""}
-            py = run_cli(*args, env=env)
-            self.assertEqual(py.returncode, 2, py.stdout + py.stderr)
-            self.assertEqual(py.stdout, "")
+            zig = run_cli(*args, env=env)
+            self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
+            self.assertEqual(zig.stdout, "")
             self.assertEqual(
-                py.stderr,
+                zig.stderr,
                 f"eb-staged-rebuild: cannot read ledger config {missing}: [Errno 2] No such file or directory: '{missing}'\n",
             )
-            zig = run_cli_optional_binary(*args, env=env)
-            if zig is not None:
-                self.assertEqual(zig.returncode, 2, zig.stdout + zig.stderr)
-                self.assertEqual(zig.stdout, "")
-                self.assertEqual(zig.stderr, py.stderr)
 
 
 if __name__ == "__main__":

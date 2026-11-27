@@ -5,25 +5,24 @@ import os
 import tempfile
 import unittest
 
-from eb_staged_rebuild import __version__  # noqa: F401 — TESTMAP maps this module
 from tests.schema_support import validate
-from tests.support import run_cli_or_binary
+from tests.support import run_cli
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _run_probe():
-    return run_cli_or_binary(
+    return run_cli(
         "probe", "--path", REPO, "--json", "--eb", "missing-eb-for-schema-test", cwd=REPO
     )
 
 
 def _run_status(state_root):
-    return run_cli_or_binary("status", "--state-root", state_root, "--json", cwd=REPO)
+    return run_cli("status", "--state-root", state_root, "--json", cwd=REPO)
 
 
 def _run_gc(state_root):
-    return run_cli_or_binary(
+    return run_cli(
         "gc", "--state-root", state_root, "--grace-hours", "0", "--dry-run", "--json", cwd=REPO
     )
 

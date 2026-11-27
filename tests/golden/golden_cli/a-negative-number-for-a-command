@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+usage: eb-staged-rebuild [-h] [--version]
+                         {probe,run,resume,verify,rollback,gc,retire,status,list,resolve} ...
+eb-staged-rebuild: error: argument command: invalid choice: '-5' (choose from 'probe', 'run', 'resume', 'verify', 'rollback', 'gc', 'retire', 'status', 'list', 'resolve')

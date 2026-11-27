@@ -1,34 +1,26 @@
 """test_ledger_bounded's two receipt tests through ``run --ledger-config``.
 
-The output limit is the same 64 KiB in both implementations. A wrapper around
+The ledger call's output limit is 64 KiB. A wrapper around
 ``fake_eb_stack.py`` pads each append's stdout to an exact size and floods
-stderr. Runs the Python tool and, when TOOL_BIN is set, the program it names.
+stderr. Runs the program TOOL_BIN names.
 
     TOOL_BIN=zig-out/bin/eb-staged-rebuild python3 -m unittest -v tests.test_ledger_bounded_cli
 """
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
 
-from eb_staged_rebuild.ledger_adapter import _OUTPUT_LIMIT
-from eb_staged_rebuild.outbox import PENDING_EXIT
-from tests.support import classic_install
+from tests.support import classic_install, run_cli
 
+_OUTPUT_LIMIT = 64 * 1024
+PENDING_EXIT = 75
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FAKE = os.path.join(REPO, "tests", "fake_eb_stack.py")
 FAKE_EB = os.path.join(REPO, "tests", "fake_eb.py")
-
-
-def implementations():
-    found = [("python", [sys.executable, "-m", "eb_staged_rebuild"])]
-    if os.environ.get("TOOL_BIN"):
-        found.append(("binary", [os.environ["TOOL_BIN"]]))
-    return found
 
 
 class Case:
@@ -93,9 +85,9 @@ class Case:
         with open(self.plan, "w", encoding="utf-8") as handle:
             handle.write("".join(mode + "\n" for mode in modes))
 
-    def tool(self, command, args):
-        env = dict(os.environ, PYTHONPATH=REPO, FAKE_EB_PAYLOAD="v1\n", FAKE_LEDGER_PLAN=self.plan)
-        return subprocess.run(command + args, env=env, cwd=self.root, capture_output=True, text=True, timeout=300)
+    def tool(self, args):
+        env = {"FAKE_EB_PAYLOAD": "v1\n", "FAKE_LEDGER_PLAN": self.plan}
+        return run_cli(*args, env=env, cwd=self.root)
 
     def payload(self):
         with open(os.path.join(self.install, "PAYLOAD"), encoding="utf-8") as handle:
@@ -119,32 +111,30 @@ class Case:
 
 class ReceiptLimitTests(unittest.TestCase):
     def test_receipt_that_fills_the_output_limit_is_accepted(self):
-        for name, command in implementations():
-            with self.subTest(implementation=name), tempfile.TemporaryDirectory() as root:
-                case = Case(root, _OUTPUT_LIMIT)
-                case.plan_modes("fail-after-append")
-                first = case.tool(command, case.run_args)
-                self.assertEqual(first.returncode, PENDING_EXIT, first.stdout + first.stderr[-2000:])
-                self.assertEqual(case.stages(), ["started"])
-                self.assertEqual(case.payload(), "v0\n")
-                again = case.tool(command, ["resume", "--state-root", case.state, "run1"])
-                self.assertEqual(again.returncode, 0, again.stdout + again.stderr[-2000:])
-                self.assertEqual(case.payload(), "v1\n")
-                self.assertEqual(case.stages(), ["started", "finished"])
-                started = case.events()[0]["receipt"]
-                self.assertEqual((started["index"], started["replayed"]), (0, True))
-                self.assertEqual(case.events()[1]["receipt"]["replayed"], False)
-                self.assertEqual(case.sizes(), [_OUTPUT_LIMIT] * 3)
+        with tempfile.TemporaryDirectory() as root:
+            case = Case(root, _OUTPUT_LIMIT)
+            case.plan_modes("fail-after-append")
+            first = case.tool(case.run_args)
+            self.assertEqual(first.returncode, PENDING_EXIT, first.stdout + first.stderr[-2000:])
+            self.assertEqual(case.stages(), ["started"])
+            self.assertEqual(case.payload(), "v0\n")
+            again = case.tool(["resume", "--state-root", case.state, "run1"])
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr[-2000:])
+            self.assertEqual(case.payload(), "v1\n")
+            self.assertEqual(case.stages(), ["started", "finished"])
+            started = case.events()[0]["receipt"]
+            self.assertEqual((started["index"], started["replayed"]), (0, True))
+            self.assertEqual(case.events()[1]["receipt"]["replayed"], False)
+            self.assertEqual(case.sizes(), [_OUTPUT_LIMIT] * 3)
 
     def test_receipt_beyond_the_output_limit_is_not_read(self):
-        for name, command in implementations():
-            with self.subTest(implementation=name), tempfile.TemporaryDirectory() as root:
-                case = Case(root, 2 * _OUTPUT_LIMIT, receipt_first=False)
-                result = case.tool(command, case.run_args)
-                self.assertEqual(result.returncode, PENDING_EXIT, result.stdout + result.stderr[-2000:])
-                self.assertIn("printed no receipt", result.stdout + result.stderr)
-                self.assertEqual(case.payload(), "v0\n")
-                self.assertEqual(case.sizes(), [2 * _OUTPUT_LIMIT])
+        with tempfile.TemporaryDirectory() as root:
+            case = Case(root, 2 * _OUTPUT_LIMIT, receipt_first=False)
+            result = case.tool(case.run_args)
+            self.assertEqual(result.returncode, PENDING_EXIT, result.stdout + result.stderr[-2000:])
+            self.assertIn("printed no receipt", result.stdout + result.stderr)
+            self.assertEqual(case.payload(), "v0\n")
+            self.assertEqual(case.sizes(), [2 * _OUTPUT_LIMIT])
 
 
 if __name__ == "__main__":

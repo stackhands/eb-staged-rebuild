@@ -1,25 +1,47 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=70.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "eb-staged-rebuild"
-version = "2.0.1"
+version = "3.0.0"
 description = "Stage an EasyBuild rebuild and atomically exchange it with the live directory."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Rohit Goswami", email = "rgoswami@ieee.org"}]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
+]
 dependencies = []
 
-[project.optional-dependencies]
-docs = [
-    "shtab==1.7.2",
-    "argparse-manpage==4.6",
-]
-
 [project.scripts]
-eb-staged-rebuild = "eb_staged_rebuild.cli:main"
+eb-staged-rebuild = "eb_staged_rebuild:main"
 
 [tool.setuptools.packages.find]
 include = ["eb_staged_rebuild*"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+eb_staged_rebuild = ["bin/eb-staged-rebuild"]
+
+[tool.cibuildwheel]
+# One abi3 wheel from CPython 3.11 for every GIL CPython, and one wheel per
+# free-threaded CPython, which takes no abi3 wheel.
+build = ["cp311-manylinux_*", "cp313t-manylinux_*", "cp314t-manylinux_*"]
+# cibuildwheel 3.x builds CPython 3.13t only with this; 3.14t needs nothing.
+enable = ["cpython-freethreading"]
+archs = ["native"]
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+test-command = "eb-staged-rebuild --version"
+
+[tool.cibuildwheel.linux.environment]
+# The release job builds the static binary first; the container sees the
+# checkout as /project.
+EB_STAGED_REBUILD_BINARY = "/project/out/bin/eb-staged-rebuild"
