@@ -1,0 +1,1 @@
+While `rolled_back` is unrecorded, garbage collection keeps the hidden trees and the generation directory of a run whose rollback has saved `restoring` or `restored`. Once rollback records `rolled_back`, garbage collection starts the grace clock at `rolled_back_at`.
