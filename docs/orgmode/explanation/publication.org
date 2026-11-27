@@ -32,14 +32,16 @@ After the build and its checks, the run goes through these steps under the state
 
 Every directory is exchanged before any module file is replaced, so a module file never names a tree of another run.
 Steps 2 and 4 change nothing live.
-When a step from 5 to 7 fails, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
+When a step from 5 to 7 fails before a rename or an exchange has landed, the run exchanges back what it exchanged and puts back the module files it replaced; the journal says =built=, with =publish interrupted; old live tree restored=, and =resume= tries the publication again.
+When a swap exchange or a fallback rename has landed and its close or flush fails, the run keeps the new names, saves the stop in the journal, and =resume= and =rollback= stop for intervention.
 
 *** The exchange
 
 The exchange is the =renameat2= call with =RENAME_EXCHANGE=, when the probe that the run recorded at its start says the filesystem supports it.
 A filesystem that refuses the flag, with =EINVAL=, =ENOSYS= or =EOPNOTSUPP=, gets three ordinary renames instead: the live tree to a hold name, =software/NAME/.VERSION.RUN_ID.fallback-old=, the new tree to the live name, and the hold name to the hidden one.
 Between the first two renames the stable path is missing.
-A failure in the sequence puts the two names back before it is reported, and a run that was killed in it finds the hold name on =resume= and puts the names back then.
+A failure before a rename has landed puts the two names back before it is reported, and a run that was killed between the renames finds the hold name on =resume= and puts the names back then.
+A close or a flush that fails after a rename has landed keeps the new names. The journal records the stop, and =resume= and =rollback= stop for intervention.
 Any other error from the exchange leaves both names as they were.
 The journal records which of the two each module got, as =swap_method=.
 With =--require-exchange=, an unavailable exchange is refused before the journal and build.
@@ -56,8 +58,10 @@ The lists it copies are the NFSv4 list of IBM Storage Scale, =system.gpfs_nfs4_a
 
 =rollback= of a =complete= run does the same in reverse: it exchanges each hidden tree back into the stable path, last module first, puts back each module file from its backup, and removes the links the run made.
 First it checks, by the completion marker, that each stable path holds the tree the run published, and refuses before it changes or records anything when one does not: after a later run of the same installation, that later run is rolled back first.
-A failure part way exchanges back to the published state, and the rollback can run again.
-The tree the run published stays under its hidden name until =gc= removes it.
+A failure before a swap exchange or a fallback rename lands puts the names back, and running rollback again finishes it.
+A close or a flush that fails after a swap exchange or a fallback rename lands keeps the names, saves the stop on every owning run's journal, and =resume= and =rollback= exit 2 and stop.
+The tree the run published stays under its hidden name.
+While the journal records a landed stop, =gc= keeps that tree.
 With a ledger, the rollback adds a =correction= of each =finished= record.
 
 *** Rolling back several runs
@@ -74,8 +78,9 @@ With more, it checks everything first, and then makes one pass:
 3. The module file goes back to the one the oldest run saved, or is removed when that run made it.
 4. Newest first, the links each run made are removed, and the run is marked =rolled_back=, with the message =rolled back to GEN=.
 
-A pass that stops part way is finished by the same command: the =.eb-staged-rebuild-complete= in each tree says how far it got.
+A pass that stops before a swap exchange or a fallback rename lands is finished by the same command: the =.eb-staged-rebuild-complete= in each tree says how far it got.
 Until then the runs stay =rolling_back=, =list= shows their trees as =rolling back=, and =resume= or =rollback= of one of them refuses.
+A close or a flush that fails after a swap exchange or a fallback rename lands keeps the names, saves the stop on every owning run's journal, and =resume= and =rollback= exit 2 and stop.
 A pass refuses runs that record to a ledger, since a =correction= names a single publication; those are rolled back one at a time.
 
 ** What was considered and turned down

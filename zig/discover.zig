@@ -27,11 +27,11 @@ fn lessLink(_: void, x: Link, y: Link) bool {
     return json.pyTextLess(x.target, y.target);
 }
 
-fn readlink(a: Allocator, path: []const u8) []const u8 {
-    var zb: [sys.path_max:0]u8 = undefined;
+fn readlinkAt(a: Allocator, dir: sys.fd_t, name: []const u8) []const u8 {
+    var name_buf: [sys.path_max:0]u8 = undefined;
     var buf: [sys.path_max]u8 = undefined;
-    const z = sys.z(&zb, path) catch return "";
-    const n = sys.call(std.os.linux.readlinkat, .{ std.os.linux.AT.FDCWD, z.ptr, &buf, buf.len }) catch return "";
+    const z = sys.z(&name_buf, name) catch return "";
+    const n = sys.call(std.os.linux.readlinkat, .{ dir, z.ptr, &buf, buf.len }) catch return "";
     return a.dupe(u8, buf[0..n]) catch "";
 }
 
@@ -40,34 +40,131 @@ fn unreadableTree(a: Allocator, root: []const u8, why: *[]const u8) Error {
     return error.Refused;
 }
 
-/// walk_module_tree: the regular .lua and .tcl files (sorted), and every
-/// symbolic link as (relative path, link text); linked directories are not
-/// entered.
-pub fn walkModuleTree(a: Allocator, modules_root: []const u8, why: *[]const u8) Error!struct { files: []const []const u8, links: []const Link } {
-    if (!std.mem.eql(u8, main_mod.lstatKind(modules_root), "dir")) {
-        why.* = try a.print("module tree is not a real directory: {s}", .{modules_root});
-        return error.Refused;
+fn refuseNotDir(a: Allocator, path: []const u8, why: *[]const u8) Error {
+    why.* = a.print("module tree is not a real directory: {s}", .{path}) catch "module tree is not a real directory";
+    return error.Refused;
+}
+
+fn refuseUnclassified(a: Allocator, path: []const u8, err: sys.Error, why: *[]const u8) Error {
+    why.* = a.print("module tree component cannot be classified: {s}: {s}", .{ path, main_mod.osError(a, err, path) }) catch "module tree component cannot be classified";
+    return error.Refused;
+}
+
+/// Open `path` from `/`, one component at a time. Components above the last
+/// are followed. The last component is opened with `O_NOFOLLOW`. A real
+/// directory is returned open, whatever its length. A symlink, a plain file,
+/// or a special file is refused. A stat that cannot classify a component is
+/// refused. The caller closes the descriptor.
+fn openModulesRoot(a: Allocator, path_in: []const u8, why: *[]const u8) Error!sys.fd_t {
+    const abs = admin.abspath(a, path_in);
+    const trimmed = std.mem.trimEnd(u8, abs, "/");
+    const path = if (abs.len != 0 and trimmed.len == 0) "/" else trimmed;
+    if (path.len == 0) return refuseNotDir(a, path_in, why);
+    var fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return refuseUnclassified(a, "/", err, why);
+    if (std.mem.eql(u8, path, "/")) return fd;
+    var parts: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, path[1..], '/');
+    while (it.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
+        if (std.mem.eql(u8, part, "..")) {
+            sys.close(fd);
+            return refuseNotDir(a, path, why);
+        }
+        parts.append(a, part) catch {
+            sys.close(fd);
+            return error.OutOfMemory;
+        };
     }
-    var files: std.ArrayList([]const u8) = .empty;
-    var links: std.ArrayList(Link) = .empty;
-    var stack: std.ArrayList([]const u8) = .empty;
-    try stack.append(a, modules_root);
-    while (stack.pop()) |dir| {
-        const fd = fsx.openDir(fsx.cwd, dir, false) catch return unreadableTree(a, modules_root, why);
-        defer sys.close(fd);
-        var it = fsx.DirIter.init(a, fd) catch return unreadableTree(a, modules_root, why);
-        while (it.next() catch return unreadableTree(a, modules_root, why)) |e| {
-            const child = try std.fs.path.join(a, &.{ dir, e.name });
-            const st = fsx.statAt(fsx.cwd, child, false) catch continue;
-            if (st.isLink()) {
-                try links.append(a, .{ .rel = modulefile.relpath(a, child, modules_root), .target = readlink(a, child) });
-            } else if (st.isDir()) {
-                try stack.append(a, child);
-            } else if (st.isReg() and (std.mem.endsWith(u8, e.name, ".lua") or std.mem.endsWith(u8, e.name, ".tcl"))) {
-                try files.append(a, child);
-            }
+    var acc: []const u8 = "";
+    for (parts.items, 0..) |part, i| {
+        const last = i + 1 == parts.items.len;
+        acc = std.fmt.allocPrint(a, "{s}/{s}", .{ acc, part }) catch {
+            sys.close(fd);
+            return error.OutOfMemory;
+        };
+        const next = fsx.openDir(fd, part, !last) catch {
+            const st = fsx.statAt(fd, part, false) catch |sterr| {
+                sys.close(fd);
+                return refuseUnclassified(a, acc, sterr, why);
+            };
+            sys.close(fd);
+            if (st.isLink() or !st.isDir()) return refuseNotDir(a, if (last) path else acc, why);
+            return unreadableTree(a, path, why);
+        };
+        sys.close(fd);
+        fd = next;
+    }
+    return fd;
+}
+
+fn walkOpened(
+    a: Allocator,
+    modules_root: []const u8,
+    dir_path: []const u8,
+    fd: sys.fd_t,
+    files: *std.ArrayList([]const u8),
+    links: *std.ArrayList(Link),
+    why: *[]const u8,
+) Error!void {
+    var subdirs: std.ArrayList([]const u8) = .empty;
+    var it = fsx.DirIter.init(a, fd) catch {
+        sys.close(fd);
+        return error.OutOfMemory;
+    };
+    defer it.deinit(a);
+    while (it.next() catch {
+        sys.close(fd);
+        return unreadableTree(a, modules_root, why);
+    }) |e| {
+        if (e.name.len == 0) continue;
+        const name = a.dupe(u8, e.name) catch {
+            sys.close(fd);
+            return error.OutOfMemory;
+        };
+        const child = std.fs.path.join(a, &.{ dir_path, name }) catch {
+            sys.close(fd);
+            return error.OutOfMemory;
+        };
+        const st = fsx.statAt(fd, name, false) catch |err| {
+            sys.close(fd);
+            return refuseUnclassified(a, child, err, why);
+        };
+        if (st.isLink()) {
+            links.append(a, .{ .rel = modulefile.relpath(a, child, modules_root), .target = readlinkAt(a, fd, name) }) catch {
+                sys.close(fd);
+                return error.OutOfMemory;
+            };
+        } else if (st.isDir()) {
+            subdirs.append(a, name) catch {
+                sys.close(fd);
+                return error.OutOfMemory;
+            };
+        } else if (st.isReg() and (std.mem.endsWith(u8, name, ".lua") or std.mem.endsWith(u8, name, ".tcl"))) {
+            files.append(a, child) catch {
+                sys.close(fd);
+                return error.OutOfMemory;
+            };
         }
     }
+    sys.close(fd);
+    for (subdirs.items) |name| {
+        const child = try std.fs.path.join(a, &.{ dir_path, name });
+        const child_fd = try openModulesRoot(a, child, why);
+        try walkOpened(a, modules_root, child, child_fd, files, links, why);
+    }
+}
+
+/// walk_module_tree: the regular .lua and .tcl files (sorted), and every
+/// symbolic link as (relative path, link text); linked directories are not
+/// entered. The root is opened one component at a time. Each child is
+/// classified with `statAt` on the open parent descriptor. A stat that
+/// cannot classify the child is refused.
+pub fn walkModuleTree(a: Allocator, modules_root: []const u8, why: *[]const u8) Error!struct { files: []const []const u8, links: []const Link } {
+    const root = admin.abspath(a, modules_root);
+    const fd = try openModulesRoot(a, root, why);
+    var files: std.ArrayList([]const u8) = .empty;
+    var links: std.ArrayList(Link) = .empty;
+    try walkOpened(a, root, root, fd, &files, &links, why);
     std.mem.sort([]const u8, files.items, {}, lessText);
     std.mem.sort(Link, links.items, {}, lessLink);
     return .{ .files = files.items, .links = links.items };
@@ -77,9 +174,14 @@ pub fn walkModuleTree(a: Allocator, modules_root: []const u8, why: *[]const u8) 
 /// tree, and the module text with its root set to the live tree.
 pub const Install = struct { staged: []const u8, live: []const u8, text: []const u8 };
 
-/// swap_install_for: the staged tree, the stable live tree, and the module
-/// text pointing at the live tree.
-pub fn swapInstallFor(a: Allocator, text: []const u8, stage_software: []const u8, live_software: []const u8, why: *[]const u8) Error!Install {
+/// The staged path `swapInstallFor` would use, and the relative path under
+/// the stage software tree. The directory does not have to exist.
+pub const StagedPath = struct { staged: []const u8, relative: []const u8 };
+
+/// The staged path named by `text`. A root under the stage software tree is
+/// that path. A root under the live software tree is the same relative path
+/// under the stage software tree.
+pub fn stagedInstallPath(a: Allocator, text: []const u8, stage_software: []const u8, live_software: []const u8, why: *[]const u8) Error!StagedPath {
     const r = modulefile.parseRoot(text) orelse {
         why.* = "module file has no root assignment";
         return error.Refused;
@@ -91,18 +193,25 @@ pub fn swapInstallFor(a: Allocator, text: []const u8, stage_software: []const u8
     const root_abs = admin.abspath(a, r.path);
     const stage_abs = admin.abspath(a, stage_software);
     const live_abs = admin.abspath(a, live_software);
-    var relative: []const u8 = undefined;
-    var staged: []const u8 = undefined;
     if (admin.isWithin(a, root_abs, stage_abs)) {
-        relative = modulefile.relpath(a, root_abs, stage_abs);
-        staged = root_abs;
-    } else if (admin.isWithin(a, root_abs, live_abs)) {
-        relative = modulefile.relpath(a, root_abs, live_abs);
-        staged = try std.fs.path.join(a, &.{ stage_abs, relative });
-    } else {
-        why.* = try a.print("module root {s} is outside both the stage software tree {s} and the live software tree {s}", .{ root_abs, stage_abs, live_abs });
-        return error.Refused;
+        return .{ .staged = root_abs, .relative = modulefile.relpath(a, root_abs, stage_abs) };
     }
+    if (admin.isWithin(a, root_abs, live_abs)) {
+        const relative = modulefile.relpath(a, root_abs, live_abs);
+        const staged = if (std.mem.eql(u8, relative, ".")) stage_abs else try std.fs.path.join(a, &.{ stage_abs, relative });
+        return .{ .staged = staged, .relative = relative };
+    }
+    why.* = try a.print("module root {s} is outside both the stage software tree {s} and the live software tree {s}", .{ root_abs, stage_abs, live_abs });
+    return error.Refused;
+}
+
+/// swap_install_for: the staged tree, the stable live tree, and the module
+/// text pointing at the live tree.
+pub fn swapInstallFor(a: Allocator, text: []const u8, stage_software: []const u8, live_software: []const u8, why: *[]const u8) Error!Install {
+    const found = try stagedInstallPath(a, text, stage_software, live_software, why);
+    const staged = found.staged;
+    const relative = found.relative;
+    const live_abs = admin.abspath(a, live_software);
     const live = if (std.mem.eql(u8, relative, ".")) live_abs else try std.fs.path.join(a, &.{ live_abs, relative });
     if (!std.mem.eql(u8, main_mod.lstatKind(staged), "dir")) {
         why.* = try a.print("staged installation is not a real directory: {s}", .{staged});
@@ -115,26 +224,48 @@ pub fn swapInstallFor(a: Allocator, text: []const u8, stage_software: []const u8
     return .{ .staged = staged, .live = live, .text = new_text };
 }
 
-/// order_module_files: dependencies first, ties and the remainder of a
-/// cycle in path order. Returns the order and each file's text.
-pub fn orderModuleFiles(a: Allocator, files: []const []const u8, modules_root: []const u8, why: *[]const u8) Error!struct { order: []const []const u8, texts: std.StringArrayHashMapUnmanaged([]const u8) } {
+/// Texts of the module files that could be read, plus the first read or
+/// UTF-8 failure. A bad file does not drop the files already read.
+pub const ModuleTexts = struct {
+    files: []const []const u8,
+    texts: std.StringArrayHashMapUnmanaged([]const u8),
+    why: []const u8 = "",
+};
+
+pub fn readModuleTexts(a: Allocator, files: []const []const u8) Allocator.Error!ModuleTexts {
     var texts: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
+    var good: std.ArrayList([]const u8) = .empty;
+    var why: []const u8 = "";
     for (files) |p| {
-        const f = fsx.openRegular(fsx.cwd, p, true) catch |err| {
-            why.* = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
-            return error.Refused;
+        const opened = fsx.openRegular(fsx.cwd, p, true) catch |err| {
+            if (why.len == 0) why = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
+            continue;
         };
-        defer sys.close(f.fd);
-        const t = fsx.readAll(a, f.fd, 64 << 20) catch |err| {
-            why.* = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
-            return error.Refused;
+        defer sys.close(opened.fd);
+        const t = fsx.readAll(a, opened.fd, 64 << 20) catch |err| {
+            if (why.len == 0) why = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
+            continue;
         };
         if (!std.unicode.utf8ValidateSlice(t)) {
-            why.* = try a.print("{s} is not UTF-8 text", .{p});
-            return error.Refused;
+            if (why.len == 0) why = try a.print("{s} is not UTF-8 text", .{p});
+            continue;
         }
         try texts.put(a, p, t);
+        try good.append(a, p);
     }
+    return .{ .files = good.items, .texts = texts, .why = why };
+}
+
+/// order_module_files: dependencies first, ties and the remainder of a
+/// cycle in path order. Returns the order and each file's text. Every file
+/// is read; the first unreadable or non-UTF-8 file is reported after that.
+pub fn orderModuleFiles(a: Allocator, files: []const []const u8, modules_root: []const u8, why: *[]const u8) Error!struct { order: []const []const u8, texts: std.StringArrayHashMapUnmanaged([]const u8) } {
+    const read = try readModuleTexts(a, files);
+    if (read.why.len != 0) {
+        why.* = read.why;
+        return error.Refused;
+    }
+    const texts = read.texts;
     var by_identity: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
     for (files) |p| {
         const id = modulefile.moduleIdentity(a, modules_root, p);

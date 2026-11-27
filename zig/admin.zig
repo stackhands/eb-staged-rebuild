@@ -1082,6 +1082,15 @@ pub fn gc(
         for (p.mods, 0..) |m, mi| {
             if (pyfmt.truthy(pyfmt.get(m, "retired_removed_at"))) continue;
             const retired = safeRetiredPath(c, m);
+            // A landed rollback leaves state complete and the new tree at
+            // the retired path. The live module still names the other tree,
+            // so the reference check would not keep this one.
+            if (pyfmt.truthy(pyfmt.get(j, "landed_stopped"))) {
+                settled = false;
+                if (std.mem.eql(u8, main_mod.lstatKind(retired), "dir"))
+                    p.actions.append(a, .{ .path = retired, .action = "keep", .reason = "the run stops for intervention and keeps the landed names" }) catch oom();
+                continue;
+            }
             const st = str(pyfmt.get(j, "state"));
             var when: ?f64 = null;
             var why: []const u8 = "";
@@ -1524,4 +1533,77 @@ test "a failed directory flush after a generation directory is removed is report
     try std.testing.expect(std.mem.indexOf(u8, msg, "Input/output error") != null);
     try std.testing.expect(std.mem.indexOf(u8, msg, boundary) != null);
     try std.testing.expect(!std.mem.eql(u8, main_mod.lstatKind(path), "dir"));
+}
+
+test "gc keeps a retired tree while landed_stopped is set" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-gc-landed-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const state_root = try a.print("{s}/state", .{root});
+    const software = try a.print("{s}/software", .{root});
+    const modules = try a.print("{s}/modules", .{root});
+    const live = try a.print("{s}/demo/1", .{software});
+    const retired = try a.print("{s}/demo/.1.r1", .{software});
+    const module = try a.print("{s}/all/demo/1.lua", .{modules});
+    try atomic.makedirs(live);
+    try atomic.makedirs(retired);
+    try atomic.makedirs(dirname(module));
+    try atomic.makedirs(try a.print("{s}/runs/r1", .{state_root}));
+    const payload = try a.print("{s}/PAYLOAD", .{retired});
+    const payload_fd = try sys.openat(fsx.cwd, payload, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(payload_fd, "new\n");
+    sys.close(payload_fd);
+    const module_fd = try sys.openat(fsx.cwd, module, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(module_fd, try a.print("local root = \"{s}\"\n", .{live}));
+    sys.close(module_fd);
+    const journal = try a.print("{s}/runs/r1/journal.json", .{state_root});
+    const body = try a.print(
+        \\{{
+        \\  "schema": 2,
+        \\  "publication": "directory-swap",
+        \\  "run_id": "r1",
+        \\  "state": "complete",
+        \\  "landed_stopped": true,
+        \\  "state_root": "{s}",
+        \\  "software": "{s}",
+        \\  "modules": "{s}",
+        \\  "generation_root": "{s}/generations/r1",
+        \\  "backend": "installpath",
+        \\  "modules_plan": [{{
+        \\    "rel": "demo/1",
+        \\    "live_module": "{s}",
+        \\    "prepared": "{s}/runs/r1/prepared.lua",
+        \\    "staged": "{s}/generations/r1/software/demo/1",
+        \\    "live_software": "{s}",
+        \\    "retired": "{s}",
+        \\    "status": "published",
+        \\    "published_at": 0
+        \\  }}]
+        \\}}
+        \\
+    , .{ state_root, software, modules, state_root, module, state_root, state_root, live, retired });
+    const journal_fd = try sys.openat(fsx.cwd, journal, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    try sys.writeAll(journal_fd, body);
+    sys.close(journal_fd);
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    // gc writes the plan to stdout, which is the test runner's channel.
+    const sink = try sys.openat(fsx.cwd, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    const saved = linux.dup(1);
+    try std.testing.expect(linux.errno(saved) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(sink), 1)) == .SUCCESS);
+    defer {
+        _ = linux.dup2(@intCast(saved), 1);
+        _ = linux.close(@intCast(saved));
+        sys.close(sink);
+    }
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, state_root, 0, false, false, null, false, null, "eb-keep-logs", null, false, null, false));
+    try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(retired), "dir"));
+    const kept = fsx.openRegular(fsx.cwd, payload, true) catch return error.NotFound;
+    defer sys.close(kept.fd);
+    const text = try fsx.readAll(a, kept.fd, 32);
+    try std.testing.expectEqualStrings("new\n", text);
 }

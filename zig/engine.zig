@@ -325,6 +325,16 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
             if (normalized == .str and normalized.str.len > 0) spec.ledger_config = normalized.str;
         }
     }
+    // Judge the generation before eb --version and before eb --dry-run,
+    // including a dry run and before auto picks a backend. An absent
+    // generation is allowed. bwrap_info.json does not choose the paths.
+    const run_id = run_mod.chooseRunId(a, spec);
+    if (!spec.dry_run) spec.run_id = run_id;
+    var stage_why: []const u8 = "";
+    run_mod.judgeKnownGeneration(a, env, spec, run_id, &stage_why) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{stage_why}),
+    };
     const probes = probe.probeAll(a, env, spec.software, spec.eb_executable) catch |err| refuse("{s}", .{main_mod.osError(a, err, spec.software)});
     if (std.mem.eql(u8, spec.backend, "auto")) {
         spec.backend = if (usable(probes, "bwrap")) "bwrap" else if (usable(probes, "userns_sandbox")) "userns" else "installpath";

@@ -4,7 +4,33 @@
 //! verify the stage (verify.zig), then exchange each staged tree with its
 //! live directory and write the module files; with a ledger configuration,
 //! publish.zig records each stage. Every step is journaled before it
-//! happens; a failure while publishing puts the old live trees back.
+//! happens. A failure while publishing puts the old live trees back.
+//! Publish, resume, resume --verify and run --dry-run judge the generation
+//! before any log, journal save, eb, or creation of the runs directory, on
+//! every backend. A symlink above the generation is followed. Each existing
+//! child of the generation is checked without following a link. A symlink
+//! or a special file there is refused, and a regular file is left. software
+//! and modules must be directories. The run refuses a symlink, a fifo, a
+//! socket, or a regular file at each component under software. A dot-named
+//! regular file is left. The walk opens every dot-named directory, up to
+//! 32 components deep. A non-dot directory at version depth stays closed.
+//! `Core`, `Compiler`, and `MPI` stay open through the name directory.
+//! EasyBuild's install lock is left when it is a directory or a regular
+//! file directly under software/.locks and the name ends with .lock. The
+//! refusal exits 2. Every component that cannot be classified is refused.
+//! A real `modules` directory is opened one component at a time.
+//! A component of a recorded stage path, from the generation through the
+//! install directory, is refused when it is a symlink or a non-directory.
+//! A link inside any install is left. Resume of a complete run reports
+//! that the run is already complete before this judgment. A stage being rebuilt is removed without
+//! following links before eb. An absent path rebuilds only when its
+//! existing ancestors are real directories inside the generation. The
+//! judge keeps at most three directories open at a time and reports too many
+//! open files as a resource error. A swap
+//! exchange or a fallback rename
+//! whose close or flush fails after it landed keeps the new names, every
+//! owning run's journal records that stop, and resume and rollback stop
+//! for intervention.
 //! rollbackTo undoes every run published over an earlier one in one pass,
 //! and newestComplete names the run that rollback --latest undoes.
 const std = @import("std");
@@ -588,26 +614,109 @@ fn contains(list: []const []const u8, x: []const u8) bool {
     return false;
 }
 
-fn symlinkComponent(a: Allocator, path: []const u8) ?[]const u8 {
-    var current = admin.abspath(a, path);
-    while (true) {
-        if (isKind(current, "symlink")) return current;
-        const parent = std.fs.path.dirname(current) orelse return null;
-        if (std.mem.eql(u8, parent, current)) return null;
-        current = parent;
+/// Where `path` sits relative to the recorded `prefix`.
+/// The walk opens `prefix`, following a component above it, then opens each
+/// component below it with `openat` and `O_NOFOLLOW|O_DIRECTORY`.
+const StagePlace = enum { inside, absent, refuse, limit };
+
+/// `err` is EMFILE or ENFILE. Read `last_errno` before another call.
+fn fileLimit(err: sys.Error) bool {
+    return err == error.Unexpected and (sys.last_errno == .MFILE or sys.last_errno == .NFILE);
+}
+
+/// A descriptor limit, named from the errno just recorded. Null for any
+/// other failure, which the caller judges as a path.
+fn limitJudgment(a: Allocator, err: sys.Error, here: []const u8) ?StageJudgment {
+    if (err != error.Unexpected) return null;
+    const errno = sys.last_errno;
+    if (errno != .MFILE and errno != .NFILE) return null;
+    return .{ .place = .limit, .at = here, .why = main_mod.errnoPath(a, errno, here) };
+}
+
+const StageJudgment = struct {
+    place: StagePlace,
+    /// The component the walk stopped on.
+    at: []const u8 = "",
+    /// Set when `place` is `refuse`: what the walk found there.
+    why: []const u8 = "",
+};
+
+fn stageWhy(a: Allocator, here: []const u8, kind_text: []const u8) []const u8 {
+    return a.print("{s} {s}", .{ here, kind_text }) catch kind_text;
+}
+
+fn judgeOpenError(a: Allocator, parent_fd: sys.fd_t, comp: []const u8, here: []const u8, err: sys.Error) StageJudgment {
+    if (err == error.NotFound) return .{ .place = .absent, .at = here };
+    if (limitJudgment(a, err, here)) |limited| return limited;
+    if (err == error.NotDir) {
+        const st = fsx.statAt(parent_fd, comp, false) catch |sterr| {
+            if (limitJudgment(a, sterr, here)) |limited| return limited;
+            return .{ .place = .refuse, .at = here, .why = main_mod.osError(a, sterr, here) };
+        };
+        if (st.isLink()) return .{ .place = .refuse, .at = here, .why = stageWhy(a, here, "is a symlink") };
+        if (st.isReg()) return .{ .place = .refuse, .at = here, .why = stageWhy(a, here, "is a file") };
+        return .{ .place = .refuse, .at = here, .why = stageWhy(a, here, "is a special file") };
+    }
+    return .{ .place = .refuse, .at = here, .why = main_mod.osError(a, err, here) };
+}
+
+/// Judge `path` against the recorded `prefix`. Components above `prefix`
+/// are followed. Each component at or below `prefix` is opened with
+/// `O_NOFOLLOW` and `O_DIRECTORY`. `inside` means every component exists
+/// and is a real directory. `absent` means the walk hit `ENOENT` and every
+/// existing component was a real directory. `refuse` is a symlink, a
+/// non-directory, or any other error at or below the prefix.
+fn judgeStaged(a: Allocator, prefix_in: []const u8, path_in: []const u8) StageJudgment {
+    const prefix_abs = admin.abspath(a, prefix_in);
+    const path_abs = admin.abspath(a, path_in);
+    const prefix = if (prefix_abs.len != 0 and std.mem.trimEnd(u8, prefix_abs, "/").len == 0) "/" else std.mem.trimEnd(u8, prefix_abs, "/");
+    const path = if (path_abs.len != 0 and std.mem.trimEnd(u8, path_abs, "/").len == 0) "/" else std.mem.trimEnd(u8, path_abs, "/");
+    if (prefix.len == 0 or path.len == 0 or !(std.mem.eql(u8, path, prefix) or (path.len > prefix.len and std.mem.startsWith(u8, path, prefix) and (prefix.len == 1 or path[prefix.len] == '/'))))
+        return .{ .place = .refuse, .at = path, .why = stageWhy(a, path, "is outside the recorded prefix") };
+    return finishStaged(a, path, openProtected(path, prefix));
+}
+
+fn finishStaged(a: Allocator, path: []const u8, opened: OpenStop) StageJudgment {
+    switch (opened) {
+        .fd => |fd| {
+            sys.close(fd);
+            return .{ .place = .inside, .at = path };
+        },
+        .root => |err| {
+            if (limitJudgment(a, err, "/")) |limited| return limited;
+            return .{ .place = .refuse, .at = "/", .why = main_mod.osError(a, err, "/") };
+        },
+        .outside => return .{ .place = .refuse, .at = path, .why = stageWhy(a, path, "is outside the recorded prefix") },
+        .blocked => |b| {
+            const judged = judgeOpenError(a, b.parent, b.comp, b.here, b.err);
+            sys.close(b.parent);
+            return judged;
+        },
     }
 }
 
-fn checkInstallDir(r: *R, rel: []const u8) E!void {
+fn guardLiveInstall(r: *R, rel: []const u8) E!void {
     const a = r.a;
     const path = admin.abspath(a, try std.fs.path.join(a, &.{ r.spec.software, rel }));
     if (std.mem.eql(u8, path, admin.abspath(a, r.spec.software)) or !admin.isWithin(a, path, r.spec.software))
         return r.refuse("module path escapes the software root: {s}", .{rel});
-    if (isKind(path, "symlink"))
-        return r.refuse("{s} is a symlink. Name/version must stay a real directory: bubblewrap 0.12 and later refuse to mount on a symlink, and bubblewrap 0.6.3 follows one. This tool depends on neither.", .{path});
-    if (symlinkComponent(a, path)) |c| return r.refuse("{s}: {s} is a symlink. Name/version must stay a real directory", .{ rel, c });
-    const k = kind(path);
-    if (!std.mem.eql(u8, k, "dir")) return r.refuse("{s} is {s}, not an existing rebuild directory", .{ path, notADirectory(k) });
+    const judged = judgeStaged(a, r.spec.software, path);
+    switch (judged.place) {
+        .inside => return,
+        .limit => return r.refuse("{s}", .{judged.why}),
+        .absent => return r.refuse("{s} is missing, not an existing rebuild directory", .{path}),
+        .refuse => {
+            if (std.mem.endsWith(u8, judged.why, "is a symlink") and std.mem.eql(u8, judged.at, path))
+                return r.refuse("{s} is a symlink. Name/version must stay a real directory: bubblewrap 0.12 and later refuse to mount on a symlink, and bubblewrap 0.6.3 follows one. This tool depends on neither.", .{path});
+            if (std.mem.endsWith(u8, judged.why, "is a symlink"))
+                return r.refuse("{s}: {s} is a symlink. Name/version must stay a real directory", .{ rel, judged.at });
+            if (std.mem.endsWith(u8, judged.why, "is a file"))
+                return r.refuse("{s} is a file, not an existing rebuild directory", .{path});
+            if (std.mem.endsWith(u8, judged.why, "is a special file"))
+                return r.refuse("{s} is a special file, not an existing rebuild directory", .{path});
+            return r.refuse("{s}", .{judged.why});
+        },
+    }
 }
 
 /// What a path of the kind `k`, not a directory, is, as a refusal says it.
@@ -628,6 +737,30 @@ fn removeGenerationModules(r: *R, generation_root: []const u8) E!void {
     if (isKind(modules, "dir")) admin.removeTree(r.ctx, modules, admin.abspath(r.a, generation_root));
 }
 
+/// Drop each recorded install directory before eb rebuilds it. `removeTree`
+/// unlinks children and does not follow a link, so an interior symlink
+/// cannot be written through. The software and modules roots stay.
+fn clearRebuiltStages(r: *R) void {
+    const gen = r.str("generation_root");
+    if (gen.len == 0) return;
+    const saved = r.why;
+    const roots = stageRootPaths(r, gen);
+    var list: std.ArrayList([]const u8) = .empty;
+    rememberKnownStages(r, roots.software, &list);
+    rememberModuleFiles(r, gen, roots.software, roots.modules, &list) catch {};
+    r.why = saved;
+    const boundary = admin.abspath(r.a, gen);
+    const software = admin.abspath(r.a, roots.software);
+    const modules = admin.abspath(r.a, roots.modules);
+    for (list.items) |path| {
+        const abs = admin.abspath(r.a, path);
+        if (!isKind(abs, "dir")) continue;
+        if (std.mem.eql(u8, abs, boundary) or std.mem.eql(u8, abs, software) or std.mem.eql(u8, abs, modules)) continue;
+        if (!admin.isWithin(r.a, abs, boundary)) continue;
+        admin.removeTree(r.ctx, abs, boundary);
+    }
+}
+
 fn build(r: *R) E!u8 {
     const a = r.a;
     r.set("state", Py.s("building"));
@@ -636,6 +769,7 @@ fn build(r: *R) E!u8 {
     const gen = r.str("generation_root");
     atomic.makedirs(gen) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, gen)});
     try removeGenerationModules(r, gen);
+    clearRebuiltStages(r);
     try hit(r, r.faults(), "build.start");
     const filtered = engine.ensureRebuild(a, engine.filterEbArgsOpts(a, r.spec.eb_args, r.spec.build_dir != null));
     var cmd: std.ArrayList([]const u8) = .empty;
@@ -733,10 +867,427 @@ fn enforceManifest(r: *R) E!void {
 
 // ---- plan ---------------------------------------------------------------
 
+/// The software and modules paths `build` passes to eb, for every backend.
+/// `bwrap_info.json` must not replace or narrow them.
+fn stageRootPaths(r: *R, gen: []const u8) struct { software: []const u8, modules: []const u8 } {
+    const a = r.a;
+    return .{
+        .software = std.fs.path.join(a, &.{ gen, "software" }) catch gen,
+        .modules = std.fs.path.join(a, &.{ gen, "modules" }) catch gen,
+    };
+}
+
+fn refuseStageRoot(r: *R, gen: []const u8, path: []const u8, label: []const u8) E!void {
+    const judged = judgeStaged(r.a, gen, path);
+    if (judged.place == .limit) return r.refuse("{s}", .{judged.why});
+    if (judged.place != .refuse) return;
+    return r.refuse("stage {s} path escapes this run: {s}: {s}", .{ label, path, judged.why });
+}
+
+fn rememberStage(a: Allocator, list: *std.ArrayList([]const u8), path: []const u8) void {
+    if (path.len == 0) return;
+    const abs = admin.abspath(a, path);
+    if (abs.len == 0) return;
+    for (list.items) |have| if (std.mem.eql(u8, have, abs)) return;
+    list.append(a, abs) catch oom();
+}
+
+/// Software installs for every `module_rels` entry, every `modules_plan`
+/// staged path, and every path recorded when eb returned.
+fn rememberKnownStages(r: *R, stage_software: []const u8, list: *std.ArrayList([]const u8)) void {
+    const a = r.a;
+    if (stage_software.len != 0) {
+        var from_journal = false;
+        if (r.get("module_rels")) |v| if (v == .list) {
+            from_journal = true;
+            for (v.list) |x| if (x == .str and x.str.len != 0) {
+                const path = std.fs.path.join(a, &.{ stage_software, x.str }) catch continue;
+                rememberStage(a, list, path);
+            };
+        };
+        if (!from_journal) for (r.spec.module_rels) |rel| {
+            if (rel.len == 0) continue;
+            const path = std.fs.path.join(a, &.{ stage_software, rel }) catch continue;
+            rememberStage(a, list, path);
+        };
+    }
+    for (r.list("modules_plan")) |m| rememberStage(a, list, s(pyfmt.get(m, "staged")));
+    if (r.get("staged_paths")) |v| if (v == .list) for (v.list) |x| if (x == .str) rememberStage(a, list, x.str);
+}
+
+/// Staged installs named by module files under a real modules directory.
+/// An absent modules root adds nothing. Every readable file is recorded.
+/// The first file that cannot be read, or is not UTF-8, is reported after
+/// those paths are kept.
+fn rememberModuleFiles(r: *R, gen: []const u8, stage_software: []const u8, modules: []const u8, list: *std.ArrayList([]const u8)) E!void {
+    if (gen.len == 0 or modules.len == 0 or stage_software.len == 0) return;
+    const judged = judgeStaged(r.a, gen, modules);
+    if (judged.place == .limit) return r.refuse("{s}", .{judged.why});
+    if (judged.place == .absent) return;
+    if (judged.place == .refuse) return r.refuse("stage modules path escapes this run: {s}: {s}", .{ modules, judged.why });
+    var why: []const u8 = "";
+    const tree = discover.walkModuleTree(r.a, modules, &why) catch |err| switch (err) {
+        error.Refused => return r.refuse("{s}", .{why}),
+        else => |e| return e,
+    };
+    if (tree.files.len == 0) return;
+    const read = discover.readModuleTexts(r.a, tree.files) catch |err| return err;
+    var parse_why: []const u8 = "";
+    for (read.files) |path| {
+        const text = read.texts.get(path) orelse continue;
+        const found = discover.stagedInstallPath(r.a, text, stage_software, r.spec.software, &why) catch |err| switch (err) {
+            error.Refused => {
+                if (parse_why.len == 0) parse_why = why;
+                continue;
+            },
+            else => |e| return e,
+        };
+        rememberStage(r.a, list, found.staged);
+    }
+    if (read.why.len != 0) return r.refuse("{s}", .{read.why});
+    if (parse_why.len != 0) return r.refuse("{s}", .{parse_why});
+}
+
+/// Write the staged-path list into the journal. Called as soon as eb
+/// returns, including from `failRun`, so a later resume can judge the
+/// paths after the module files are gone. A scan failure is kept on the
+/// journal after every path that could be named.
+fn recordStagedPaths(r: *R) E!void {
+    const gen = r.str("generation_root");
+    if (gen.len == 0) return;
+    const roots = stageRootPaths(r, gen);
+    var list: std.ArrayList([]const u8) = .empty;
+    rememberKnownStages(r, roots.software, &list);
+    const scanned = rememberModuleFiles(r, gen, roots.software, roots.modules, &list);
+    r.set("staged_paths", pyList(r.a, list.items));
+    scanned catch |err| switch (err) {
+        error.Refused => {
+            r.set("stage_scan_error", Py.s(r.why));
+            return err;
+        },
+        else => |e| return e,
+    };
+}
+
+/// An open or a directory read that ran out of descriptors is the errno
+/// text. Any other failure of that call is the same kind of operating-system
+/// error. Neither is a stage escape.
+fn resourceOrOs(r: *R, err: sys.Error, path: []const u8) E {
+    if (fileLimit(err)) {
+        const errno = sys.last_errno;
+        return r.refuse("{s}", .{main_mod.errnoPath(r.a, errno, path)});
+    }
+    return r.refuse("{s}", .{main_mod.osError(r.a, err, path)});
+}
+
+fn dotName(name: []const u8) bool {
+    return name.len > 0 and name[0] == '.';
+}
+
+/// Components under `software` the walk will list. A deeper chain is refused.
+const software_walk_depth: usize = 32;
+
+/// EasyBuild hierarchy roots. The version directory is the third component
+/// under one of these, and the second component under any other name.
+fn hierarchyRoot(name: []const u8) bool {
+    return std.mem.eql(u8, name, "Core") or std.mem.eql(u8, name, "Compiler") or std.mem.eql(u8, name, "MPI");
+}
+
+/// `non_dot` is the non-dot components under `software`, including this
+/// directory. A name/version install closes the second component. Core,
+/// Compiler, and MPI close the third.
+fn atVersionDepth(non_dot: []const []const u8) bool {
+    if (non_dot.len < 2) return false;
+    if (hierarchyRoot(non_dot[0])) return non_dot.len >= 3;
+    return true;
+}
+
+const SoftwareChild = struct {
+    name: []const u8,
+    st: fsx.Stat,
+};
+
+/// Classify `st` from the parent descriptor. A directory is left to the
+/// caller. A dot-named regular file is left. Any other symlink, fifo,
+/// socket, or regular file is refused.
+fn refuseClassified(r: *R, path: []const u8, name: []const u8, st: fsx.Stat) E!void {
+    if (st.isLink())
+        return r.refuse("staged installation escapes this run: {s}: {s}", .{ path, stageWhy(r.a, path, "is a symlink") });
+    if (st.isReg()) {
+        if (dotName(name)) return;
+        return r.refuse("staged installation escapes this run: {s}: {s}", .{ path, stageWhy(r.a, path, "is a file") });
+    }
+    if (st.isDir()) return;
+    return r.refuse("staged installation escapes this run: {s}: {s}", .{ path, stageWhy(r.a, path, "is a special file") });
+}
+
+fn refuseStat(r: *R, path: []const u8, err: sys.Error) E {
+    if (limitJudgment(r.a, err, path)) |limited| return r.refuse("{s}", .{limited.why});
+    return r.refuse("staged installation escapes this run: {s}: {s}", .{ path, main_mod.osError(r.a, err, path) });
+}
+
+/// EasyBuild's install lock: a directory or a regular file directly under
+/// `software/.locks` whose name ends with `.lock`. A symlink, a fifo, or a
+/// socket with that name is not a lock. `st` comes from the parent descriptor.
+fn easybuildLock(in_software_locks: bool, child: []const u8, st: fsx.Stat) bool {
+    if (!in_software_locks) return false;
+    if (!std.mem.endsWith(u8, child, ".lock")) return false;
+    return st.isDir() or st.isReg();
+}
+
+/// Children of `fd`, classified with `statAt` on that descriptor. A failed
+/// stat refuses: the component cannot be classified.
+fn readSoftwareChildren(r: *R, fd: sys.fd_t, dir: []const u8) E![]const SoftwareChild {
+    var it = fsx.DirIter.init(r.a, fd) catch return error.OutOfMemory;
+    defer it.deinit(r.a);
+    var kids: std.ArrayList(SoftwareChild) = .empty;
+    while (it.next() catch |err| return resourceOrOs(r, err, dir)) |e| {
+        if (e.name.len == 0) continue;
+        const name = r.a.dupe(u8, e.name) catch return error.OutOfMemory;
+        const here = try std.fs.path.join(r.a, &.{ dir, name });
+        const st = fsx.statAt(fd, name, false) catch |err| return refuseStat(r, here, err);
+        kids.append(r.a, .{ .name = name, .st = st }) catch return error.OutOfMemory;
+    }
+    return kids.items;
+}
+
+fn openSoftwareRel(r: *R, software_fd: sys.fd_t, rel: []const u8, path: []const u8) E!sys.fd_t {
+    return prefix_mod.openDirComponents(software_fd, rel) catch |err| switch (err) {
+        error.Outside => return r.refuse("staged installation escapes this run: {s}: {s}", .{ path, stageWhy(r.a, path, "is outside the recorded prefix") }),
+        else => |e| return refuseStat(r, path, e),
+    };
+}
+
+/// One walk on directory descriptors. `software_fd` stays open. Each listed
+/// directory is opened from it with `openDirComponents`, which opens the next
+/// component before it closes the current one. A known rel does the same from
+/// `software_fd`. Three descriptors are open across that call. A dot-named
+/// directory is opened at any depth. A non-dot directory at version depth
+/// stays closed: the node was judged from the parent descriptor. Core,
+/// Compiler, and MPI stay open through the name directory, so a symlink at
+/// `Core/GCC/13` or `Compiler/GCCcore/system` is refused. A link inside the
+/// closed install is left.
+fn guardInstallComponents(r: *R, software: []const u8) E!void {
+    const abs = admin.abspath(r.a, software);
+    const protected = std.fs.path.dirname(abs) orelse abs;
+    const fd = switch (openProtected(abs, protected)) {
+        .fd => |opened| opened,
+        .root => |err| return refuseStat(r, abs, err),
+        .outside => return r.refuse("staged installation escapes this run: {s}: {s}", .{ abs, stageWhy(r.a, abs, "is outside the recorded prefix") }),
+        .blocked => |b| {
+            const judged = judgeOpenError(r.a, b.parent, b.comp, b.here, b.err);
+            sys.close(b.parent);
+            if (judged.place == .limit) return r.refuse("{s}", .{judged.why});
+            if (judged.place == .absent) return;
+            return r.refuse("staged installation escapes this run: {s}: {s}", .{ abs, judged.why });
+        },
+    };
+    defer sys.close(fd);
+    try guardSoftwareTree(r, fd, abs, "", &.{}, 0, true, false);
+    try guardKnownRels(r, fd, abs);
+}
+
+fn guardSoftwareTree(
+    r: *R,
+    software_fd: sys.fd_t,
+    dir_path: []const u8,
+    rel: []const u8,
+    non_dot: []const []const u8,
+    depth: usize,
+    is_software: bool,
+    in_software_locks: bool,
+) E!void {
+    if (depth > software_walk_depth)
+        return r.refuse("staged installation escapes this run: {s}: the path has more than {d} components under software", .{ dir_path, software_walk_depth });
+    const owned = rel.len != 0;
+    const fd = if (!owned) software_fd else try openSoftwareRel(r, software_fd, rel, dir_path);
+    const kids = readSoftwareChildren(r, fd, dir_path) catch |err| {
+        if (owned) sys.close(fd);
+        return err;
+    };
+    if (owned) sys.close(fd);
+    for (kids) |kid| {
+        const here = try std.fs.path.join(r.a, &.{ dir_path, kid.name });
+        if (easybuildLock(in_software_locks, kid.name, kid.st)) continue;
+        try refuseClassified(r, here, kid.name, kid.st);
+        if (!kid.st.isDir()) continue;
+        if (depth + 1 > software_walk_depth)
+            return r.refuse("staged installation escapes this run: {s}: the path has more than {d} components under software", .{ here, software_walk_depth });
+        const child_rel = if (rel.len == 0) kid.name else try std.fs.path.join(r.a, &.{ rel, kid.name });
+        if (dotName(kid.name)) {
+            const next_locks = is_software and std.mem.eql(u8, kid.name, ".locks");
+            try guardSoftwareTree(r, software_fd, here, child_rel, non_dot, depth + 1, false, next_locks);
+            continue;
+        }
+        if (non_dot.len >= software_walk_depth)
+            return r.refuse("staged installation escapes this run: {s}: the path has more than {d} components under software", .{ here, software_walk_depth });
+        var next_names: [software_walk_depth][]const u8 = undefined;
+        for (non_dot, 0..) |part, i| next_names[i] = part;
+        next_names[non_dot.len] = kid.name;
+        const next_non_dot = next_names[0 .. non_dot.len + 1];
+        if (atVersionDepth(next_non_dot)) continue;
+        try guardSoftwareTree(r, software_fd, here, child_rel, next_non_dot, depth + 1, false, false);
+    }
+}
+
+/// Each component of a known module rel, classified from the parent
+/// descriptor. The final component is left closed when it is a real directory.
+/// A stat that cannot classify the component refuses. An absent component stops
+/// the walk.
+fn guardKnownRels(r: *R, software_fd: sys.fd_t, software: []const u8) E!void {
+    if (r.get("module_rels")) |v| if (v == .list) {
+        for (v.list) |x| if (x == .str and x.str.len != 0) try guardOneRel(r, software_fd, software, x.str);
+        return;
+    };
+    for (r.spec.module_rels) |rel| if (rel.len != 0) try guardOneRel(r, software_fd, software, rel);
+}
+
+fn guardOneRel(r: *R, software_fd: sys.fd_t, software: []const u8, rel: []const u8) E!void {
+    var fd = software_fd;
+    var owned = false;
+    defer if (owned) sys.close(fd);
+    var parts: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitScalar(u8, rel, '/');
+    while (it.next()) |part| parts.append(r.a, part) catch return error.OutOfMemory;
+    var acc = software;
+    for (parts.items, 0..) |part, i| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, ".."))
+            return r.refuse("staged installation escapes this run: {s}: {s}", .{ rel, stageWhy(r.a, rel, "is outside the recorded prefix") });
+        if (i >= software_walk_depth)
+            return r.refuse("staged installation escapes this run: {s}: the path has more than {d} components under software", .{ rel, software_walk_depth });
+        acc = try std.fs.path.join(r.a, &.{ acc, part });
+        const st = fsx.statAt(fd, part, false) catch |err| switch (err) {
+            error.NotFound => return,
+            else => |e| return refuseStat(r, acc, e),
+        };
+        try refuseClassified(r, acc, part, st);
+        const last = i + 1 == parts.items.len;
+        if (last or !st.isDir()) return;
+        const next = fsx.openDir(fd, part, false) catch |err| return refuseStat(r, acc, err);
+        if (owned) sys.close(fd);
+        fd = next;
+        owned = true;
+    }
+}
+
+const GenDir = union(enum) { absent, stop: StageJudgment, fd: sys.fd_t };
+
+/// Open the generation. Components above it are followed. The generation
+/// itself is opened with `O_NOFOLLOW`. An absent generation is allowed.
+/// The caller closes the returned descriptor.
+fn openGenerationDir(a: Allocator, gen_in: []const u8) GenDir {
+    const gen_abs = admin.abspath(a, gen_in);
+    const trimmed = std.mem.trimEnd(u8, gen_abs, "/");
+    const gen = if (gen_abs.len != 0 and trimmed.len == 0) "/" else trimmed;
+    if (gen.len == 0) return .{ .stop = .{ .place = .refuse, .at = gen, .why = stageWhy(a, gen, "is outside the recorded prefix") } };
+    switch (openProtected(gen, gen)) {
+        .fd => |fd| return .{ .fd = fd },
+        .root => |err| {
+            if (limitJudgment(a, err, "/")) |limited| return .{ .stop = limited };
+            return .{ .stop = .{ .place = .refuse, .at = "/", .why = main_mod.osError(a, err, "/") } };
+        },
+        .outside => return .{ .stop = .{ .place = .refuse, .at = gen, .why = stageWhy(a, gen, "is outside the recorded prefix") } },
+        .blocked => |b| {
+            const judged = judgeOpenError(a, b.parent, b.comp, b.here, b.err);
+            sys.close(b.parent);
+            if (judged.place == .absent) return .absent;
+            return .{ .stop = judged };
+        },
+    }
+}
+
+/// Every existing child of the generation, checked with `lstat` from the
+/// generation descriptor. A symlink or a special file is refused. A
+/// regular file is left, including `bwrap_info.json`. A directory is left
+/// for the software and modules checks.
+fn guardGenerationChildren(r: *R) E!void {
+    const gen = admin.abspath(r.a, r.str("generation_root"));
+    if (gen.len == 0) return;
+    const fd = switch (openGenerationDir(r.a, gen)) {
+        .absent => return,
+        .stop => |j| {
+            if (j.place == .limit) return r.refuse("{s}", .{j.why});
+            return r.refuse("generation entry escapes this run: {s}: {s}", .{ j.at, j.why });
+        },
+        .fd => |opened| opened,
+    };
+    defer sys.close(fd);
+    var it = fsx.DirIter.init(r.a, fd) catch return error.OutOfMemory;
+    defer it.deinit(r.a);
+    var bad_path: []const u8 = "";
+    var bad_why: []const u8 = "";
+    while (it.next() catch |err| return resourceOrOs(r, err, gen)) |e| {
+        if (e.name.len == 0) continue;
+        const here = try std.fs.path.join(r.a, &.{ gen, e.name });
+        const st = fsx.statAt(fd, e.name, false) catch |err| return resourceOrOs(r, err, here);
+        if (st.isLink() or (!st.isDir() and !st.isReg())) {
+            if (bad_path.len != 0) continue;
+            bad_path = here;
+            bad_why = stageWhy(r.a, here, if (st.isLink()) "is a symlink" else "is a special file");
+        }
+    }
+    if (bad_path.len == 0) return;
+    return r.refuse("generation entry escapes this run: {s}: {s}", .{ bad_path, bad_why });
+}
+
+/// Judge the software root, the modules root, each child of the generation,
+/// and every recorded stage path. One call, before a journal save, a log
+/// line, or eb. A link inside any install is left. A component that cannot
+/// be classified is refused.
+/// Only an absent path, whose existing ancestors are real directories
+/// inside the generation, may be rebuilt. A module file that cannot be
+/// read is reported ahead of an install component.
+fn guardRecordedStage(r: *R) E!void {
+    const a = r.a;
+    const gen = r.str("generation_root");
+    if (gen.len == 0) return;
+    const roots = stageRootPaths(r, gen);
+    try refuseStageRoot(r, gen, roots.software, "software");
+    try refuseStageRoot(r, gen, roots.modules, "modules");
+    try guardGenerationChildren(r);
+    var component_why: []const u8 = "";
+    guardInstallComponents(r, roots.software) catch |err| switch (err) {
+        error.Refused => component_why = r.why,
+        else => |e| return e,
+    };
+    var list: std.ArrayList([]const u8) = .empty;
+    rememberKnownStages(r, roots.software, &list);
+    var file_why: []const u8 = "";
+    var file_err = false;
+    rememberModuleFiles(r, gen, roots.software, roots.modules, &list) catch |err| switch (err) {
+        error.Refused => {
+            file_err = true;
+            file_why = r.why;
+        },
+        else => |e| return e,
+    };
+    var stage_why: []const u8 = "";
+    var stage_err = false;
+    for (list.items) |path| {
+        if (stage_err) break;
+        const judged = judgeStaged(a, gen, path);
+        if (judged.place == .limit) {
+            stage_err = true;
+            stage_why = judged.why;
+        } else if (judged.place == .refuse) {
+            stage_err = true;
+            stage_why = a.print("staged installation escapes this run: {s}: {s}", .{ path, judged.why }) catch judged.why;
+        }
+    }
+    if (file_err) return r.refuse("{s}", .{file_why});
+    if (component_why.len != 0) return r.refuse("{s}", .{component_why});
+    if (stage_err) return r.refuse("{s}", .{stage_why});
+}
+
 fn stageRoots(r: *R, gen: []const u8) E!struct { software: []const u8, modules: []const u8, how: []const u8 } {
     const a = r.a;
-    if (!std.mem.eql(u8, r.spec.backend, "bwrap"))
-        return .{ .software = try std.fs.path.join(a, &.{ gen, "software" }), .modules = try std.fs.path.join(a, &.{ gen, "modules" }), .how = "installpath" };
+    if (!std.mem.eql(u8, r.spec.backend, "bwrap")) {
+        const software = try std.fs.path.join(a, &.{ gen, "software" });
+        const modules = try std.fs.path.join(a, &.{ gen, "modules" });
+        try refuseStageRoot(r, gen, software, "software");
+        try refuseStageRoot(r, gen, modules, "modules");
+        return .{ .software = software, .modules = modules, .how = "installpath" };
+    }
     const info_path = try std.fs.path.join(a, &.{ gen, "bwrap_info.json" });
     if (!isKind(info_path, "file")) return r.refuse("bwrap backend finished without {s}; nothing was published", .{info_path});
     const raw = try readBytes(r, info_path, .refuse);
@@ -775,7 +1326,7 @@ fn stageRoots(r: *R, gen: []const u8) E!struct { software: []const u8, modules: 
         how = "easybuild-5.3-layout";
     }
     for ([_][2][]const u8{ .{ "software", software }, .{ "modules", modules } }) |p| {
-        if (!admin.isWithin(a, p[1], gen)) return r.refuse("bwrap stage {s} path escapes this run: {s}", .{ p[0], p[1] });
+        try refuseStageRoot(r, gen, p[1], p[0]);
     }
     return .{ .software = software, .modules = modules, .how = how };
 }
@@ -788,12 +1339,16 @@ fn withWritableDir(r: *R, dir: []const u8) E!?u32 {
     return mode;
 }
 
-fn chmod(p: []const u8, mode: u32) sys.Error!void {
+fn chmodAt(dir: sys.fd_t, name: []const u8, mode: u32) sys.Error!void {
     var zb: [sys.path_max:0]u8 = undefined;
-    const z = try sys.z(&zb, p);
+    const z = try sys.z(&zb, name);
     while (true) {
-        if (try sys.result(linux.fchmodat(linux.AT.FDCWD, z.ptr, @intCast(mode)))) |_| return;
+        if (try sys.result(linux.fchmodat(dir, z.ptr, @intCast(mode)))) |_| return;
     }
+}
+
+fn chmod(p: []const u8, mode: u32) sys.Error!void {
+    return chmodAt(linux.AT.FDCWD, p, mode);
 }
 
 fn plan(r: *R) E!void {
@@ -814,6 +1369,9 @@ fn plan(r: *R) E!void {
     for (ordered.order) |path| {
         const rel = modulefile.relpath(a, path, roots.modules);
         const inst = discover.swapInstallFor(a, ordered.texts.get(path).?, roots.software, r.spec.software, &why) catch |err| return if (err == error.Refused) r.refuse("{s}", .{why}) else error.OutOfMemory;
+        const staged_place = judgeStaged(a, gen, inst.staged);
+        if (staged_place.place == .limit) return r.refuse("{s}", .{staged_place.why});
+        if (staged_place.place == .refuse) return r.refuse("staged installation escapes this run: {s}: {s}", .{ inst.staged, staged_place.why });
         if (!generationComplete(a, inst.staged)) return r.refuse("{s} is not a complete staged installation", .{inst.staged});
         if (isKind(inst.staged, "symlink")) return r.refuse("staged installation {s} is a symlink", .{inst.staged});
         if (isKind(inst.live, "symlink")) return r.refuse("{s} is a symlink. Name/version must stay a real directory", .{inst.live});
@@ -823,7 +1381,13 @@ fn plan(r: *R) E!void {
         const live_module = try std.fs.path.join(a, &.{ r.spec.modules, rel });
         if (!admin.isWithin(a, live_module, r.spec.modules)) return r.refuse("module path escapes the module root: {s}", .{rel});
         if (isKind(live_module, "symlink")) return r.refuse("refusing to replace module symlink {s}. The module file that is the pointer must be a regular file", .{live_module});
-        if (symlinkComponent(a, live_module)) |c| return r.refuse("{s} is a symlink", .{c});
+        const module_parent = std.fs.path.dirname(live_module) orelse "/";
+        const module_place = judgeStaged(a, r.spec.modules, module_parent);
+        if (module_place.place == .limit) return r.refuse("{s}", .{module_place.why});
+        if (module_place.place == .refuse) {
+            if (std.mem.endsWith(u8, module_place.why, "is a symlink")) return r.refuse("{s} is a symlink", .{module_place.at});
+            return r.refuse("{s}", .{module_place.why});
+        }
         const lk = kind(live_module);
         if (!std.mem.eql(u8, lk, "missing") and !std.mem.eql(u8, lk, "file")) return r.refuse("{s} is not a regular file", .{live_module});
         try drafted.append(a, .{ .rel = rel, .staged = inst.staged, .live = inst.live, .retired = retired, .text = inst.text, .live_module = live_module, .path = path });
@@ -942,20 +1506,30 @@ fn requireExchange(r: *R) bool {
 }
 
 fn swapPair(r: *R, live: []const u8, retired: []const u8, faults: atomic.Faults, step: []const u8) E![]const u8 {
+    try stopIfLanded(r);
+    armRun(r);
     var why: swap.Why = .{};
-    const m = swap.swapDirectories(r.a, live, retired, allowExchange(r), !requireExchange(r), faults, step, &why) catch |err| return switch (err) {
-        error.Refused => r.refuse("{s}", .{why.msg}),
-        error.NeedsIntervention => r.intervene("{s}", .{why.msg}),
-        error.Failed => r.refuse("{s}", .{why.msg}),
+    const m = swap.swapDirectories(r.a, live, retired, allowExchange(r), !requireExchange(r), faults, step, &why) catch |err| switch (err) {
+        error.Refused => return r.refuse("{s}", .{why.msg}),
+        error.NeedsIntervention => {
+            if (swap.landedStop() and ownsEither(r, live, retired)) try persistLandedStop(r);
+            return r.intervene("{s}", .{why.msg});
+        },
+        error.Failed => return r.refuse("{s}", .{why.msg}),
     };
     return @tagName(m);
 }
 
 fn recoverPair(r: *R, live: []const u8, retired: []const u8) E!void {
+    try stopIfLanded(r);
+    armRun(r);
     var why: swap.Why = .{};
-    swap.recoverInterrupted(r.a, live, retired, &why) catch |err| return switch (err) {
-        error.Refused, error.Failed => r.refuse("{s}", .{why.msg}),
-        error.NeedsIntervention => r.intervene("{s}", .{why.msg}),
+    swap.recoverInterrupted(r.a, live, retired, &why) catch |err| switch (err) {
+        error.Refused, error.Failed => return r.refuse("{s}", .{why.msg}),
+        error.NeedsIntervention => {
+            if (swap.landedStop() and ownsEither(r, live, retired)) try persistLandedStop(r);
+            return r.intervene("{s}", .{why.msg});
+        },
     };
 }
 
@@ -998,49 +1572,423 @@ fn prepareBackup(r: *R, m: Py) E!void {
     }
 }
 
-fn moveSealed(r: *R, source: []const u8, destination: []const u8) E!void {
-    const st = fsx.statAt(fsx.cwd, source, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+pub const StageParent = struct { fd: sys.fd_t, name: []const u8 };
+
+/// The parent of `path`, opened from `/` one component at a time.
+/// `root` is only the lexical bound: `path` must name a child of `root`.
+/// A symlink above the recorded software prefix or state root is followed.
+/// A symlink inside either tree is `error.NotDir`. With nothing recorded,
+/// every symlink is `error.NotDir`, including one above `root`.
+pub fn pinStageParent(root: []const u8, path: []const u8) (sys.Error || error{Outside})!StageParent {
+    const trimmed = std.mem.trimEnd(u8, root, "/");
+    const base = if (trimmed.len == 0 and root.len != 0) "/" else trimmed;
+    if (base.len == 0) return error.Outside;
+    const rest = if (std.mem.eql(u8, base, "/")) blk: {
+        if (path.len < 2 or path[0] != '/') return error.Outside;
+        break :blk path[1..];
+    } else blk: {
+        if (path.len <= base.len or !std.mem.startsWith(u8, path, base) or path[base.len] != '/') return error.Outside;
+        break :blk path[base.len + 1 ..];
+    };
+    const cut = std.mem.findScalarLast(u8, rest, '/');
+    const parent_rel = if (cut) |i| rest[0..i] else "";
+    const name = if (cut) |i| rest[i + 1 ..] else rest;
+    if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.Outside;
+    const fd = try walkFromRoot(base, parent_rel);
+    return .{ .fd = fd, .name = name };
+}
+
+/// Software prefixes and state roots whose interior is opened with
+/// `O_NOFOLLOW`. Components above those paths are followed. A command
+/// records the paths it is publishing or rolling back; tests that never
+/// record one keep the old refusal of every symlink. The bytes are copied
+/// so a caller's arena can be freed while the pins remain.
+const pin_slots = 8;
+threadlocal var pin_store: [pin_slots][sys.path_max]u8 = undefined;
+threadlocal var pin_len: [pin_slots]usize = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+fn pinAt(i: usize) []const u8 {
+    return pin_store[i][0..pin_len[i]];
+}
+
+fn pinCount() usize {
+    var n: usize = 0;
+    for (pin_len) |len| if (len != 0) {
+        n += 1;
+    };
+    return n;
+}
+
+fn pinHolds(path: []const u8) bool {
+    if (path.len == 0) return false;
+    for (0..pin_slots) |i| if (pin_len[i] == path.len and std.mem.eql(u8, pinAt(i), path)) return true;
+    return false;
+}
+
+fn clearPinRoots() void {
+    pin_len = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+}
+
+fn rememberPin(path: []const u8) void {
+    const trimmed = std.mem.trimEnd(u8, path, "/");
+    if (trimmed.len == 0 or trimmed.len >= sys.path_max) return;
+    if (pinHolds(trimmed)) return;
+    for (0..pin_slots) |i| if (pin_len[i] == 0) {
+        @memcpy(pin_store[i][0..trimmed.len], trimmed);
+        pin_len[i] = trimmed.len;
+        return;
+    };
+}
+
+fn armRun(r: *R) void {
+    const software = if (r.spec.software.len != 0) r.spec.software else r.str("software");
+    const state_root = if (r.spec.state_root.len != 0) r.spec.state_root else r.str("state_root");
+    const sw = std.mem.trimEnd(u8, software, "/");
+    const st = std.mem.trimEnd(u8, state_root, "/");
+    if (sw.len == 0 and st.len == 0) return;
+    // Pins left by another command in this process name other trees.
+    if (!pinHolds(sw) and !pinHolds(st) and pinCount() != 0) clearPinRoots();
+    rememberPin(sw);
+    rememberPin(st);
+}
+
+fn underPath(path: []const u8, root: []const u8) bool {
+    if (root.len == 0) return false;
+    if (std.mem.eql(u8, path, root)) return true;
+    return path.len > root.len and std.mem.startsWith(u8, path, root) and path[root.len] == '/';
+}
+
+fn protectedFor(path: []const u8) []const u8 {
+    var best: []const u8 = "";
+    for (0..pin_slots) |i| {
+        const root = pinAt(i);
+        if (underPath(path, root) and root.len > best.len) best = root;
+    }
+    return best;
+}
+
+/// Follow the next component when `parent` is still strictly above `protected`.
+fn followComponent(parent: []const u8, protected: []const u8) bool {
+    const prot = std.mem.trimEnd(u8, protected, "/");
+    if (prot.len <= 1) return false;
+    const above = if (parent.len == 0) "/" else parent;
+    if (!(prot.len > above.len and std.mem.startsWith(u8, prot, above) and (above.len == 1 or prot[above.len] == '/')))
+        return false;
+    const rest = if (above.len == 1 and above[0] == '/') prot[1..] else prot[above.len + 1 ..];
+    return std.mem.indexOfScalar(u8, rest, '/') != null;
+}
+
+const OpenStop = union(enum) {
+    fd: sys.fd_t,
+    /// Opening `/` failed.
+    root: sys.Error,
+    outside,
+    /// `parent` is still open. `comp` and `here` point into the caller's path.
+    blocked: struct {
+        parent: sys.fd_t,
+        comp: []const u8,
+        here: []const u8,
+        err: sys.Error,
+    },
+};
+
+/// Open `path` from `/`, one component at a time. A component is followed
+/// while its parent is strictly above `protected`. The next directory is
+/// opened before the parent is closed, so two descriptors are open across
+/// that call. `..` is `outside`. `prefix.openDirComponents`
+/// is the same shape for a path that is already below an open directory and
+/// is never followed; this walk starts at `/` and follows above `protected`.
+fn openProtected(path: []const u8, protected: []const u8) OpenStop {
+    if (path.len == 0 or std.mem.eql(u8, path, "/")) {
+        return .{ .fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return .{ .root = err } };
+    }
+    var fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return .{ .root = err };
+    const rel = if (path[0] == '/') path[1..] else path;
+    var it = std.mem.splitScalar(u8, rel, '/');
+    while (it.next()) |comp| {
+        if (comp.len == 0 or std.mem.eql(u8, comp, ".")) continue;
+        if (std.mem.eql(u8, comp, "..")) {
+            sys.close(fd);
+            return .outside;
+        }
+        const comp_off = @intFromPtr(comp.ptr) - @intFromPtr(path.ptr);
+        const parent = if (comp_off <= 1) "/" else path[0 .. comp_off - 1];
+        const here = path[0 .. comp_off + comp.len];
+        const next = fsx.openDir(fd, comp, followComponent(parent, protected)) catch |err| {
+            return .{ .blocked = .{ .parent = fd, .comp = comp, .here = here, .err = err } };
+        };
+        sys.close(fd);
+        fd = next;
+    }
+    return .{ .fd = fd };
+}
+
+fn openFollowing(path: []const u8, protected: []const u8) (sys.Error || error{Outside})!sys.fd_t {
+    switch (openProtected(path, protected)) {
+        .fd => |fd| return fd,
+        .root => |err| return err,
+        .outside => return error.Outside,
+        .blocked => |b| {
+            sys.close(b.parent);
+            return b.err;
+        },
+    }
+}
+
+/// Open `path` itself. A symlink above a recorded prefix is followed.
+/// A symlink inside the software tree or the state root is `error.NotDir`.
+pub fn openPinnedDir(path: []const u8) sys.Error!sys.fd_t {
+    return openFollowing(path, protectedFor(path)) catch |err| switch (err) {
+        error.Outside => error.NotDir,
+        else => |e| e,
+    };
+}
+
+fn walkFromRoot(base: []const u8, parent_rel: []const u8) (sys.Error || error{Outside})!sys.fd_t {
+    if (parent_rel.len == 0) return openFollowing(base, protectedFor(base));
+    var buf: [sys.path_max]u8 = undefined;
+    const full = if (std.mem.eql(u8, base, "/"))
+        std.fmt.bufPrint(&buf, "/{s}", .{parent_rel}) catch return error.NameTooLong
+    else
+        std.fmt.bufPrint(&buf, "{s}/{s}", .{ base, parent_rel }) catch return error.NameTooLong;
+    return openFollowing(full, protectedFor(full));
+}
+
+fn openStageParent(r: *R, staged: []const u8) E!StageParent {
+    armRun(r);
+    return pinStageParent(r.str("generation_root"), staged) catch |err| switch (err) {
+        error.Outside => r.refuse("staged installation escapes this run: {s}", .{staged}),
+        else => r.refuse("{s}", .{main_mod.osError(r.a, err, staged)}),
+    };
+}
+
+fn closeFd(fd: sys.fd_t) sys.Error!void {
+    return prefix_mod.closeChecked(fd);
+}
+
+fn fsyncClose(r: *R, fd: sys.fd_t, path: []const u8) E!void {
+    prefix_mod.fsyncCloseFd(fd) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, path)});
+}
+
+fn moveSealed(r: *R, parent: StageParent, source: []const u8, destination: []const u8) E!sys.fd_t {
+    const fd = fsx.openDir(parent.fd, parent.name, false) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    const dest_fd = moveSealedOpened(r, parent, fd, source, destination) catch |err| {
+        sys.close(fd);
+        return err;
+    };
+    closeFd(fd) catch |err| {
+        sys.close(dest_fd);
+        return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
+    };
+    return dest_fd;
+}
+
+/// Test-only: force the same-file check to fail, fail the mode restore,
+/// fail the reverse rename, and fail the Nth flush of the undo (1 is the
+/// directory, then each pinned parent).
+var test_mismatch: bool = false;
+var test_restore_mode_fail: bool = false;
+var test_reverse_rename_fail: bool = false;
+var undo_flush_fail_at: usize = 0;
+var undo_flush_count: usize = 0;
+
+fn mismatchInjected() bool {
+    if (comptime !atomic.replaceable) return false;
+    return test_mismatch;
+}
+
+fn flushFd(fd: sys.fd_t) sys.Error!void {
+    if (comptime atomic.replaceable) {
+        undo_flush_count += 1;
+        if (undo_flush_fail_at != 0 and undo_flush_count == undo_flush_fail_at) {
+            sys.last_errno = .IO;
+            return error.Unexpected;
+        }
+    }
+    return sys.fsync(fd);
+}
+
+fn reverseBlocked() bool {
+    if (comptime !atomic.replaceable) return false;
+    return test_reverse_rename_fail;
+}
+
+fn restoreMode(fd: sys.fd_t, mode: u32) sys.Error!void {
+    if (comptime atomic.replaceable) {
+        if (test_restore_mode_fail) {
+            sys.last_errno = .IO;
+            return error.Unexpected;
+        }
+    }
+    return sys.fchmod(fd, @intCast(mode));
+}
+
+fn sealIntervene(r: *R, comptime f: []const u8, args: anytype) E {
+    r.set("seal_stopped", .{ .bool = true });
+    if (r.path.len != 0) try r.save("journal.seal_stopped");
+    return r.intervene(f, args);
+}
+
+fn landedStopped(r: *R) bool {
+    return pyfmt.truthy(r.get("landed_stopped"));
+}
+
+/// The in-memory stop dies with the process. The journal keeps it, the
+/// same way `seal_stopped` is kept.
+fn persistLandedStop(r: *R) E!void {
+    if (landedStopped(r)) return;
+    r.set("landed_stopped", .{ .bool = true });
+    if (r.path.len != 0) try r.save("journal.landed_stopped");
+}
+
+fn stopIfLanded(r: *R) E!void {
+    if (!landedStopped(r)) return;
+    return r.intervene("the run stops for intervention and keeps the landed names", .{});
+}
+
+fn moveSealedOpened(r: *R, parent: StageParent, fd: sys.fd_t, source: []const u8, destination: []const u8) E!sys.fd_t {
+    armRun(r);
+    const st = fsx.fstat(fd) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    // Pin the destination parent from the root, one component at a time.
+    // A path rename would follow a symlink in any parent and land the tree there.
+    const dest_parent = pinStageParent("/", destination) catch |err| switch (err) {
+        error.Outside => return r.refuse("live destination escapes the prefix: {s}", .{destination}),
+        else => return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)}),
+    };
+    errdefer sys.close(dest_parent.fd);
     const mode = st.perm();
-    if (mode & 0o200 == 0) chmod(source, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
-    sys.renameat(fsx.cwd, source, fsx.cwd, destination) catch |err| {
-        if (mode & 0o200 == 0) chmod(source, mode) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, source)});
+    const locked = mode & 0o200 == 0;
+    if (locked) sys.fchmod(fd, @intCast(mode | 0o300)) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    sys.renameat(parent.fd, parent.name, dest_parent.fd, dest_parent.name) catch |err| {
+        if (locked) sys.fchmod(fd, @intCast(mode)) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, source)});
         if (err == error.CrossDevice) return r.refuse("the stage and live software tree are on different filesystems; place --state-root beside the software tree", .{});
         return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     };
-    if (mode & 0o200 == 0) chmod(destination, mode) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
+    const dest = fsx.statAt(dest_parent.fd, dest_parent.name, false) catch |err| {
+        if (locked) sys.fchmod(fd, @intCast(mode)) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, destination)});
+        return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
+    };
+    if (dest.dev != st.dev or dest.ino != st.ino or mismatchInjected()) {
+        if (reverseBlocked()) {
+            if (locked) sys.fchmod(fd, @intCast(mode)) catch |restore| return sealIntervene(r, "{s}", .{main_mod.osError(r.a, restore, source)});
+            sys.last_errno = .IO;
+            return sealIntervene(r, "{s}", .{main_mod.osError(r.a, error.Unexpected, destination)});
+        }
+        sys.renameat(dest_parent.fd, dest_parent.name, parent.fd, parent.name) catch |back| {
+            if (locked) sys.fchmod(fd, @intCast(mode)) catch |restore| return sealIntervene(r, "{s}", .{main_mod.osError(r.a, restore, source)});
+            return sealIntervene(r, "{s}", .{main_mod.osError(r.a, back, destination)});
+        };
+        // Put the mode back before any flush. The directory and both parents
+        // are flushed even when that restore fails, and even when the first
+        // flush fails.
+        var mode_err: ?sys.Error = null;
+        if (locked) restoreMode(fd, mode) catch |restore| {
+            mode_err = restore;
+        };
+        var flush_err: ?sys.Error = null;
+        var flush_path: []const u8 = source;
+        flushFd(fd) catch |err| {
+            if (flush_err == null) {
+                flush_err = err;
+                flush_path = source;
+            }
+        };
+        flushFd(parent.fd) catch |err| {
+            if (flush_err == null) {
+                flush_err = err;
+                flush_path = source;
+            }
+        };
+        flushFd(dest_parent.fd) catch |err| {
+            if (flush_err == null) {
+                flush_err = err;
+                flush_path = destination;
+            }
+        };
+        if (flush_err) |err| return sealIntervene(r, "{s}", .{main_mod.osError(r.a, err, flush_path)});
+        if (mode_err) |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+        return r.refuse("staged directory {s} changed before the rename", .{source});
+    }
+    if (locked) sys.fchmod(fd, @intCast(mode)) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
+    return dest_parent.fd;
+}
+
+fn flushStageParent(r: *R, staged: []const u8) E!void {
+    const parent = try openStageParent(r, staged);
+    const source = std.fs.path.dirname(staged) orelse "/";
+    try fsyncClose(r, parent.fd, source);
 }
 
 fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
+    armRun(r);
+    if (pyfmt.truthy(r.get("seal_stopped")))
+        return r.intervene("staged directory {s} needs intervention", .{s(pyfmt.get(m, "rel"))});
     const staged = s(pyfmt.get(m, "staged"));
     const retired = s(pyfmt.get(m, "retired"));
     const sk = kind(staged);
     const rk = kind(retired);
     // The staged tree still holds the generation path. Rewrite it before the
     // directory moves, so the bytes that land at the stable path name that path.
-    if (std.mem.eql(u8, sk, "dir")) {
-        var why: []const u8 = "";
-        prefix_mod.rewriteInstall(r.a, staged, s(pyfmt.get(m, "live_software")), &why) catch |err| switch (err) {
-            error.Refused => return r.refuse("{s}", .{why}),
-            else => return err,
-        };
+    if (staged.len != 0) {
+        const staged_place = judgeStaged(r.a, r.str("generation_root"), staged);
+        if (staged_place.place == .limit) return r.refuse("{s}", .{staged_place.why});
+        if (staged_place.place == .refuse) return r.refuse("staged installation escapes this run: {s}: {s}", .{ staged, staged_place.why });
     }
-    if (std.mem.eql(u8, sk, "dir") and std.mem.eql(u8, rk, "missing")) {
-        try hit(r, r.faults(), try r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}));
-        try moveSealed(r, staged, retired);
+    if (std.mem.eql(u8, sk, "dir")) {
+        const held = try openStageParent(r, staged);
+        const opened = fsx.openDir(held.fd, held.name, false) catch |err| {
+            sys.close(held.fd);
+            return r.refuse("{s}", .{main_mod.osError(r.a, err, staged)});
+        };
+        var why: []const u8 = "";
+        prefix_mod.rewriteInstallPinned(r.a, opened, staged, s(pyfmt.get(m, "live_software")), &why) catch |err| {
+            sys.close(opened);
+            sys.close(held.fd);
+            return switch (err) {
+                error.Refused => r.refuse("{s}", .{why}),
+                else => err,
+            };
+        };
+        sys.close(opened);
+        if (!std.mem.eql(u8, rk, "missing")) {
+            sys.close(held.fd);
+            return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
+        }
+        const step = r.a.print("stage.move:{s}", .{s(pyfmt.get(m, "rel"))}) catch |err| {
+            sys.close(held.fd);
+            return err;
+        };
+        hit(r, r.faults(), step) catch |err| {
+            sys.close(held.fd);
+            return err;
+        };
+        const dest_fd = moveSealed(r, held, staged, retired) catch |err| {
+            sys.close(held.fd);
+            return err;
+        };
         // A cross-directory rename is durable only after both parents are
         // flushed: the destination gained the retired name, and the source
-        // lost the staged name.
+        // lost the staged name. Flush the pinned destination descriptor so
+        // a symlink in that path cannot redirect the flush.
         const parent = std.fs.path.dirname(retired) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        fsyncClose(r, dest_fd, parent) catch |err| {
+            sys.close(held.fd);
+            return err;
+        };
         const source = std.fs.path.dirname(staged) orelse "/";
-        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+        try fsyncClose(r, held.fd, source);
     } else if (std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir")) {
         // The rename already happened. A failed flush left it uncommitted,
-        // so a retry flushes both parents again before publishing.
+        // so a retry flushes both parents again before publishing. Pin the
+        // retired parent from `/` and flush that descriptor; reopening the
+        // path would follow a symlink planted on a parent.
+        const pinned = pinStageParent("/", retired) catch |err| switch (err) {
+            error.Outside => return r.refuse("live destination escapes the prefix: {s}", .{retired}),
+            else => return r.refuse("{s}", .{main_mod.osError(r.a, err, retired)}),
+        };
         const parent = std.fs.path.dirname(retired) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
-        const source = std.fs.path.dirname(staged) orelse "/";
-        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+        try fsyncClose(r, pinned.fd, parent);
+        try flushStageParent(r, staged);
     } else {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
@@ -1130,7 +2078,12 @@ fn createLinks(r: *R, faults: atomic.Faults) E!void {
             continue;
         }
         const parent = std.fs.path.dirname(path) orelse "/";
-        if (symlinkComponent(a, parent)) |c| return r.refuse("{s} is a symlink", .{c});
+        const parent_place = judgeStaged(a, r.spec.modules, parent);
+        if (parent_place.place == .limit) return r.refuse("{s}", .{parent_place.why});
+        if (parent_place.place == .refuse) {
+            if (std.mem.endsWith(u8, parent_place.why, "is a symlink")) return r.refuse("{s} is a symlink", .{parent_place.at});
+            return r.refuse("{s}", .{parent_place.why});
+        }
         atomic.makedirs(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, parent)});
         try hit(r, faults, try a.print("links.create:{s}", .{s(pyfmt.get(l, "rel"))}));
         var zt: [sys.path_max:0]u8 = undefined;
@@ -1164,6 +2117,7 @@ fn removeCreatedLinks(r: *R) E!void {
 }
 
 fn normalizeBaseline(r: *R) E!void {
+    try stopIfLanded(r);
     const run_id = r.str("run_id");
     const mods = r.list("modules_plan");
     var i = mods.len;
@@ -1178,6 +2132,7 @@ fn normalizeBaseline(r: *R) E!void {
         const live_is = lr != null and std.mem.eql(u8, lr.?, run_id);
         const retired_is = rr != null and std.mem.eql(u8, rr.?, run_id);
         if (live_is and !retired_is) {
+            if (swap.landedStop()) return r.intervene("{s}", .{r.why});
             _ = try swapPair(r, live, retired, .{}, try r.a.print("recover:{s}", .{s(pyfmt.get(m, "rel"))}));
         } else if (!(!live_is and retired_is)) {
             return r.intervene("cannot identify old and staged trees for {s}: live run={s}, retired run={s}", .{ s(pyfmt.get(m, "rel")), reprOpt(r.a, lr), reprOpt(r.a, rr) });
@@ -1224,6 +2179,8 @@ fn validatePublicationSet(r: *R) E!void {
 
 fn publish(r: *R) E!void {
     const a = r.a;
+    try stopIfLanded(r);
+    swap.clearLandedStop();
     for (r.list("modules_plan")) |m| {
         const live = s(pyfmt.get(m, "live_software"));
         const retired = s(pyfmt.get(m, "retired"));
@@ -1239,6 +2196,7 @@ fn publish(r: *R) E!void {
     r.set("state", Py.s("publishing"));
     try r.save("journal.publishing");
     publishSteps(r) catch |err| {
+        if (err == error.NeedsIntervention and (swap.landedStop() or landedStopped(r))) return err;
         const first = r.why;
         const kind_err = err;
         removeCreatedLinks(r) catch {
@@ -1342,11 +2300,16 @@ fn preparePublication(r: *R) E!u8 {
 }
 
 fn failRun(r: *R, message: []const u8, code: u8) E!Result {
+    const recorded = recordStagedPaths(r);
     r.set("state", Py.s("failed"));
     r.set("message", Py.s(message));
     r.set("updated_at", .{ .float = now() });
     try r.save("journal.failed");
     log("{s}", .{message});
+    recorded catch |err| switch (err) {
+        error.Refused => log("{s}", .{r.str("stage_scan_error")}),
+        else => |e| return e,
+    };
     return .{ .code = code, .message = message };
 }
 
@@ -1499,6 +2462,10 @@ fn publishRecorded(r: *R) E!Result {
 fn runLocked(r: *R, fresh_build: bool) E!Result {
     if (fresh_build) {
         const rc = try build(r);
+        recordStagedPaths(r) catch |err| switch (err) {
+            error.Refused => {},
+            else => |e| return e,
+        };
         if (rc != 0) return failRun(r, try r.a.print("eb exited {d}; live modules were not changed", .{rc}), rc);
         enforceManifest(r) catch |err| switch (err) {
             error.Refused => return failRun(r, r.why, 2),
@@ -1595,17 +2562,8 @@ pub fn run(r: *R, probes: Py, ledger_policy: Py) E!Result {
     const policy: Py = ledger_policy;
     const learned = try learnRels(r);
     const rels = learned.rels;
-    for (rels) |rel| try checkInstallDir(r, rel);
-    var run_id: []const u8 = r.spec.run_id orelse "";
-    if (run_id.len == 0) {
-        const base = try a.print("{s}-{d}", .{ nowStampRunId(a), linux.getpid() });
-        run_id = base;
-        var n: usize = 0;
-        while (fsx.statAt(fsx.cwd, runDir(a, r.spec.state_root, run_id), true)) |_| {
-            n += 1;
-            run_id = try a.print("{s}-{d}", .{ base, n });
-        } else |_| {}
-    }
+    for (rels) |rel| try guardLiveInstall(r, rel);
+    const run_id = chooseRunId(a, r.spec);
     const l = try lockRoot(r);
     return released(r, l, startLocked(r, learned, run_id, probes, policy));
 }
@@ -1623,6 +2581,50 @@ fn released(r: *R, l: state.RootLock, outcome: E!Result) E!Result {
     return res;
 }
 
+/// The run id publish will use. A caller that already chose one, including
+/// the judge that runs before eb, keeps it.
+pub fn chooseRunId(a: Allocator, spec: engine.Spec) []const u8 {
+    if (spec.run_id) |id| if (id.len != 0) return id;
+    const base = a.print("{s}-{d}", .{ nowStampRunId(a), linux.getpid() }) catch oom();
+    var run_id = base;
+    var n: usize = 0;
+    while (fsx.statAt(fsx.cwd, runDir(a, spec.state_root, run_id), true)) |_| {
+        n += 1;
+        run_id = a.print("{s}-{d}", .{ base, n }) catch oom();
+    } else |_| {}
+    return run_id;
+}
+
+/// Judge the generation `run_id` names before probeAll or learnRels. An
+/// absent generation is allowed. `why` receives the refusal text.
+pub fn judgeKnownGeneration(a: Allocator, env: probe.Env, spec: engine.Spec, run_id: []const u8, why: *[]const u8) E!void {
+    const gen = admin.abspath(a, std.fs.path.join(a, &.{ spec.state_root, "generations", run_id }) catch oom());
+    var spec_now = spec;
+    spec_now.run_id = run_id;
+    const entries = a.dupe(Py.Entry, &.{
+        .{ .key = "generation_root", .value = Py.s(gen) },
+        .{ .key = "run_id", .value = Py.s(run_id) },
+        .{ .key = "backend", .value = Py.s(spec.backend) },
+        .{ .key = "software", .value = Py.s(spec.software) },
+        .{ .key = "modules", .value = Py.s(spec.modules) },
+        .{ .key = "state_root", .value = Py.s(spec.state_root) },
+        .{ .key = "module_rels", .value = pyList(a, spec.module_rels) },
+        .{ .key = "modules_plan", .value = .{ .list = &.{} } },
+    }) catch return error.OutOfMemory;
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var judged: R = .{
+        .a = a,
+        .env = env,
+        .ctx = &ctx,
+        .spec = spec_now,
+        .journal = .{ .dict = entries },
+    };
+    guardRecordedStage(&judged) catch |err| {
+        why.* = judged.why;
+        return err;
+    };
+}
+
 /// run under the state root's lock: write the new journal, then build and
 /// publish.
 fn startLocked(r: *R, learned: Learned, run_id: []const u8, probes: Py, policy: Py) E!Result {
@@ -1632,7 +2634,6 @@ fn startLocked(r: *R, learned: Learned, run_id: []const u8, probes: Py, policy: 
     try checkFreeSpace(r);
     r.path = try std.fs.path.join(a, &.{ runDir(a, r.spec.state_root, run_id), "journal.json" });
     if (fsx.statAt(fsx.cwd, r.path, true)) |_| return r.refuse("run {s} already exists; resume it or choose another --run-id", .{run_id}) else |_| {}
-    atomic.makedirs(runDir(a, r.spec.state_root, run_id)) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.state_root)});
     const t = now();
     var manifests: std.ArrayList(Py.Entry) = .empty;
     if (!r.spec.skip_live_check) for (rels) |rel| {
@@ -1677,6 +2678,8 @@ fn startLocked(r: *R, learned: Learned, run_id: []const u8, probes: Py, policy: 
     });
     if (r.spec.build_dir) |bd| try j_entries.append(a, .{ .key = "build_dir", .value = Py.s(admin.abspath(a, bd)) });
     r.journal = .{ .dict = j_entries.items };
+    try guardRecordedStage(r);
+    atomic.makedirs(runDir(a, r.spec.state_root, run_id)) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, r.spec.state_root)});
     if (r.spec.verify) {
         r.set("verify_before_swap", .{ .bool = true });
         r.set("verify_context", verify_mod.context(a, r.spec.eb_args, r.env));
@@ -1750,7 +2753,24 @@ fn resumeLocked(r: *R, run_id: []const u8, verify: bool, force: bool) E!Result {
     const state_root = r.spec.state_root;
     const j = admin.loadRunJournal(a, state_root, run_id).journal;
     r.journal = j;
+    try stopIfLanded(r);
     const state_name = r.str("state");
+    // Before any judgment of the generation. A complete run stays complete
+    // when its module tree holds a file symlink.
+    if (std.mem.eql(u8, state_name, "complete")) {
+        for (r.list("modules_plan")) |m| {
+            if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "restoring")) {
+                return r.refuse("run {s} has an interrupted rollback; run rollback again", .{run_id});
+            }
+        }
+        const m = try a.print("run {s} is already complete", .{run_id});
+        return recordFinished(r, try publisher(r), m);
+    }
+    // A scan that could not name every staged path must not rebuild.
+    if ((std.mem.eql(u8, state_name, "created") or std.mem.eql(u8, state_name, "building") or std.mem.eql(u8, state_name, "failed")) and r.str("stage_scan_error").len != 0)
+        return r.refuse("{s}", .{r.str("stage_scan_error")});
+    // Before a journal save, a log line, or eb. Only an absent path may rebuild.
+    try guardRecordedStage(r);
     const gated = pyfmt.truthy(r.get("verify_before_swap"));
     if (force and !(verify or gated)) return r.refuse("--force needs --verify; run {s} does not check its stage before the swap", .{run_id});
     if ((verify or gated) and (std.mem.eql(u8, state_name, "built") or std.mem.eql(u8, state_name, "publishing"))) admin.requireStageModules(env, j);
@@ -1766,15 +2786,6 @@ fn resumeLocked(r: *R, run_id: []const u8, verify: bool, force: bool) E!Result {
     for (r.list("modules_plan")) |m| if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "published")) {
         published = true;
     };
-    if (std.mem.eql(u8, state_name, "complete")) {
-        for (r.list("modules_plan")) |m| {
-            if (std.mem.eql(u8, s(pyfmt.get(m, "status")), "restoring")) {
-                return r.refuse("run {s} has an interrupted rollback; run rollback again", .{run_id});
-            }
-        }
-        const m = try a.print("run {s} is already complete", .{run_id});
-        return recordFinished(r, try publisher(r), m);
-    }
     if (std.mem.eql(u8, state_name, "rolled_back")) return r.refuse("run {s} was rolled back; start a new run", .{run_id});
     if (std.mem.eql(u8, state_name, "rolling_back")) return r.refuse("{s}", .{rollingBack(a, j)});
     if (std.mem.eql(u8, state_name, "created") or std.mem.eql(u8, state_name, "building") or std.mem.eql(u8, state_name, "failed")) {
@@ -1791,6 +2802,7 @@ fn resumeLocked(r: *R, run_id: []const u8, verify: bool, force: bool) E!Result {
 
 /// rollback of a complete run journal, without a ledger.
 pub fn rollbackRun(r: *R) E!Result {
+    try stopIfLanded(r);
     const a = r.a;
     const run_id = r.str("run_id");
     if (std.mem.eql(u8, r.str("state"), "rolling_back")) return r.refuse("{s}", .{rollingBack(a, r.journal)});
@@ -1842,6 +2854,7 @@ pub fn rollbackRun(r: *R) E!Result {
         }
     };
     rollbackSteps(r) catch |err| {
+        if (swap.landedStop() or landedStopped(r)) return err;
         const first = r.why;
         restorePublished(r) catch return r.intervene("rollback failed and the published tree could not be restored: {s}", .{r.why});
         r.set("state", Py.s("complete"));
@@ -1900,6 +2913,7 @@ fn recordRollback(r: *R, config: ?Py, finished: *const publish_mod.Corrects, sta
 }
 
 fn rollbackSteps(r: *R) E!void {
+    try stopIfLanded(r);
     const a = r.a;
     const mods = r.list("modules_plan");
     var i = mods.len;
@@ -1910,6 +2924,9 @@ fn rollbackSteps(r: *R) E!void {
         const live = s(pyfmt.get(m, "live_software"));
         const retired = s(pyfmt.get(m, "retired"));
         try recoverPair(r, live, retired);
+        // A landed exchange that was not flushed is not done. Recording it
+        // would leave the journal ahead of the names.
+        if (landedStopped(r)) return r.intervene("the run stops for intervention and keeps the landed names", .{});
         // An exchange the journal did not record already put the old tree
         // back: this run's tree is at the retired name.
         const lr = treeRunId(a, live);
@@ -1953,6 +2970,7 @@ fn rollbackSteps(r: *R) E!void {
 }
 
 fn restorePublished(r: *R) E!void {
+    try stopIfLanded(r);
     const run_id = r.str("run_id");
     for (r.list("modules_plan"), 0..) |m, i| {
         const live = s(pyfmt.get(m, "live_software"));
@@ -2094,8 +3112,27 @@ fn rotationStage(r: *R, gen: []const u8, live: []const u8, chain: []const Link, 
     const a = r.a;
     const n = chain.len;
     var i: usize = 0;
-    while (i + 1 < n) : (i += 1) try recoverPair(r, s(pyfmt.get(planItem(runs, chain[i + 1]), "retired")), s(pyfmt.get(planItem(runs, chain[i]), "retired")));
-    try recoverPair(r, live, s(pyfmt.get(planItem(runs, chain[n - 1]), "retired")));
+    // Recovery reads the chain's newest journal. selectOwners does not
+    // change that. A flush that lands is saved on every run that owns the pair.
+    if (n != 0) select(r, &runs[chain[n - 1].run]);
+    while (i + 1 < n) : (i += 1) {
+        const newer = s(pyfmt.get(planItem(runs, chain[i + 1]), "retired"));
+        const older = s(pyfmt.get(planItem(runs, chain[i]), "retired"));
+        const owners = selectOwners(r, runs, newer, older);
+        select(r, &runs[chain[n - 1].run]);
+        recoverPair(r, newer, older) catch |err| {
+            if (err == error.NeedsIntervention) try saveOwnerStop(r, runs, owners);
+            return err;
+        };
+    }
+    const last = chain[n - 1];
+    const last_retired = s(pyfmt.get(planItem(runs, last), "retired"));
+    const last_owners = selectOwners(r, runs, live, last_retired);
+    select(r, &runs[last.run]);
+    recoverPair(r, live, last_retired) catch |err| {
+        if (err == error.NeedsIntervention) try saveOwnerStop(r, runs, last_owners);
+        return err;
+    };
     var kept: std.ArrayList([]const u8) = .empty;
     for (chain) |l| kept.append(a, s(pyfmt.get(planItem(runs, l), "retired"))) catch oom();
     kept.append(a, live) catch oom();
@@ -2131,6 +3168,56 @@ fn select(r: *R, undo: *const Run) void {
     r.path = undo.path;
 }
 
+fn ownsPath(a: Allocator, journal: Py, path: []const u8) bool {
+    const want = admin.abspath(a, path);
+    if (want.len == 0) return false;
+    const mods = pyfmt.get(journal, "modules_plan") orelse return false;
+    if (mods != .list) return false;
+    for (mods.list) |m| {
+        const live = admin.abspath(a, s(pyfmt.get(m, "live_software")));
+        const retired = admin.abspath(a, s(pyfmt.get(m, "retired")));
+        if (live.len != 0 and std.mem.eql(u8, want, live)) return true;
+        if (retired.len != 0 and std.mem.eql(u8, want, retired)) return true;
+        if (retired.len != 0) {
+            const hold = a.print("{s}{s}", .{ retired, swap.fallback_hold_suffix }) catch continue;
+            if (std.mem.eql(u8, want, hold)) return true;
+        }
+    }
+    return false;
+}
+
+/// Every run in `runs` whose journal owns `p` or `q`, including the run
+/// whose retired path holds the `.fallback-old` hold.
+fn pairOwners(a: Allocator, runs: []const Run, p: []const u8, q: []const u8) []const usize {
+    var out: std.ArrayList(usize) = .empty;
+    for (runs, 0..) |undo, i| {
+        if (ownsPath(a, undo.journal, p) or ownsPath(a, undo.journal, q)) out.append(a, i) catch oom();
+    }
+    return out.items;
+}
+
+fn ownsEither(r: *R, p: []const u8, q: []const u8) bool {
+    return ownsPath(r.a, r.journal, p) or ownsPath(r.a, r.journal, q);
+}
+
+fn selectOwners(r: *R, runs: []const Run, p: []const u8, q: []const u8) []const usize {
+    // The list is only for saveOwnerStop. swapPair and recoverPair keep
+    // reading the chain's newest journal.
+    return pairOwners(r.a, runs, p, q);
+}
+
+fn saveOwnerStop(r: *R, runs: []const Run, owners: []const usize) E!void {
+    if (!swap.landedStop()) return;
+    if (owners.len == 0) {
+        try persistLandedStop(r);
+        return;
+    }
+    for (owners) |i| {
+        select(r, &runs[i]);
+        try persistLandedStop(r);
+    }
+}
+
 /// _rollback_to: undo every run published over generation `gen`. Each
 /// install path switches once, straight to the tree `gen` left there, and
 /// each undone run's tree ends at its own retired path. The runs are marked
@@ -2162,6 +3249,15 @@ pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
         r.journal = loaded.journal;
         return rollbackRun(r);
     }
+    // A landed stop already saved on a chosen run stops before recovery.
+    // rotationStage selects the owning run before it recovers, so a flush
+    // that fails after a fallback rename lands is saved on that journal.
+    for (runs) |undo| if (pyfmt.truthy(pyfmt.get(undo.journal, "landed_stopped")))
+        return r.intervene("the run stops for intervention and keeps the landed names", .{});
+    clearPinRoots();
+    for (runs) |undo| rememberPin(s(pyfmt.get(undo.journal, "software")));
+    rememberPin(s(pyfmt.get(target, "software")));
+    rememberPin(state_root);
     var ledgered: std.ArrayList([]const u8) = .empty;
     for (runs) |undo| if (pyfmt.truthy(pyfmt.get(undo.journal, "ledger_config"))) ledgered.append(a, s(pyfmt.get(undo.journal, "run_id"))) catch oom();
     if (ledgered.items.len > 0) return r.refuse("rollback --to {s} would pass over runs that record to a ledger ({s}); roll them back one at a time", .{ gen, std.mem.join(a, ", ", ledgered.items) catch oom() });
@@ -2183,6 +3279,12 @@ pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
     }
     const stages = a.alloc(usize, chains.count()) catch oom();
     for (chains.keys(), chains.values(), 0..) |live, chain, k| stages[k] = try rotationStage(r, gen, live, chain.items, runs, holds(ours, live));
+    // The chain's newest journal decides require_exchange, before any save.
+    for (chains.values()) |chain| {
+        if (chain.items.len == 0) continue;
+        select(r, &runs[chain.items[chain.items.len - 1].run]);
+        if (requireExchange(r) and !allowExchange(r)) return r.refuse("RENAME_EXCHANGE is required", .{});
+    }
     for (runs) |*undo| {
         if (admin.eqlStr(pyfmt.get(undo.journal, "state"), "rolling_back")) continue;
         select(r, undo);
@@ -2195,14 +3297,24 @@ pub fn rollbackTo(r: *R, gen: []const u8) E!Result {
     var methods: std.StringHashMapUnmanaged([]const u8) = .empty;
     for (chains.keys(), chains.values(), 0..) |live, chain, k| {
         const items = chain.items;
-        select(r, &runs[items[items.len - 1].run]);
         for (stages[k]..items.len) |index| {
             const m = planItem(runs, items[index]);
             const rel = s(pyfmt.get(m, "rel"));
-            const method = if (index + 1 < items.len)
-                try swapPair(r, s(pyfmt.get(planItem(runs, items[index + 1]), "retired")), s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.rotate:{s}:{s}", .{ rel, runId(runs, items[index]) }))
+            const left = if (index + 1 < items.len)
+                s(pyfmt.get(planItem(runs, items[index + 1]), "retired"))
             else
-                try swapPair(r, live, s(pyfmt.get(m, "retired")), r.faults(), try a.print("rollback.swap:{s}", .{rel}));
+                live;
+            const right = s(pyfmt.get(m, "retired"));
+            const owners = selectOwners(r, runs, left, right);
+            select(r, &runs[items[items.len - 1].run]);
+            const step = if (index + 1 < items.len)
+                try a.print("rollback.rotate:{s}:{s}", .{ rel, runId(runs, items[index]) })
+            else
+                try a.print("rollback.swap:{s}", .{rel});
+            const method = swapPair(r, left, right, r.faults(), step) catch |err| {
+                if (err == error.NeedsIntervention) try saveOwnerStop(r, runs, owners);
+                return err;
+            };
             methods.put(a, try a.print("{s}\x00{s}", .{ runId(runs, items[index]), live }), method) catch oom();
         }
         const first = planItem(runs, items[0]);
@@ -2761,7 +3873,10 @@ test "a failed directory flush after a staged tree is renamed is reported" {
         .{ .key = "retired", .value = Py.s(retired) },
         .{ .key = "live_software", .value = Py.s(live) },
     }) };
-    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const gen = std.fs.path.dirname(std.fs.path.dirname(std.fs.path.dirname(staged).?).?).?;
+    var r = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "generation_root", .value = Py.s(gen) },
+    }) });
     try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
     try expectFlush(r.why, std.fs.path.dirname(retired).?);
     try std.testing.expect(isKind(staged, "missing"));
@@ -2789,7 +3904,10 @@ test "a failed flush of the source parent after a cross-directory rename is repo
         .{ .key = "retired", .value = Py.s(retired) },
         .{ .key = "live_software", .value = Py.s(live) },
     }) };
-    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const gen = std.fs.path.dirname(std.fs.path.dirname(std.fs.path.dirname(staged).?).?).?;
+    var r = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "generation_root", .value = Py.s(gen) },
+    }) });
     const source = std.fs.path.dirname(staged).?;
     try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
     try expectFlush(r.why, source);
@@ -2892,7 +4010,10 @@ test "a retry flushes the source parent again after the rename" {
         .{ .key = "retired", .value = Py.s(retired) },
         .{ .key = "live_software", .value = Py.s(live) },
     }) };
-    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const gen = std.fs.path.dirname(std.fs.path.dirname(std.fs.path.dirname(staged).?).?).?;
+    var r = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "generation_root", .value = Py.s(gen) },
+    }) });
     const source = std.fs.path.dirname(staged).?;
     try std.testing.expectError(error.Refused, prepareSwapSource(&r, item, "r1"));
     try expectFlush(r.why, source);
@@ -2935,4 +4056,756 @@ test "a retry flushes the parent of a created link that is already gone" {
     try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
     try expectFlush(removing.why, dir);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+}
+
+test "an undone sealed rename restores the mode and flushes both parents" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-undo-flush-{d}", .{linux.getpid()});
+    const gen = try std.fs.path.join(a, &.{ root, "gen" });
+    const staged = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+    const dest = try std.fs.path.join(a, &.{ root, "dest", "moved" });
+    defer {
+        chmod(staged, 0o755) catch {};
+        chmod(dest, 0o755) catch {};
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+        test_mismatch = false;
+        test_restore_mode_fail = false;
+        test_reverse_rename_fail = false;
+        undo_flush_fail_at = 0;
+        undo_flush_count = 0;
+    }
+    try atomic.makedirs(staged);
+    try atomic.makedirs(std.fs.path.dirname(dest).?);
+    try chmod(staged, 0o555);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const held = try pinStageParent(gen, staged);
+    defer sys.close(held.fd);
+    test_mismatch = true;
+    undo_flush_fail_at = 1;
+    undo_flush_count = 0;
+    const failed = moveSealed(&r, held, staged, dest);
+    const st = try fsx.statAt(fsx.cwd, staged, false);
+    try std.testing.expectEqual(@as(u32, 0o555), st.perm());
+    try std.testing.expect(isKind(dest, "missing"));
+    try std.testing.expectError(error.NeedsIntervention, failed);
+    try std.testing.expectEqual(@as(usize, 3), undo_flush_count);
+}
+
+test "a failed mode restore still flushes and a failed reverse rename does not publish" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    defer {
+        test_mismatch = false;
+        test_restore_mode_fail = false;
+        test_reverse_rename_fail = false;
+        undo_flush_fail_at = 0;
+        undo_flush_count = 0;
+    }
+
+    {
+        const root = try a.print("/tmp/esr-mode-flush-{d}", .{linux.getpid()});
+        const gen = try std.fs.path.join(a, &.{ root, "gen" });
+        const staged = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+        const dest = try std.fs.path.join(a, &.{ root, "dest", "moved" });
+        defer {
+            chmod(staged, 0o755) catch {};
+            chmod(dest, 0o755) catch {};
+            fsx.deleteTree(a, fsx.cwd, root) catch {};
+        }
+        try atomic.makedirs(staged);
+        try atomic.makedirs(std.fs.path.dirname(dest).?);
+        try chmod(staged, 0o555);
+        const env = testEnv();
+        var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+        var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+        const held = try pinStageParent(gen, staged);
+        defer sys.close(held.fd);
+        test_mismatch = true;
+        test_restore_mode_fail = true;
+        undo_flush_count = 0;
+        const failed = moveSealed(&r, held, staged, dest);
+        const st = try fsx.statAt(fsx.cwd, staged, false);
+        try std.testing.expectEqual(@as(u32, 0o755), st.perm());
+        try std.testing.expectEqual(@as(usize, 3), undo_flush_count);
+        try std.testing.expect(isKind(dest, "missing"));
+        try std.testing.expect(isKind(staged, "dir"));
+        try std.testing.expectError(error.Refused, failed);
+        test_mismatch = false;
+        test_restore_mode_fail = false;
+    }
+
+    {
+        const root = try a.print("/tmp/esr-rev-rename-{d}", .{linux.getpid()});
+        defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+        const gen = try std.fs.path.join(a, &.{ root, "gen" });
+        const staged = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+        const live = try std.fs.path.join(a, &.{ root, "software", "demo", "1" });
+        const retired = try std.fs.path.join(a, &.{ root, "software", ".1.retired" });
+        try atomic.makedirs(staged);
+        try atomic.makedirs(std.fs.path.dirname(live).?);
+        try atomic.makedirs(std.fs.path.dirname(retired).?);
+        try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+        try writeBytes(try std.fs.path.join(a, &.{ staged, "PAYLOAD" }), "staged\n");
+        const env = testEnv();
+        var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+        const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+            .{ .key = "rel", .value = Py.s("demo/1") },
+            .{ .key = "staged", .value = Py.s(staged) },
+            .{ .key = "retired", .value = Py.s(retired) },
+            .{ .key = "live_software", .value = Py.s(live) },
+        }) };
+        var r = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+            .{ .key = "generation_root", .value = Py.s(gen) },
+        }) });
+        test_mismatch = true;
+        test_reverse_rename_fail = true;
+        try std.testing.expectError(error.NeedsIntervention, prepareSwapSource(&r, item, "r1"));
+        try std.testing.expect(isKind(staged, "missing"));
+        try std.testing.expect(isKind(retired, "dir"));
+        try std.testing.expect(isKind(live, "missing"));
+        r.why = "";
+        try std.testing.expectError(error.NeedsIntervention, prepareSwapSource(&r, item, "r1"));
+        try std.testing.expect(isKind(live, "missing"));
+        try std.testing.expect(isKind(retired, "dir"));
+        try std.testing.expect(isKind(try std.fs.path.join(a, &.{ retired, "PAYLOAD" }), "file"));
+    }
+}
+
+test "a final name swapped for a symlink leaves the outside directory mode unchanged" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-final-link-{d}", .{linux.getpid()});
+    const victim = try std.fs.path.join(a, &.{ root, "outside", "victim" });
+    defer {
+        chmod(victim, 0o755) catch {};
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const gen = try std.fs.path.join(a, &.{ root, "gen" });
+    const staged = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+    const dest = try std.fs.path.join(a, &.{ root, "dest", "moved" });
+    try atomic.makedirs(std.fs.path.dirname(staged).?);
+    try atomic.makedirs(victim);
+    try atomic.makedirs(std.fs.path.dirname(dest).?);
+    try chmod(victim, 0o555);
+    // From software/demo, this names root/outside/victim. After the rename
+    // the same relative text is resolved from root/dest and misses victim.
+    try linkTo("../../../outside/victim", staged);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    const held = try pinStageParent(gen, staged);
+    defer sys.close(held.fd);
+    const failed = moveSealed(&r, held, staged, dest);
+    const st = try fsx.statAt(fsx.cwd, victim, false);
+    try std.testing.expectEqual(@as(u32, 0o555), st.perm());
+    try std.testing.expectError(error.Refused, failed);
+}
+
+test "pinStageParent does not follow a symlink above the generation" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-pin-gen-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const staged = try std.fs.path.join(a, &.{ root, "outside", "r1", "software", "demo", "1" });
+    try atomic.makedirs(staged);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, "PAYLOAD" }), "outside\n");
+    const state_dir = try std.fs.path.join(a, &.{ root, "state" });
+    try atomic.makedirs(state_dir);
+    const outside = try std.fs.path.join(a, &.{ root, "outside" });
+    const generations = try std.fs.path.join(a, &.{ state_dir, "generations" });
+    try linkTo(outside, generations);
+    const gen = try std.fs.path.join(a, &.{ generations, "r1" });
+    const through = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+    try std.testing.expectError(error.NotDir, pinStageParent(gen, through));
+    try std.testing.expect(isKind(staged, "dir"));
+    try std.testing.expect(isKind(generations, "symlink"));
+}
+
+fn fileText(a: Allocator, path: []const u8) ![]const u8 {
+    const f = try fsx.openRegular(fsx.cwd, path, true);
+    defer sys.close(f.fd);
+    return fsx.readAll(a, f.fd, 1 << 20);
+}
+
+test "a landed stop reloaded from the journal stops resume and rollback" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-landed-stop-{d}", .{linux.getpid()});
+    defer {
+        swap.clearLandedStop();
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const gen = try std.fs.path.join(a, &.{ state_root, "generations", "r1" });
+    const live = try std.fs.path.join(a, &.{ software, "demo", "1" });
+    const retired = try std.fs.path.join(a, &.{ software, "demo", ".1.r1" });
+    const journal_path = try std.fs.path.join(a, &.{ state_root, "runs", "r1", "journal.json" });
+    try atomic.makedirs(live);
+    try atomic.makedirs(retired);
+    try atomic.makedirs(modules);
+    try atomic.makedirs(gen);
+    try atomic.makedirs(std.fs.path.dirname(journal_path).?);
+    try writeBytes(try std.fs.path.join(a, &.{ live, "PAYLOAD" }), "new\n");
+    try writeBytes(try std.fs.path.join(a, &.{ live, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired, "PAYLOAD" }), "old\n");
+    const exchange = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "ok", .value = .{ .bool = true } },
+    }) };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "live_module", .value = Py.s(try std.fs.path.join(a, &.{ modules, "demo", "1.lua" })) },
+        .{ .key = "prepared", .value = Py.s(try std.fs.path.join(a, &.{ state_root, "runs", "r1", "prepared.lua" })) },
+        .{ .key = "staged", .value = Py.s(try std.fs.path.join(a, &.{ gen, "software", "demo", "1" })) },
+        .{ .key = "live_software", .value = Py.s(live) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "status", .value = Py.s("published") },
+    }) };
+    const journal = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "run_id", .value = Py.s("r1") },
+        .{ .key = "state", .value = Py.s("complete") },
+        .{ .key = "backend", .value = Py.s("installpath") },
+        .{ .key = "software", .value = Py.s(software) },
+        .{ .key = "modules", .value = Py.s(modules) },
+        .{ .key = "state_root", .value = Py.s(state_root) },
+        .{ .key = "generation_root", .value = Py.s(gen) },
+        .{ .key = "probes", .value = .{ .dict = try a.dupe(Py.Entry, &.{
+            .{ .key = "rename_exchange", .value = exchange },
+        }) } },
+        .{ .key = "modules_plan", .value = .{ .list = try a.dupe(Py, &.{item}) } },
+        .{ .key = "links_plan", .value = .{ .list = &.{} } },
+    }) };
+    var fail_env = [_:null]?[*:0]const u8{"EB_STAGED_REBUILD_FAIL_AT=rollback.swap:demo/1.exchange.after"};
+    const env: probe.Env = .{ .envp = &fail_env };
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, journal);
+    rolling.path = journal_path;
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackRun(&rolling));
+    const live_payload = try std.fs.path.join(a, &.{ live, "PAYLOAD" });
+    const retired_payload = try std.fs.path.join(a, &.{ retired, "PAYLOAD" });
+    try std.testing.expectEqualStrings("old\n", try fileText(a, live_payload));
+    try std.testing.expectEqualStrings("new\n", try fileText(a, retired_payload));
+    swap.clearLandedStop();
+    const quiet: probe.Env = .{ .envp = empty_envp };
+    ctx.env = quiet;
+    ctx.pause = .{ .env = quiet };
+    const loaded = admin.loadRunJournal(a, state_root, "r1");
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(loaded.journal, "landed_stopped")));
+    const mods = pyfmt.get(loaded.journal, "modules_plan").?;
+    try std.testing.expectEqualStrings("published", s(pyfmt.get(mods.list[0], "status")));
+    try std.testing.expectError(error.NeedsIntervention, resumeRun(a, quiet, &ctx, state_root, "r1", null, false, false));
+    try std.testing.expectEqualStrings("old\n", try fileText(a, live_payload));
+    try std.testing.expectEqualStrings("new\n", try fileText(a, retired_payload));
+    var again = testRun(a, &ctx, quiet, admin.loadRunJournal(a, state_root, "r1").journal);
+    again.path = journal_path;
+    again.spec.state_root = state_root;
+    again.spec.software = software;
+    again.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackRun(&again));
+    try std.testing.expectEqualStrings("old\n", try fileText(a, live_payload));
+    try std.testing.expectEqualStrings("new\n", try fileText(a, retired_payload));
+}
+
+fn multiJournal(
+    a: Allocator,
+    run_id: []const u8,
+    state_root: []const u8,
+    software: []const u8,
+    modules: []const u8,
+    live: []const u8,
+    retired: []const u8,
+    module: []const u8,
+    completed: i64,
+    landed: bool,
+) ![]const u8 {
+    return a.print(
+        \\{{
+        \\  "schema": 2,
+        \\  "publication": "directory-swap",
+        \\  "run_id": "{s}",
+        \\  "state": "complete",
+        \\  "state_root": "{s}",
+        \\  "software": "{s}",
+        \\  "modules": "{s}",
+        \\  "generation_root": "{s}/generations/{s}",
+        \\  "backend": "installpath",
+        \\  "completed_at": {d},
+        \\  "landed_stopped": {s},
+        \\  "modules_plan": [{{
+        \\    "rel": "demo/1",
+        \\    "live_module": "{s}",
+        \\    "prepared": "{s}/runs/{s}/prepared.lua",
+        \\    "staged": "{s}/generations/{s}/software/demo/1",
+        \\    "live_software": "{s}",
+        \\    "retired": "{s}",
+        \\    "status": "published"
+        \\  }}],
+        \\  "links_plan": []
+        \\}}
+        \\
+    , .{
+        run_id,                          state_root, software,   modules, state_root, run_id, completed,
+        if (landed) "true" else "false", module,     state_root, run_id,  state_root, run_id, live,
+        retired,
+    });
+}
+
+test "rollback --to stops before it undoes a landed stop across runs" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-rollback-to-landed-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const live = try std.fs.path.join(a, &.{ software, "demo", "1" });
+    const retired_a = try std.fs.path.join(a, &.{ software, "demo", ".1.a" });
+    const retired_b = try std.fs.path.join(a, &.{ software, "demo", ".1.b" });
+    const module = try std.fs.path.join(a, &.{ modules, "all", "demo", "1.lua" });
+    try atomic.makedirs(live);
+    try atomic.makedirs(retired_a);
+    try atomic.makedirs(retired_b);
+    try atomic.makedirs(std.fs.path.dirname(module).?);
+    try writeBytes(try std.fs.path.join(a, &.{ live, "PAYLOAD" }), "old\n");
+    try writeBytes(try std.fs.path.join(a, &.{ live, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"t\"}\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_a, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"a\"}\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_b, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"b\"}\n");
+    const runs = [_]struct { id: []const u8, retired: []const u8, completed: i64, landed: bool }{
+        .{ .id = "t", .retired = try std.fs.path.join(a, &.{ software, "demo", ".1.t" }), .completed = 1, .landed = false },
+        .{ .id = "a", .retired = retired_a, .completed = 2, .landed = true },
+        .{ .id = "b", .retired = retired_b, .completed = 3, .landed = false },
+    };
+    var before_a: []const u8 = "";
+    for (runs) |one| {
+        const path = try std.fs.path.join(a, &.{ state_root, "runs", one.id, "journal.json" });
+        try atomic.makedirs(std.fs.path.dirname(path).?);
+        const text = try multiJournal(a, one.id, state_root, software, modules, live, one.retired, module, one.completed, one.landed);
+        try writeBytes(path, text);
+        if (std.mem.eql(u8, one.id, "a")) before_a = text;
+    }
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, .{ .dict = &.{} });
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackTo(&rolling, "t"));
+    try std.testing.expect(std.mem.indexOf(u8, rolling.why, "stops for intervention") != null);
+    const kept = try fileText(a, try std.fs.path.join(a, &.{ state_root, "runs", "a", "journal.json" }));
+    try std.testing.expectEqualStrings(before_a, kept);
+    try std.testing.expectEqualStrings("old\n", try fileText(a, try std.fs.path.join(a, &.{ live, "PAYLOAD" })));
+    try std.testing.expect(isKind(retired_a, "dir"));
+    try std.testing.expect(isKind(retired_b, "dir"));
+}
+
+test "a landed fallback rename saves the stop on the owning run" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-fallback-landed-{d}", .{linux.getpid()});
+    defer {
+        swap.disarmLandedFault();
+        swap.clearLandedStop();
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    swap.armLandedRenameFlush(1);
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const demo = try std.fs.path.join(a, &.{ software, "demo" });
+    const live = try std.fs.path.join(a, &.{ demo, "1" });
+    const retired_a = try std.fs.path.join(a, &.{ demo, ".1.a" });
+    const retired_b = try std.fs.path.join(a, &.{ demo, ".1.b" });
+    const hold = try a.print("{s}.fallback-old", .{retired_b});
+    const module = try std.fs.path.join(a, &.{ modules, "all", "demo", "1.lua" });
+    try atomic.makedirs(demo);
+    try atomic.makedirs(retired_a);
+    try atomic.makedirs(retired_b);
+    try atomic.makedirs(hold);
+    try atomic.makedirs(std.fs.path.dirname(module).?);
+    try writeBytes(try std.fs.path.join(a, &.{ hold, "PAYLOAD" }), "held\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" }), "bee\n");
+    const runs = [_]struct { id: []const u8, retired: []const u8, completed: i64 }{
+        .{ .id = "t", .retired = try std.fs.path.join(a, &.{ demo, ".1.t" }), .completed = 1 },
+        .{ .id = "a", .retired = retired_a, .completed = 2 },
+        .{ .id = "b", .retired = retired_b, .completed = 3 },
+    };
+    for (runs) |one| {
+        const path = try std.fs.path.join(a, &.{ state_root, "runs", one.id, "journal.json" });
+        try atomic.makedirs(std.fs.path.dirname(path).?);
+        try writeBytes(path, try multiJournal(a, one.id, state_root, software, modules, live, one.retired, module, one.completed, false));
+    }
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, .{ .dict = &.{} });
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackTo(&rolling, "t"));
+    const saved = admin.loadRunJournal(a, state_root, "b");
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(saved.journal, "landed_stopped")));
+    const other = admin.loadRunJournal(a, state_root, "a");
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(other.journal, "landed_stopped")));
+    const payload = try std.fs.path.join(a, &.{ live, "PAYLOAD" });
+    try std.testing.expectEqualStrings("held\n", try fileText(a, payload));
+    try std.testing.expectEqualStrings("bee\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
+    swap.clearLandedStop();
+    var again = testRun(a, &ctx, env, .{ .dict = &.{} });
+    again.spec.state_root = state_root;
+    again.spec.software = software;
+    again.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackTo(&again, "t"));
+    try std.testing.expect(std.mem.indexOf(u8, again.why, "stops for intervention") != null);
+    try std.testing.expectEqualStrings("held\n", try fileText(a, payload));
+    try std.testing.expectEqualStrings("bee\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
+    try std.testing.expect(isKind(hold, "missing"));
+}
+
+test "rollback --to keeps the newest run's require_exchange" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-require-newest-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const outside = try std.fs.path.join(a, &.{ root, "outside" });
+    const demo = try std.fs.path.join(a, &.{ software, "demo" });
+    const live = try std.fs.path.join(a, &.{ demo, "1" });
+    const retired_a = try std.fs.path.join(a, &.{ demo, ".1.a" });
+    const retired_b = try std.fs.path.join(a, &.{ demo, ".1.b" });
+    const retired_c = try std.fs.path.join(a, &.{ demo, ".1.c" });
+    const module_parent = try std.fs.path.join(a, &.{ modules, "all", "demo" });
+    const module = try std.fs.path.join(a, &.{ module_parent, "1.lua" });
+    try atomic.makedirs(live);
+    try atomic.makedirs(retired_a);
+    try atomic.makedirs(retired_b);
+    try atomic.makedirs(retired_c);
+    try atomic.makedirs(module_parent);
+    try atomic.makedirs(outside);
+    try stampRun(a, retired_a, "t");
+    try stampRun(a, retired_b, "a");
+    try stampRun(a, retired_c, "b");
+    try stampRun(a, live, "c");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_a, "PAYLOAD" }), "ta\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" }), "ay\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_c, "PAYLOAD" }), "be\n");
+    try writeBytes(try std.fs.path.join(a, &.{ live, "PAYLOAD" }), "ce\n");
+    const ids = [_]struct { id: []const u8, retired: []const u8, completed: i64, require: bool }{
+        .{ .id = "t", .retired = try std.fs.path.join(a, &.{ demo, ".1.t" }), .completed = 1, .require = false },
+        .{ .id = "a", .retired = retired_a, .completed = 2, .require = false },
+        .{ .id = "b", .retired = retired_b, .completed = 3, .require = false },
+        .{ .id = "c", .retired = retired_c, .completed = 4, .require = true },
+    };
+    for (ids) |one| try writeRunJournal(a, state_root, one.id, try ownerJournal(a, one.id, state_root, software, modules, live, one.retired, module, one.completed, 0, one.require));
+    var before: [4][]const u8 = undefined;
+    for (ids, 0..) |one, i| before[i] = try fileText(a, try std.fs.path.join(a, &.{ state_root, "runs", one.id, "journal.json" }));
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, .{ .dict = &.{} });
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    const log_path = try std.fs.path.join(a, &.{ root, "rollback.log" });
+    const log_fd = try sys.openat(fsx.cwd, log_path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+    const saved_out = linux.dup(1);
+    try std.testing.expect(linux.errno(saved_out) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(log_fd), 1)) == .SUCCESS);
+    const failed = rollbackTo(&rolling, "t");
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(saved_out), 1)) == .SUCCESS);
+    _ = linux.close(@intCast(saved_out));
+    sys.close(log_fd);
+    try std.testing.expectError(error.Refused, failed);
+    try std.testing.expectEqualStrings("RENAME_EXCHANGE is required", rolling.why);
+    try std.testing.expectEqual(@as(usize, 0), (try fileText(a, log_path)).len);
+    for (ids, 0..) |one, i| {
+        const now_text = try fileText(a, try std.fs.path.join(a, &.{ state_root, "runs", one.id, "journal.json" }));
+        try std.testing.expectEqualStrings(before[i], now_text);
+    }
+    try std.testing.expectEqualStrings("ce\n", try fileText(a, try std.fs.path.join(a, &.{ live, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("ta\n", try fileText(a, try std.fs.path.join(a, &.{ retired_a, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("ay\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("be\n", try fileText(a, try std.fs.path.join(a, &.{ retired_c, "PAYLOAD" })));
+    const outside_fd = try fsx.openDir(fsx.cwd, outside, false);
+    defer sys.close(outside_fd);
+    var outside_it = try fsx.DirIter.init(a, outside_fd);
+    try std.testing.expect((try outside_it.next()) == null);
+}
+
+fn ownerJournal(
+    a: Allocator,
+    run_id: []const u8,
+    state_root: []const u8,
+    software: []const u8,
+    modules: []const u8,
+    live: []const u8,
+    retired: []const u8,
+    module: []const u8,
+    completed: i64,
+    published: i64,
+    require_exchange: bool,
+) ![]const u8 {
+    return a.print(
+        \\{{
+        \\  "schema": 2,
+        \\  "publication": "directory-swap",
+        \\  "run_id": "{s}",
+        \\  "state": "complete",
+        \\  "state_root": "{s}",
+        \\  "software": "{s}",
+        \\  "modules": "{s}",
+        \\  "generation_root": "{s}/generations/{s}",
+        \\  "backend": "installpath",
+        \\  "completed_at": {d},
+        \\  "require_exchange": {s},
+        \\  "probes": {{"rename_exchange": {{"ok": false}}}},
+        \\  "modules_plan": [{{
+        \\    "rel": "demo/1",
+        \\    "live_module": "{s}",
+        \\    "prepared": "{s}/runs/{s}/prepared.lua",
+        \\    "staged": "{s}/generations/{s}/software/demo/1",
+        \\    "live_software": "{s}",
+        \\    "retired": "{s}",
+        \\    "status": "published",
+        \\    "published_at": {d}
+        \\  }}],
+        \\  "links_plan": []
+        \\}}
+        \\
+    , .{
+        run_id,                                    state_root, software,   modules, state_root, run_id, completed,
+        if (require_exchange) "true" else "false", module,     state_root, run_id,  state_root, run_id, live,
+        retired,                                   published,
+    });
+}
+
+fn writeRunJournal(a: Allocator, state_root: []const u8, run_id: []const u8, text: []const u8) !void {
+    const path = try std.fs.path.join(a, &.{ state_root, "runs", run_id, "journal.json" });
+    try atomic.makedirs(std.fs.path.dirname(path).?);
+    try writeBytes(path, text);
+}
+
+fn stampRun(a: Allocator, dir: []const u8, run_id: []const u8) !void {
+    try writeBytes(try std.fs.path.join(a, &.{ dir, ".eb-staged-rebuild-complete" }), try a.print("{{\"run_id\":\"{s}\"}}\n", .{run_id}));
+}
+
+fn expectLandedStop(a: Allocator, state_root: []const u8, run_id: []const u8) !void {
+    const loaded = admin.loadRunJournal(a, state_root, run_id);
+    try std.testing.expect(pyfmt.truthy(pyfmt.get(loaded.journal, "landed_stopped")));
+}
+
+fn rollbackStops(a: Allocator, ctx: *admin.Ctx, env: probe.Env, state_root: []const u8, run_id: []const u8, software: []const u8, modules: []const u8) !void {
+    swap.clearLandedStop();
+    const loaded = admin.loadRunJournal(a, state_root, run_id);
+    var again = testRun(a, ctx, env, loaded.journal);
+    again.path = loaded.path;
+    again.spec.state_root = state_root;
+    again.spec.software = software;
+    again.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackRun(&again));
+    try std.testing.expect(std.mem.indexOf(u8, again.why, "stops for intervention") != null);
+}
+
+fn gcKeeps(a: Allocator, ctx: *admin.Ctx, state_root: []const u8, retired: []const []const u8) !void {
+    const sink = try sys.openat(fsx.cwd, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    const saved = linux.dup(1);
+    try std.testing.expect(linux.errno(saved) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(sink), 1)) == .SUCCESS);
+    defer {
+        _ = linux.dup2(@intCast(saved), 1);
+        _ = linux.close(@intCast(saved));
+        sys.close(sink);
+    }
+    try std.testing.expectEqual(@as(u8, 0), admin.gc(ctx, state_root, 0, false, false, null, false, null, "eb-keep-logs", null, false, null, false));
+    for (retired) |path| try std.testing.expect(isKind(path, "dir"));
+    _ = a;
+}
+
+test "rotationStage saves a landed flush on both owners" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-rotate-owners-{d}", .{linux.getpid()});
+    defer {
+        swap.disarmLandedFault();
+        swap.clearLandedStop();
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const demo = try std.fs.path.join(a, &.{ software, "demo" });
+    const live = try std.fs.path.join(a, &.{ demo, "1" });
+    const retired_a = try std.fs.path.join(a, &.{ demo, ".1.a" });
+    const retired_b = try std.fs.path.join(a, &.{ demo, ".1.b" });
+    const retired_c = try std.fs.path.join(a, &.{ demo, ".1.c" });
+    const hold = try a.print("{s}.fallback-old", .{retired_a});
+    const module = try std.fs.path.join(a, &.{ modules, "all", "demo", "1.lua" });
+    try atomic.makedirs(demo);
+    try atomic.makedirs(retired_b);
+    try atomic.makedirs(retired_c);
+    try atomic.makedirs(live);
+    try atomic.makedirs(hold);
+    try atomic.makedirs(std.fs.path.dirname(module).?);
+    try writeBytes(try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" }), "bee\n");
+    try writeBytes(try std.fs.path.join(a, &.{ hold, "PAYLOAD" }), "held\n");
+    try writeBytes(module, try a.print("local root = \"{s}\"\n", .{live}));
+    const ids = [_]struct { id: []const u8, retired: []const u8, completed: i64, published: i64 }{
+        .{ .id = "t", .retired = try std.fs.path.join(a, &.{ demo, ".1.t" }), .completed = 1, .published = 0 },
+        .{ .id = "a", .retired = retired_a, .completed = 2, .published = 0 },
+        .{ .id = "b", .retired = retired_b, .completed = 3, .published = 0 },
+        .{ .id = "c", .retired = retired_c, .completed = 4, .published = 4_000_000_000 },
+    };
+    for (ids) |one| try writeRunJournal(a, state_root, one.id, try ownerJournal(a, one.id, state_root, software, modules, live, one.retired, module, one.completed, one.published, false));
+    swap.armLandedRenameFlush(2);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, .{ .dict = &.{} });
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackTo(&rolling, "t"));
+    try expectLandedStop(a, state_root, "a");
+    try expectLandedStop(a, state_root, "b");
+    const newest = admin.loadRunJournal(a, state_root, "c");
+    try std.testing.expect(!pyfmt.truthy(pyfmt.get(newest.journal, "landed_stopped")));
+    try rollbackStops(a, &ctx, env, state_root, "a", software, modules);
+    try rollbackStops(a, &ctx, env, state_root, "b", software, modules);
+    try std.testing.expect(isKind(retired_a, "dir"));
+    try std.testing.expect(isKind(retired_b, "dir"));
+    try gcKeeps(a, &ctx, state_root, &.{ retired_a, retired_b, retired_c });
+    try std.testing.expect(isKind(retired_a, "dir"));
+    try std.testing.expect(isKind(retired_b, "dir"));
+    try std.testing.expectEqualStrings("bee\n", try fileText(a, try std.fs.path.join(a, &.{ retired_a, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("held\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
+}
+
+test "rollback --to saves a landed flush on the older pair's owners" {
+    try std.testing.expect(linux.geteuid() != 0);
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-rollback-owners-{d}", .{linux.getpid()});
+    defer {
+        swap.disarmLandedFault();
+        swap.clearLandedStop();
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+    }
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    const modules = try std.fs.path.join(a, &.{ root, "modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const demo = try std.fs.path.join(a, &.{ software, "demo" });
+    const live = try std.fs.path.join(a, &.{ demo, "1" });
+    const retired_a = try std.fs.path.join(a, &.{ demo, ".1.a" });
+    const retired_b = try std.fs.path.join(a, &.{ demo, ".1.b" });
+    const retired_c = try std.fs.path.join(a, &.{ demo, ".1.c" });
+    const module = try std.fs.path.join(a, &.{ modules, "all", "demo", "1.lua" });
+    try atomic.makedirs(live);
+    try atomic.makedirs(retired_a);
+    try atomic.makedirs(retired_b);
+    try atomic.makedirs(retired_c);
+    try atomic.makedirs(std.fs.path.dirname(module).?);
+    try stampRun(a, retired_a, "t");
+    try stampRun(a, retired_b, "a");
+    try stampRun(a, retired_c, "b");
+    try stampRun(a, live, "c");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_a, "PAYLOAD" }), "ta\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" }), "ay\n");
+    try writeBytes(try std.fs.path.join(a, &.{ retired_c, "PAYLOAD" }), "be\n");
+    try writeBytes(try std.fs.path.join(a, &.{ live, "PAYLOAD" }), "ce\n");
+    try writeBytes(module, try a.print("local root = \"{s}\"\n", .{live}));
+    const ids = [_]struct { id: []const u8, retired: []const u8, completed: i64 }{
+        .{ .id = "t", .retired = try std.fs.path.join(a, &.{ demo, ".1.t" }), .completed = 1 },
+        .{ .id = "a", .retired = retired_a, .completed = 2 },
+        .{ .id = "b", .retired = retired_b, .completed = 3 },
+        .{ .id = "c", .retired = retired_c, .completed = 4 },
+    };
+    for (ids) |one| try writeRunJournal(a, state_root, one.id, try ownerJournal(a, one.id, state_root, software, modules, live, one.retired, module, one.completed, 0, false));
+    swap.armLandedRenameFlush(2);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var rolling = testRun(a, &ctx, env, .{ .dict = &.{} });
+    rolling.spec.state_root = state_root;
+    rolling.spec.software = software;
+    rolling.spec.modules = modules;
+    try std.testing.expectError(error.NeedsIntervention, rollbackTo(&rolling, "t"));
+    try expectLandedStop(a, state_root, "a");
+    try expectLandedStop(a, state_root, "b");
+    const newest = admin.loadRunJournal(a, state_root, "c");
+    try std.testing.expect(!pyfmt.truthy(pyfmt.get(newest.journal, "landed_stopped")));
+    try rollbackStops(a, &ctx, env, state_root, "a", software, modules);
+    try rollbackStops(a, &ctx, env, state_root, "b", software, modules);
+    try gcKeeps(a, &ctx, state_root, &.{ retired_b, retired_c });
+    try std.testing.expect(isKind(retired_b, "dir"));
+    try std.testing.expect(isKind(retired_c, "dir"));
+    try std.testing.expectEqualStrings("ta\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
+}
+
+test "a symlink ancestor of the software prefix is followed" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const root = try a.print("/tmp/esr-prefix-link-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const real = try std.fs.path.join(a, &.{ root, "real" });
+    const software = try std.fs.path.join(a, &.{ root, "link", "software" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    const gen = try std.fs.path.join(a, &.{ state_root, "generations", "r1" });
+    const live = try std.fs.path.join(a, &.{ software, "demo", "1" });
+    const retired = try std.fs.path.join(a, &.{ software, "demo", ".1.r1" });
+    const staged = try std.fs.path.join(a, &.{ gen, "software", "demo", "1" });
+    const outside = try std.fs.path.join(a, &.{ root, "outside" });
+    try atomic.makedirs(try std.fs.path.join(a, &.{ real, "software", "demo", "1" }));
+    try atomic.makedirs(staged);
+    try atomic.makedirs(outside);
+    try linkTo(real, try std.fs.path.join(a, &.{ root, "link" }));
+    try writeBytes(try std.fs.path.join(a, &.{ live, "PAYLOAD" }), "old\n");
+    try writeBytes(try std.fs.path.join(a, &.{ staged, "PAYLOAD" }), "new\n");
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("demo/1") },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+    var r = testRun(a, &ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "generation_root", .value = Py.s(gen) },
+        .{ .key = "software", .value = Py.s(software) },
+        .{ .key = "state_root", .value = Py.s(state_root) },
+        .{ .key = "run_id", .value = Py.s("r1") },
+    }) });
+    r.spec.software = software;
+    r.spec.state_root = state_root;
+    try prepareSwapSource(&r, item, "r1");
+    try std.testing.expectEqualStrings("new\n", try fileText(a, try std.fs.path.join(a, &.{ retired, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("old\n", try fileText(a, try std.fs.path.join(a, &.{ live, "PAYLOAD" })));
+    const escape = try std.fs.path.join(a, &.{ software, "escape" });
+    try linkTo(outside, escape);
+    try std.testing.expectError(error.NotDir, pinStageParent("/", try std.fs.path.join(a, &.{ escape, "child" })));
+    const hole = try std.fs.path.join(a, &.{ state_root, "hole" });
+    try linkTo(outside, hole);
+    try std.testing.expectError(error.NotDir, pinStageParent("/", try std.fs.path.join(a, &.{ hole, "r1" })));
+    var why: swap.Why = .{};
+    _ = try swap.swapDirectories(a, live, retired, true, true, .{}, "swap", &why);
+    try std.testing.expectEqualStrings("new\n", try fileText(a, try std.fs.path.join(a, &.{ live, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("old\n", try fileText(a, try std.fs.path.join(a, &.{ retired, "PAYLOAD" })));
+    try std.testing.expect(isKind(try std.fs.path.join(a, &.{ root, "link" }), "symlink"));
 }

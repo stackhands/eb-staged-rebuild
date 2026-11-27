@@ -1,8 +1,9 @@
 //! Crash-aware exchange of two sibling directories: renameat2
 //! RENAME_EXCHANGE, or, where the filesystem refuses rename flags, three
-//! ordinary renames through a hold name, every caught failure of which
-//! restores the original names. recoverInterrupted repairs a fallback that a
-//! crash stopped half way.
+//! ordinary renames through a hold name. A failure before a rename starts
+//! restores the original names. Once a rename or an exchange has landed, a
+//! failed close or flush keeps the new names and stops for intervention.
+//! recoverInterrupted repairs a fallback that a crash stopped half way.
 const std = @import("std");
 const linux = std.os.linux;
 const common = @import("zig_common");
@@ -10,7 +11,10 @@ const main_mod = @import("main.zig");
 const admin = @import("admin.zig");
 
 const sys = common.sys;
+const fsx = common.fsx;
 const atomic = common.atomic;
+const run_mod = @import("run.zig");
+const prefix_mod = @import("prefix.zig");
 const Allocator = std.mem.Allocator;
 
 /// The suffix of the hold name, `<staged>.fallback-old`, at which the
@@ -23,9 +27,10 @@ pub const Method = enum { @"renameat2-exchange", @"rename-fallback" };
 /// Why a swap stopped; set before an error is returned.
 pub const Why = struct { msg: []const u8 = "" };
 
-/// Refused: the two paths are not sibling real directories; Failed: the
-/// exchange or a rename failed, and the names are as they were;
-/// NeedsIntervention: the names could not be put back.
+/// Refused: the two paths are not sibling real directories. Failed: the
+/// exchange or a rename failed before it landed, and the names are as
+/// they were. NeedsIntervention: a rename or an exchange landed and its
+/// close or flush failed, or the names could not be recovered.
 pub const Error = error{ Refused, NeedsIntervention, Failed };
 
 fn fail(a: Allocator, why: *Why, comptime kind: Error, comptime f: []const u8, args: anytype) Error {
@@ -54,7 +59,7 @@ fn kindOf(p: []const u8) []const u8 {
 pub const Ops = struct {
     exchange: *const fn (first: [:0]const u8, second: [:0]const u8) linux.E = realExchange,
     rename: *const fn (from: []const u8, to: []const u8) sys.Error!void = realRename,
-    sync_dir: *const fn (path: []const u8) sys.Error!void = atomic.fsyncDir,
+    sync_dir: *const fn (path: []const u8) sys.Error!void = fsyncPinned,
 };
 
 var test_ops: Ops = .{};
@@ -62,23 +67,266 @@ const real_ops: Ops = .{};
 /// The calls in use: replaceable in a test build, the real ones otherwise.
 pub const ops = if (atomic.replaceable) &test_ops else &real_ops;
 
+/// The parent of `path`, pinned from `/` one component at a time the way
+/// publish pins a destination. A symlink above a recorded software prefix
+/// is followed. A symlink inside the software tree is `error.NotDir`.
+fn pinnedParent(path: []const u8) sys.Error!run_mod.StageParent {
+    return run_mod.pinStageParent("/", path) catch |err| switch (err) {
+        error.Outside => error.NotDir,
+        else => |e| e,
+    };
+}
+
+/// `INVAL`, `NOSYS` and `OPNOTSUPP` would fall through to the ordinary
+/// rename. A parent that cannot be pinned is a refusal, not that.
+fn exchangePinErrno() linux.E {
+    const e = sys.last_errno;
+    if (e == .SUCCESS or e == .INVAL or e == .NOSYS or e == .OPNOTSUPP) return .NOTDIR;
+    return e;
+}
+
+/// A test asks the next landed exchange or rename to fail one fsync or close.
+const LandedFault = enum { none, exchange_fsync, exchange_close, rename_fsync, rename_close };
+var landed_fault: LandedFault = .none;
+var landed_fault_rename: usize = 0;
+var rename_n: usize = 0;
+var landed_needs_intervention: bool = false;
+/// Set when a rename or exchange has landed and its close or flush failed.
+/// Callers stop instead of putting the old names back.
+var landed_stop: bool = false;
+
+pub fn landedStop() bool {
+    return landed_stop;
+}
+
+pub fn clearLandedStop() void {
+    landed_stop = false;
+}
+
+fn markLanded() void {
+    landed_needs_intervention = true;
+    landed_stop = true;
+}
+
+const HeldKind = enum { exchange, rename };
+const Held = struct {
+    left: sys.fd_t,
+    right: sys.fd_t,
+    kind: HeldKind,
+    from: []const u8,
+    to: []const u8,
+};
+/// Parents kept open after a landed rename or exchange so the caller's
+/// flush uses those descriptors instead of walking the path again.
+var held: ?Held = null;
+
+fn errnoToError(e: linux.E) sys.Error {
+    const raw: usize = @bitCast(-@as(isize, @backingInt(e)));
+    _ = sys.result(raw) catch |err| return err;
+    return error.Unexpected;
+}
+
+fn landedFsyncFault() bool {
+    if (comptime !atomic.replaceable) return false;
+    switch (landed_fault) {
+        .exchange_fsync => {
+            landed_fault = .none;
+            return true;
+        },
+        .rename_fsync => {
+            if (landed_fault_rename != 0 and rename_n != landed_fault_rename) return false;
+            landed_fault = .none;
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn landedCloseFault() bool {
+    if (comptime !atomic.replaceable) return false;
+    switch (landed_fault) {
+        .exchange_close => {
+            landed_fault = .none;
+            return true;
+        },
+        .rename_close => {
+            if (landed_fault_rename != 0 and rename_n != landed_fault_rename) return false;
+            landed_fault = .none;
+            return true;
+        },
+        else => return false,
+    }
+}
+
+fn fsyncErrno(fd: sys.fd_t) linux.E {
+    if (comptime atomic.replaceable) {
+        if (landedFsyncFault()) {
+            sys.last_errno = .IO;
+            return .IO;
+        }
+    }
+    sys.fsync(fd) catch return sys.last_errno;
+    return .SUCCESS;
+}
+
+fn closeQuiet(fd: sys.fd_t) void {
+    prefix_mod.closeChecked(fd) catch {};
+}
+
+fn closeOne(fd: sys.fd_t) sys.Error!void {
+    if (comptime atomic.replaceable) {
+        if (landedCloseFault()) {
+            // Linux frees the descriptor even when close fails.
+            sys.close(fd);
+            return errnoToError(.IO);
+        }
+    }
+    return prefix_mod.closeChecked(fd);
+}
+
+fn closePair(left: sys.fd_t, right: sys.fd_t) sys.Error!void {
+    const first = closeOne(left);
+    const second = closeOne(right);
+    first catch |err| return err;
+    return second;
+}
+
+fn dropHeld() void {
+    const h = held orelse return;
+    held = null;
+    closeQuiet(h.left);
+    closeQuiet(h.right);
+}
+
+/// Close parents kept after a landed rename or exchange. A failed close
+/// leaves the new names in place.
+fn releaseHeld() sys.Error!void {
+    const h = held orelse return;
+    held = null;
+    closeOne(h.left) catch |err| {
+        closeQuiet(h.right);
+        markLanded();
+        return err;
+    };
+    closeOne(h.right) catch |err| {
+        markLanded();
+        return err;
+    };
+}
+
+/// fsync both pinned parents. On failure the exchange stays landed and the
+/// descriptors are closed. On success they stay open so the caller's flush
+/// uses them; a later close failure leaves the new names as well.
+fn sealExchanged(left: sys.fd_t, right: sys.fd_t) linux.E {
+    const e1 = fsyncErrno(left);
+    const e2 = fsyncErrno(right);
+    if (e1 != .SUCCESS or e2 != .SUCCESS) {
+        const flush_err: linux.E = if (e1 != .SUCCESS) e1 else e2;
+        closeQuiet(left);
+        closeQuiet(right);
+        markLanded();
+        return flush_err;
+    }
+    held = .{ .left = left, .right = right, .kind = .exchange, .from = "", .to = "" };
+    return .SUCCESS;
+}
+
 fn realExchange(first: [:0]const u8, second: [:0]const u8) linux.E {
-    return linux.errno(linux.renameat2(linux.AT.FDCWD, first.ptr, linux.AT.FDCWD, second.ptr, .{ .EXCHANGE = true }));
+    const left = pinnedParent(first) catch return exchangePinErrno();
+    const right = pinnedParent(second) catch {
+        sys.close(left.fd);
+        return exchangePinErrno();
+    };
+    var za: [sys.path_max:0]u8 = undefined;
+    var zb: [sys.path_max:0]u8 = undefined;
+    const x = sys.z(&za, left.name) catch {
+        sys.close(left.fd);
+        sys.close(right.fd);
+        return .NAMETOOLONG;
+    };
+    const y = sys.z(&zb, right.name) catch {
+        sys.close(left.fd);
+        sys.close(right.fd);
+        return .NAMETOOLONG;
+    };
+    const rc = linux.errno(linux.renameat2(left.fd, x.ptr, right.fd, y.ptr, .{ .EXCHANGE = true }));
+    if (rc != .SUCCESS) {
+        sys.close(left.fd);
+        sys.close(right.fd);
+        return rc;
+    }
+    return sealExchanged(left.fd, right.fd);
 }
 
 fn realRename(from: []const u8, to: []const u8) sys.Error!void {
-    return sys.renameat(common.fsx.cwd, from, common.fsx.cwd, to);
+    try releaseHeld();
+    const src = try pinnedParent(from);
+    const dst = pinnedParent(to) catch |err| {
+        closeQuiet(src.fd);
+        return err;
+    };
+    sys.renameat(src.fd, src.name, dst.fd, dst.name) catch |err| {
+        closeQuiet(src.fd);
+        closeQuiet(dst.fd);
+        return err;
+    };
+    rename_n += 1;
+    const e1 = fsyncErrno(src.fd);
+    const e2 = fsyncErrno(dst.fd);
+    if (e1 != .SUCCESS or e2 != .SUCCESS) {
+        // The rename has landed. A failed flush does not put the name back.
+        closeQuiet(src.fd);
+        closeQuiet(dst.fd);
+        markLanded();
+        return errnoToError(if (e1 != .SUCCESS) e1 else e2);
+    }
+    // Leave both parents open. The flush after the swap fsyncs these
+    // descriptors; closing them here would make that flush walk the path.
+    held = .{ .left = src.fd, .right = dst.fd, .kind = .rename, .from = from, .to = to };
+}
+
+/// Flush the directory `path`. When a rename or an exchange still holds its
+/// parent descriptors, fsync those and close them. A failed close or fsync
+/// leaves the landed names in place. With nothing held, pin `path` from `/`.
+/// A symlink component is `error.NotDir`, not a flush of the link's target.
+fn fsyncPinned(path: []const u8) sys.Error!void {
+    const h = held orelse {
+        const fd = try openPinned(path);
+        return prefix_mod.fsyncCloseFd(fd);
+    };
+    held = null;
+    const e1 = fsyncErrno(h.left);
+    const e2 = fsyncErrno(h.right);
+    const close_err: ?sys.Error = if (closePair(h.left, h.right)) null else |err| err;
+    if (e1 != .SUCCESS or e2 != .SUCCESS or close_err != null) markLanded();
+    if (e1 != .SUCCESS) return errnoToError(e1);
+    if (e2 != .SUCCESS) return errnoToError(e2);
+    if (close_err) |err| return err;
+}
+
+fn openPinned(path: []const u8) sys.Error!sys.fd_t {
+    return run_mod.openPinnedDir(path);
 }
 
 fn renamePath(a: Allocator, from: []const u8, to: []const u8, why: *Why) Error!void {
-    ops.rename(from, to) catch |err|
+    landed_needs_intervention = false;
+    ops.rename(from, to) catch |err| {
+        if (landed_needs_intervention) return fail(a, why, error.NeedsIntervention, "rename landed but its close or flush failed for {s}: {s}", .{ from, main_mod.osError(a, err, from) });
         return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, from)});
+    };
 }
 
 fn syncParent(a: Allocator, live: []const u8, why: *Why) Error!void {
     const parent = std.fs.path.dirname(live) orelse "/";
-    ops.sync_dir(parent) catch |err|
-        return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, parent)});
+    // A test may replace the flush. The real flush uses the pinned
+    // descriptors when this swap still holds them.
+    if (held != null and ops.sync_dir != fsyncPinned) dropHeld();
+    landed_needs_intervention = false;
+    ops.sync_dir(parent) catch |err| {
+        landed_stop = true;
+        if (landed_needs_intervention) return fail(a, why, error.NeedsIntervention, "swap landed but its close or flush failed for {s}: {s}", .{ live, main_mod.osError(a, err, parent) });
+        return fail(a, why, error.NeedsIntervention, "{s}", .{main_mod.osError(a, err, parent)});
+    };
 }
 
 fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []const u8, why: *Why) Error!void {
@@ -102,6 +350,7 @@ fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []c
 
 /// recover_interrupted_swap: restore an interrupted fallback, if any.
 pub fn recoverInterrupted(a: Allocator, live_in: []const u8, staged_in: []const u8, why: *Why) Error!void {
+    defer dropHeld();
     const live = admin.abspath(a, live_in);
     const staged = admin.abspath(a, staged_in);
     const hold = a.print("{s}" ++ fallback_hold_suffix, .{staged}) catch return error.Failed;
@@ -115,6 +364,7 @@ fn exchange(a: Allocator, first: []const u8, second: []const u8) linux.E {
     const x = sys.z(&za, first) catch return .NAMETOOLONG;
     const y = sys.z(&zb, second) catch return .NAMETOOLONG;
     _ = a;
+    landed_needs_intervention = false;
     return ops.exchange(x, y);
 }
 
@@ -138,6 +388,9 @@ fn exchangeFailure(a: Allocator, e: linux.E, live: []const u8) []const u8 {
 /// swap_directories: exchange `live` and `staged` (siblings, both real
 /// directories). Afterwards `staged` holds the retired live tree.
 pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8, allow_exchange: bool, allow_fallback: bool, faults: atomic.Faults, step_prefix: []const u8, why: *Why) Error!Method {
+    defer dropHeld();
+    rename_n = 0;
+    landed_stop = false;
     const live = admin.abspath(a, live_in);
     const staged = admin.abspath(a, staged_in);
     try recoverInterrupted(a, live, staged, why);
@@ -151,22 +404,21 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
         const before = a.print("{s}.exchange.before", .{step_prefix}) catch step_prefix;
         if (faults.fails(before)) return injected(a, why, before);
         const e = exchange(a, live, staged);
+        if (landed_needs_intervention) {
+            const text = a.print("[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(e), strerror(e) }) catch "swap failed";
+            return fail(a, why, error.NeedsIntervention, "RENAME_EXCHANGE landed but its close or flush failed for {s}: {s}", .{ live, text });
+        }
         if (e == .SUCCESS) {
             const after = a.print("{s}.exchange.after", .{step_prefix}) catch step_prefix;
-            const synced = if (faults.fails(after)) injected(a, why, after) else syncParent(a, live, why);
+            const synced = if (faults.fails(after)) blk: {
+                dropHeld();
+                break :blk injected(a, why, after);
+            } else syncParent(a, live, why);
             synced catch |err| {
-                // The exchange landed. Put the names back and flush that
-                // undo before reporting the failure, or a crash keeps the
-                // exchanged names after publish or rollback says it failed.
-                const undone = exchange(a, live, staged);
-                if (undone != .SUCCESS) {
-                    const text = a.print("[Errno {d}] renameat2(RENAME_EXCHANGE): {s}", .{ @backingInt(undone), strerror(undone) }) catch "swap failed";
-                    return fail(a, why, error.NeedsIntervention, "RENAME_EXCHANGE succeeded but its rollback failed for {s}: {s}", .{ live, text });
-                }
-                syncParent(a, live, why) catch {
-                    return fail(a, why, error.NeedsIntervention, "RENAME_EXCHANGE succeeded but its rollback failed for {s}: {s}", .{ live, why.msg });
-                };
-                return err;
+                // The exchange has landed. Leave the new names and stop.
+                landed_stop = true;
+                if (err == error.NeedsIntervention) return err;
+                return fail(a, why, error.NeedsIntervention, "{s}", .{why.msg});
             };
             return .@"renameat2-exchange";
         }
@@ -185,20 +437,29 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
             why.msg = injectedText(a, live_to_hold);
             break :fallback;
         }
-        renamePath(a, live, hold, why) catch break :fallback;
+        renamePath(a, live, hold, why) catch |err| {
+            if (err == error.NeedsIntervention) return err;
+            break :fallback;
+        };
         const staged_to_live = a.print("{s}.fallback.staged-to-live", .{step_prefix}) catch step_prefix;
         if (faults.fails(staged_to_live)) {
             why.msg = injectedText(a, staged_to_live);
             break :fallback;
         }
-        renamePath(a, staged, live, why) catch break :fallback;
+        renamePath(a, staged, live, why) catch |err| {
+            if (err == error.NeedsIntervention) return err;
+            break :fallback;
+        };
         const hold_to_staged = a.print("{s}.fallback.hold-to-staged", .{step_prefix}) catch step_prefix;
         if (faults.fails(hold_to_staged)) {
             why.msg = injectedText(a, hold_to_staged);
             break :fallback;
         }
-        renamePath(a, hold, staged, why) catch break :fallback;
-        syncParent(a, live, why) catch break :fallback;
+        renamePath(a, hold, staged, why) catch |err| {
+            if (err == error.NeedsIntervention) return err;
+            break :fallback;
+        };
+        try syncParent(a, live, why);
         return .@"rename-fallback";
     }
     const first = why.msg;
@@ -261,6 +522,12 @@ fn expectOriginal(a: Allocator, p: Pair) !void {
     try testing.expectEqualStrings("missing", kindOf(try a.print("{s}" ++ fallback_hold_suffix, .{p.staged})));
 }
 
+fn expectSwapped(a: Allocator, p: Pair) !void {
+    try testing.expectEqualStrings("new\n", try payload(a, p.live));
+    try testing.expectEqualStrings("old\n", try payload(a, p.staged));
+    try testing.expectEqualStrings("missing", kindOf(try a.print("{s}" ++ fallback_hold_suffix, .{p.staged})));
+}
+
 var failing_call: usize = 0;
 var calls: usize = 0;
 
@@ -274,26 +541,6 @@ fn failingSync(path: []const u8) sys.Error!void {
     calls += 1;
     if (calls == failing_call) return error.Unexpected;
     return atomic.fsyncDir(path);
-}
-
-var undo_flushes: usize = 0;
-
-fn failFirstFlush(path: []const u8) sys.Error!void {
-    undo_flushes += 1;
-    if (undo_flushes == 1) return error.Unexpected;
-    return atomic.fsyncDir(path);
-}
-
-fn failEveryFlush(_: []const u8) sys.Error!void {
-    return error.Unexpected;
-}
-
-var undo_exchanges: usize = 0;
-
-fn exchangeOnceThenDeny(first: [:0]const u8, second: [:0]const u8) linux.E {
-    undo_exchanges += 1;
-    if (undo_exchanges == 1) return realExchange(first, second);
-    return .PERM;
 }
 
 fn deniedExchange(_: [:0]const u8, _: [:0]const u8) linux.E {
@@ -321,15 +568,15 @@ test "a failed parent flush names the parent directory" {
     failing_call = 1;
     ops.sync_dir = failingSync;
     var why: Why = .{};
-    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     const parent = std.fs.path.dirname(p.live).?;
     try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
     try testing.expect(std.mem.indexOf(u8, why.msg, p.live) == null);
     ops.* = .{};
-    try expectOriginal(a, p);
+    try expectSwapped(a, p);
 }
 
-test "an exchange whose sync fails is exchanged back" {
+test "an exchange whose sync fails keeps the landed names" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
@@ -340,58 +587,28 @@ test "an exchange whose sync fails is exchanged back" {
     failing_call = 1;
     ops.sync_dir = failingSync;
     var why: Why = .{};
-    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
     ops.* = .{};
-    try expectOriginal(a, p);
+    try expectSwapped(a, p);
 }
 
-test "an undone exchange is flushed and a failed undo is reported" {
+test "a parent sync that fails after an exchange stops for intervention" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const a = arena_state.allocator();
+    const p = try testPair(a, "undo-flush-fail");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
     defer ops.* = .{};
-
-    {
-        const p = try testPair(a, "undo-flush");
-        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
-        undo_flushes = 0;
-        ops.* = .{};
-        ops.sync_dir = failFirstFlush;
-        var why: Why = .{};
-        try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
-        try testing.expectEqual(@as(usize, 2), undo_flushes);
-        ops.* = .{};
-        try expectOriginal(a, p);
-    }
-    {
-        const p = try testPair(a, "undo-flush-fail");
-        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
-        ops.* = .{};
-        ops.sync_dir = failEveryFlush;
-        var why: Why = .{};
-        try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
-        const parent = std.fs.path.dirname(p.live).?;
-        try testing.expect(std.mem.indexOf(u8, why.msg, "RENAME_EXCHANGE succeeded but its rollback failed for ") != null);
-        try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
-        try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
-        ops.* = .{};
-        try expectOriginal(a, p);
-    }
-    {
-        const p = try testPair(a, "undo-exchange-fail");
-        defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
-        undo_exchanges = 0;
-        ops.* = .{};
-        ops.exchange = exchangeOnceThenDeny;
-        ops.sync_dir = failEveryFlush;
-        var why: Why = .{};
-        try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
-        try testing.expect(std.mem.indexOf(u8, why.msg, "Operation not permitted") != null);
-        try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
-        ops.* = .{};
-        try testing.expectEqualStrings("new\n", try payload(a, p.live));
-        try testing.expectEqualStrings("old\n", try payload(a, p.staged));
-    }
+    calls = 0;
+    failing_call = 1;
+    ops.sync_dir = failingSync;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, true, .{}, "swap", &why));
+    const parent = std.fs.path.dirname(p.live).?;
+    try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
+    try testing.expect(std.mem.indexOf(u8, why.msg, p.live) == null);
+    ops.* = .{};
+    try expectSwapped(a, p);
 }
 
 test "an exchange error other than unsupported leaves live unchanged" {
@@ -507,4 +724,114 @@ test "recovery after the second fallback rename" {
     var why: Why = .{};
     try recoverInterrupted(a, p.live, p.staged, &why);
     try expectOriginal(a, p);
+}
+
+test "a parent flush uses the pinned directory and does not follow a symlink" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const base = try a.print("/tmp/esr-flush-pin-{d}", .{linux.getpid()});
+    defer common.fsx.deleteTree(a, common.fsx.cwd, base) catch {};
+    const real = try a.print("{s}/real", .{base});
+    const other = try a.print("{s}/other", .{base});
+    const link = try a.print("{s}/link", .{base});
+    try atomic.makedirs(try a.print("{s}/child", .{real}));
+    try atomic.makedirs(other);
+    var zt: [sys.path_max:0]u8 = undefined;
+    var zl: [sys.path_max:0]u8 = undefined;
+    _ = try sys.call(linux.symlinkat, .{ (try sys.z(&zt, real)).ptr, linux.AT.FDCWD, (try sys.z(&zl, link)).ptr });
+    try testing.expectError(error.NotDir, fsyncPinned(link));
+    try fsyncPinned(real);
+    try testing.expectEqualStrings("dir", kindOf(try a.print("{s}/child", .{real})));
+    try testing.expectEqualStrings("dir", kindOf(other));
+}
+
+test "a directory flush returns an error when close fails" {
+    try testing.expectError(error.InvalidArgument, prefix_mod.closeChecked(-1));
+}
+
+fn clearLandedFaults() void {
+    landed_fault = .none;
+    landed_fault_rename = 0;
+    rename_n = 0;
+    landed_needs_intervention = false;
+    landed_stop = false;
+    dropHeld();
+    ops.* = .{};
+}
+
+/// Fail the fsync of the Nth landed rename (1-based). The rename itself
+/// stays in place. Used by the landed-fallback tests instead of FUSE.
+pub fn armLandedRenameFlush(nth: usize) void {
+    landed_fault = .rename_fsync;
+    landed_fault_rename = nth;
+    rename_n = 0;
+    landed_needs_intervention = false;
+    landed_stop = false;
+    dropHeld();
+    if (comptime atomic.replaceable) ops.* = .{};
+}
+
+pub fn disarmLandedFault() void {
+    landed_fault = .none;
+    landed_fault_rename = 0;
+    rename_n = 0;
+    landed_needs_intervention = false;
+    landed_stop = false;
+    dropHeld();
+    if (comptime atomic.replaceable) ops.* = .{};
+}
+
+test "a close after a landed exchange keeps the names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "ex-close");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer clearLandedFaults();
+    landed_fault = .exchange_close;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, false, .{}, "swap", &why));
+    try expectSwapped(a, p);
+}
+
+test "a flush after a landed exchange stops for intervention" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "ex-flush");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer clearLandedFaults();
+    landed_fault = .exchange_fsync;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, true, false, .{}, "swap", &why));
+    try expectSwapped(a, p);
+}
+
+test "a close after a landed fallback rename keeps the names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "fb-close");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer clearLandedFaults();
+    landed_fault = .rename_close;
+    landed_fault_rename = 3;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    try expectSwapped(a, p);
+}
+
+test "a flush after a landed fallback rename stops for intervention" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "fb-flush");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer clearLandedFaults();
+    landed_fault = .rename_fsync;
+    landed_fault_rename = 3;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    try expectSwapped(a, p);
 }

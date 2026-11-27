@@ -135,7 +135,7 @@ eb-staged-rebuild: run example-3 is already rolled back
    eb-staged-rebuild: run example-5 is already live
    #+end_example
 
-A pass that stops part way leaves its runs =rolling_back=; run the same command again to finish it.
+A pass that stops before a swap exchange or a fallback rename lands leaves its runs =rolling_back=; run the same command again to finish it. A close or a flush that fails after a swap exchange or a fallback rename lands keeps the names, and =resume= and =rollback= exit 2 and stop.
 
 ** Roll back the latest rebuild
 
