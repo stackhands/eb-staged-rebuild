@@ -432,6 +432,8 @@ def scrub(text, **placeholders):
     # The faultfs mount a test makes, and placeholders, stay.
     text = re.sub(r'"(mount|fstype|device)": "(?!@|faultfs"|fuse\.faultfs")[^"]*"', r'"\1": "HOST"', text)
     text = re.sub(r'"(max_user_namespaces|unprivileged_userns_clone)": [0-9]+', r'"\1": HOST', text)
+    # A kernel that does not publish this sysctl reports null, not an int.
+    text = re.sub(r'"unprivileged_userns_clone": null', '"unprivileged_userns_clone": HOST', text)
     return re.sub(r"^( {6,})[0-9]{5,}(,?)$", r"\1INO\2", text, flags=re.M)
 
 
