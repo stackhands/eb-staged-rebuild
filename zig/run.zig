@@ -1222,13 +1222,70 @@ fn validatePublicationSet(r: *R) E!void {
     }
 }
 
+/// One recorded manifest against the directory at `path`. A stamp of
+/// this run, or the same contents, is the tree resume may still publish.
+/// Another run's stamp is refused, and so is any other change. Device
+/// and inode are not the match.
+fn refuseStaleAt(r: *R, key: []const u8, recorded: Py, path: []const u8) E!void {
+    if (!livecheck.validSnapshot(recorded))
+        return r.intervene("journal manifest for {s} is malformed", .{key});
+    const run_id = r.str("run_id");
+    if (treeRunId(r.a, path)) |id| if (std.mem.eql(u8, id, run_id)) return;
+    const after = livecheck.snapshot(r.a, path) catch return r.refuse("cannot snapshot {s}", .{key});
+    if (livecheck.contentsSame(r.a, recorded, after)) return;
+    const recorded_ino = pyfmt.get(recorded, "inode");
+    const now_ino = pyfmt.get(after, "inode");
+    const replaced = recorded_ino != null and recorded_ino.? == .int and now_ino != null and now_ino.? == .int and recorded_ino.?.int != now_ino.?.int;
+    if (replaced) if (treeRunId(r.a, path)) |other| {
+        return r.refuse("run {s} cannot publish {s}: {s} holds the tree of run {s}; roll back {s} before resuming {s}", .{ run_id, key, path, other, other, run_id });
+    };
+    return r.refuse("live software directory changed after run {s} was built; not published: {s}", .{ run_id, key });
+}
+
+/// The live tree recorded at the start must still match, or this run
+/// must already have exchanged it. A later run's tree is refused before
+/// any directory moves, and so is any other change. Device and inode are
+/// not the match. The module-file hash can match either tree.
+fn refuseStaleLive(r: *R) E!void {
+    if (r.spec.skip_live_check) return;
+    const manifests = r.get("manifests") orelse return;
+    if (manifests != .dict) return;
+    for (manifests.dict) |e| {
+        const path = try std.fs.path.join(r.a, &.{ r.spec.software, e.key });
+        try refuseStaleAt(r, e.key, e.value, path);
+    }
+}
+
+/// Recovery renames an existing live directory away when the fallback
+/// hold exists and the retired path is missing. Refuse first when that
+/// directory's stamp or recorded manifest names another run. The manifest
+/// key is the software path of the live tree, the same path the recorder
+/// stores. A missing live directory is left alone, so recovery can still
+/// restore it from the hold.
+fn refuseStaleBeforeRecovery(r: *R, live: []const u8, retired: []const u8) E!void {
+    if (r.spec.skip_live_check) return;
+    if (!isKind(live, "dir")) return;
+    if (!isKind(retired, "missing")) return;
+    const hold = try r.a.print("{s}" ++ swap.fallback_hold_suffix, .{retired});
+    if (!isKind(hold, "dir")) return;
+    const manifests = r.get("manifests") orelse return;
+    if (manifests != .dict) return;
+    const key = modulefile.relpath(r.a, admin.abspath(r.a, live), admin.abspath(r.a, r.spec.software));
+    const recorded = pyfmt.get(manifests, key) orelse return;
+    try refuseStaleAt(r, key, recorded, live);
+}
+
 fn publish(r: *R) E!void {
     const a = r.a;
     for (r.list("modules_plan")) |m| {
         const live = s(pyfmt.get(m, "live_software"));
         const retired = s(pyfmt.get(m, "retired"));
-        if (live.len > 0 and retired.len > 0) try recoverPair(r, live, retired);
+        if (live.len > 0 and retired.len > 0) {
+            try refuseStaleBeforeRecovery(r, live, retired);
+            try recoverPair(r, live, retired);
+        }
     }
+    try refuseStaleLive(r);
     try validatePublicationSet(r);
     const run_id = r.str("run_id");
     for (r.list("modules_plan")) |m| {
@@ -2935,4 +2992,251 @@ test "a retry flushes the parent of a created link that is already gone" {
     try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
     try expectFlush(removing.why, dir);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+}
+
+const ResumePaths = struct {
+    root: []const u8,
+    software: []const u8,
+    live: []const u8,
+    staged: []const u8,
+    retired: []const u8,
+    modules: []const u8,
+};
+
+fn resumePaths(a: Allocator, label: []const u8) !ResumePaths {
+    const root = try a.print("/tmp/esr-resume-{s}-{d}", .{ label, linux.getpid() });
+    const software = try std.fs.path.join(a, &.{ root, "software" });
+    return .{
+        .root = root,
+        .software = software,
+        .live = try std.fs.path.join(a, &.{ software, "demo", "1" }),
+        .staged = try std.fs.path.join(a, &.{ root, "generations", "r1", "software", "demo", "1" }),
+        .retired = try std.fs.path.join(a, &.{ software, "demo", ".1.r1" }),
+        .modules = try std.fs.path.join(a, &.{ root, "modules" }),
+    };
+}
+
+fn stampRun(a: Allocator, dir: []const u8, run_id: []const u8) !void {
+    try writeBytes(try std.fs.path.join(a, &.{ dir, ".eb-staged-rebuild-complete" }), try a.print("{{\"run_id\":\"{s}\"}}\n", .{run_id}));
+}
+
+/// A built run whose manifest is `manifest`, ready for `publish`.
+fn builtResume(a: Allocator, ctx: *admin.Ctx, env: probe.Env, p: ResumePaths, manifest: Py) !R {
+    const live_module = try std.fs.path.join(a, &.{ p.modules, "all", "demo", "1.lua" });
+    const prepared = try std.fs.path.join(a, &.{ p.root, "state", "runs", "r1", "prepared", "all", "demo", "1.lua" });
+    const journal = try std.fs.path.join(a, &.{ p.root, "state", "runs", "r1", "journal.json" });
+    const module_text = "module\n";
+    try atomic.makedirs(std.fs.path.dirname(prepared).?);
+    try writeBytes(prepared, module_text);
+    const item = Py{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s("all/demo/1.lua") },
+        .{ .key = "live_module", .value = Py.s(live_module) },
+        .{ .key = "prepared", .value = Py.s(prepared) },
+        .{ .key = "staged", .value = Py.s(p.staged) },
+        .{ .key = "live_software", .value = Py.s(p.live) },
+        .{ .key = "retired", .value = Py.s(p.retired) },
+        .{ .key = "backup", .value = Py.s(try std.fs.path.join(a, &.{ p.root, "state", "runs", "r1", "backups", "demo", "1.lua" })) },
+        .{ .key = "new_hash", .value = Py.s(sha(a, module_text)) },
+        .{ .key = "old_hash", .value = .null },
+        .{ .key = "previous_root", .value = .null },
+        .{ .key = "existed", .value = .{ .bool = false } },
+        .{ .key = "status", .value = Py.s("pending") },
+        .{ .key = "swap_method", .value = .null },
+        .{ .key = "published_at", .value = .null },
+    }) };
+    var r = testRun(a, ctx, env, .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "run_id", .value = Py.s("r1") },
+        .{ .key = "state", .value = Py.s("built") },
+        .{ .key = "backend", .value = Py.s("installpath") },
+        .{ .key = "manifests", .value = .{ .dict = try a.dupe(Py.Entry, &.{.{ .key = "demo/1", .value = manifest }}) } },
+        .{ .key = "module_rels", .value = .{ .list = try a.dupe(Py, &.{Py.s("demo/1")}) } },
+        .{ .key = "modules_plan", .value = .{ .list = try a.dupe(Py, &.{item}) } },
+        .{ .key = "links_plan", .value = .{ .list = &.{} } },
+        .{ .key = "skip_live_check", .value = .{ .bool = false } },
+    }) });
+    r.spec.software = p.software;
+    r.spec.modules = p.modules;
+    r.spec.state_root = try std.fs.path.join(a, &.{ p.root, "state" });
+    r.path = journal;
+    return r;
+}
+
+fn fileText(a: Allocator, path: []const u8) ![]const u8 {
+    const f = try fsx.openRegular(fsx.cwd, path, true);
+    defer sys.close(f.fd);
+    return fsx.readAll(a, f.fd, 64);
+}
+
+fn expectPublished(a: Allocator, r: *R, live: []const u8, payload: []const u8) !void {
+    // Status lines go to stdout. The test runner's protocol uses that
+    // descriptor, so the lines for this call go to /dev/null.
+    const saved_rc = linux.dup(1);
+    if (linux.errno(saved_rc) != .SUCCESS) return error.Unexpected;
+    const saved: linux.fd_t = @intCast(saved_rc);
+    const null_rc = linux.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    if (linux.errno(null_rc) != .SUCCESS) {
+        _ = linux.close(saved);
+        return error.Unexpected;
+    }
+    const null_fd: linux.fd_t = @intCast(null_rc);
+    if (linux.errno(linux.dup2(null_fd, 1)) != .SUCCESS) return error.Unexpected;
+    _ = linux.close(null_fd);
+    defer {
+        _ = linux.dup2(saved, 1);
+        _ = linux.close(saved);
+    }
+    publish(r) catch |err| {
+        std.debug.print("resume publish: {s}: {s}\n", .{ @errorName(err), r.why });
+        return err;
+    };
+    try std.testing.expectEqualStrings("complete", r.str("state"));
+    try std.testing.expectEqualStrings(payload, try fileText(a, try std.fs.path.join(a, &.{ live, "PAYLOAD" })));
+}
+
+fn manifestDevice(a: Allocator, snap: Py, device: i64) !Py {
+    const entries = try a.dupe(Py.Entry, snap.dict);
+    var found = false;
+    for (entries) |*e| if (std.mem.eql(u8, e.key, "device")) {
+        e.value = .{ .int = device };
+        found = true;
+    };
+    if (!found) return error.TestUnexpectedResult;
+    return .{ .dict = entries };
+}
+
+test "resume publishes when the live stamp is this run" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try resumePaths(a, "stamp");
+    defer fsx.deleteTree(a, fsx.cwd, p.root) catch {};
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "baseline\n");
+    const baseline = try livecheck.snapshot(a, p.live);
+    sys.renameat(fsx.cwd, p.live, fsx.cwd, p.retired) catch return error.Unexpected;
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "staged\n");
+    try stampRun(a, p.live, "r1");
+    try atomic.makedirs(std.fs.path.dirname(p.staged).?);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = try builtResume(a, &ctx, env, p, baseline);
+    try std.testing.expectEqualStrings("r1", treeRunId(a, p.live).?);
+    try expectPublished(a, &r, p.live, "staged\n");
+}
+
+test "resume publishes when the manifest device id differs" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try resumePaths(a, "device");
+    defer fsx.deleteTree(a, fsx.cwd, p.root) catch {};
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "baseline\n");
+    const baseline = try livecheck.snapshot(a, p.live);
+    const recorded = (pyfmt.get(baseline, "device") orelse return error.TestUnexpectedResult).int;
+    const other: i64 = if (recorded == 7) 8 else 7;
+    const manifest = try manifestDevice(a, baseline, other);
+    try std.testing.expect(!livecheck.same(a, baseline, manifest));
+    try atomic.makedirs(p.staged);
+    try writeBytes(try std.fs.path.join(a, &.{ p.staged, "PAYLOAD" }), "staged\n");
+    try stampRun(a, p.staged, "r1");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = try builtResume(a, &ctx, env, p, manifest);
+    try std.testing.expect(treeRunId(a, p.live) == null);
+    try expectPublished(a, &r, p.live, "staged\n");
+}
+
+test "resume refuses to publish over a later run's tree" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try resumePaths(a, "later");
+    defer fsx.deleteTree(a, fsx.cwd, p.root) catch {};
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "baseline\n");
+    const baseline = try livecheck.snapshot(a, p.live);
+    const held = try std.fs.path.join(a, &.{ p.software, "demo", ".1.held" });
+    sys.renameat(fsx.cwd, p.live, fsx.cwd, held) catch return error.Unexpected;
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "later\n");
+    try stampRun(a, p.live, "later");
+    try atomic.makedirs(p.staged);
+    try writeBytes(try std.fs.path.join(a, &.{ p.staged, "PAYLOAD" }), "staged\n");
+    try stampRun(a, p.staged, "r1");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = try builtResume(a, &ctx, env, p, baseline);
+    // Status lines go to stdout. The test runner's protocol uses that
+    // descriptor, so the lines for this call go to /dev/null.
+    const saved_rc = linux.dup(1);
+    if (linux.errno(saved_rc) != .SUCCESS) return error.Unexpected;
+    const saved: linux.fd_t = @intCast(saved_rc);
+    const null_rc = linux.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    if (linux.errno(null_rc) != .SUCCESS) {
+        _ = linux.close(saved);
+        return error.Unexpected;
+    }
+    const null_fd: linux.fd_t = @intCast(null_rc);
+    if (linux.errno(linux.dup2(null_fd, 1)) != .SUCCESS) return error.Unexpected;
+    _ = linux.close(null_fd);
+    defer {
+        _ = linux.dup2(saved, 1);
+        _ = linux.close(saved);
+    }
+    try std.testing.expectError(error.Refused, publish(&r));
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "holds the tree of run later") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "roll back later before resuming r1") != null);
+    try std.testing.expectEqualStrings("later\n", try fileText(a, try std.fs.path.join(a, &.{ p.live, "PAYLOAD" })));
+    try std.testing.expect(std.mem.eql(u8, kind(p.staged), "dir"));
+}
+
+test "resume refuses to recover a fallback hold over a later run's tree" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try resumePaths(a, "hold");
+    defer fsx.deleteTree(a, fsx.cwd, p.root) catch {};
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "baseline\n");
+    const baseline = try livecheck.snapshot(a, p.live);
+    const hold = try a.print("{s}" ++ swap.fallback_hold_suffix, .{p.retired});
+    sys.renameat(fsx.cwd, p.live, fsx.cwd, hold) catch return error.Unexpected;
+    try atomic.makedirs(p.live);
+    try writeBytes(try std.fs.path.join(a, &.{ p.live, "PAYLOAD" }), "later\n");
+    try stampRun(a, p.live, "later");
+    try atomic.makedirs(p.staged);
+    try writeBytes(try std.fs.path.join(a, &.{ p.staged, "PAYLOAD" }), "staged\n");
+    try stampRun(a, p.staged, "r1");
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = try builtResume(a, &ctx, env, p, baseline);
+    const live_ino = (try fsx.statAt(fsx.cwd, p.live, false)).ino;
+    // Status lines go to stdout. The test runner's protocol uses that
+    // descriptor, so the lines for this call go to /dev/null.
+    const saved_rc = linux.dup(1);
+    if (linux.errno(saved_rc) != .SUCCESS) return error.Unexpected;
+    const saved: linux.fd_t = @intCast(saved_rc);
+    const null_rc = linux.open("/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    if (linux.errno(null_rc) != .SUCCESS) {
+        _ = linux.close(saved);
+        return error.Unexpected;
+    }
+    const null_fd: linux.fd_t = @intCast(null_rc);
+    if (linux.errno(linux.dup2(null_fd, 1)) != .SUCCESS) return error.Unexpected;
+    _ = linux.close(null_fd);
+    defer {
+        _ = linux.dup2(saved, 1);
+        _ = linux.close(saved);
+    }
+    try std.testing.expectError(error.Refused, publish(&r));
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "holds the tree of run later") != null);
+    try std.testing.expect(std.mem.indexOf(u8, r.why, "roll back later before resuming r1") != null);
+    try std.testing.expectEqualStrings("later\n", try fileText(a, try std.fs.path.join(a, &.{ p.live, "PAYLOAD" })));
+    try std.testing.expectEqualStrings("later", treeRunId(a, p.live).?);
+    try std.testing.expectEqual(live_ino, (try fsx.statAt(fsx.cwd, p.live, false)).ino);
+    try std.testing.expect(isKind(p.retired, "missing"));
+    try std.testing.expect(isKind(hold, "dir"));
+    try std.testing.expectEqualStrings("baseline\n", try fileText(a, try std.fs.path.join(a, &.{ hold, "PAYLOAD" })));
 }

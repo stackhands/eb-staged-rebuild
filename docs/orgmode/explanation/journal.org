@@ -36,7 +36,7 @@ What =resume= does follows from the state:
 | State                           | =resume=                                                                               |
 |---------------------------------+----------------------------------------------------------------------------------------|
 | =created=, =building=, =failed= | builds the generation again, as long as no module of the run is published              |
-| =built=, =publishing=           | puts every module back to the old tree, then publishes again                           |
+| =built=, =publishing=           | refuses a live tree a later run replaced, and refuses other changes; otherwise puts every module back to the old tree, then publishes again |
 | =complete=                      | delivers ledger records that are still pending, and otherwise says the run is complete |
 | =rolling_back=                  | refuses: run the =rollback --to= that marked it again, to finish its pass              |
 | =rolled_back=                   | refuses: start a new run                                                               |
