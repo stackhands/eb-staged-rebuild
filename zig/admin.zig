@@ -153,7 +153,11 @@ fn recordedField(journal: Py, field: []const u8) []const u8 {
 /// `//` is kept and names another path than `/`; three or more leading
 /// slashes are one.
 pub fn abspath(a: Allocator, p: []const u8) []const u8 {
-    return fsx.absPath(a, p) catch oom();
+    return fsx.absPath(a, p) catch |err| switch (err) {
+        error.OutOfMemory => oom(),
+        // A removed working directory leaves a relative path normalized as written.
+        else => fsx.normPath(a, p) catch oom(),
+    };
 }
 
 /// Whether `child` is `parent` or a path under it, both made absolute as
