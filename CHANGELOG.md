@@ -2,6 +2,113 @@
 
 <!-- towncrier release notes start -->
 
+## 3.0.0 (2026-11-27)
+
+### Features
+
+- Add `verify STAGE`, which checks a built run's staged trees without publishing them and lists each problem in `runs/<run-id>/verify.json`. `run --verify` and `resume --verify` run the same checks before the swap. A failing stage is refused unless `--force` is given. The Python command and the Zig binary have the same checks, the same options and the same `verify.json`.
+- The wheels declare free-threading support and carry a C extension, `eb_staged_rebuild._launch`, built against the CPython stable ABI, that calls `execv(2)` for the launcher. A `cp311-abi3` wheel serves every CPython from 3.11 that has the GIL; the free-threaded 3.13t and 3.14t, which install no abi3 wheel, get a `cp313t` and a `cp314t` wheel. cibuildwheel builds each in the manylinux2014 image for x86_64 and aarch64, and `tools/check_wheel.py` checks the tag, the single `_launch` extension, the bundled binary and the free-threading classifier. CI imports `_launch` on 3.13t and 3.14t and checks the GIL stays off, and calls it from many threads.
+- With `--ledger-config`, a run that `--force` published past the failed checks of `--verify` says so in its ledger records: its publication records carry `build.verify` with the check result, the `forced` flag and the problem count of each check. The records of a run that was not checked or that passed (and the corrections a rollback appends) are unchanged.
+- `gc --keep N` keeps each install path's `N` newest generations that `rollback --to` can switch back to, however old they are. Older trees are removed past their grace period as before. With `--check-in-use`, `gc` scans `/proc` before it removes a tree or a run's generation directory, with or without `--dry-run`. It looks for mounts at or inside the path, including bind mounts in any mount namespace, and for processes using it through an executable, a working or root directory, or open or mapped files. It keeps any tree in use and names the mount or process. Without `--check-in-use`, `gc` reads nothing in `/proc`, as before. A tree that `--keep` or this check keeps leaves its run's generation directory in place too. The scan does not see other nodes or other users' processes without root, and the grace period still protects those.
+- `list` shows, for each install path the state root's journals name, the generations still on disk: the live tree, then the trees publications replaced and rollbacks took out, most recently published first, each with the publishing run and timestamp plus the result of any recorded stage checks. Its `--state-root` falls back to `EB_STAGED_REBUILD_STATE_ROOT`, as for the other commands.
+- `rollback --latest` undoes the newest complete run, and `rollback --to GEN` switches each of a generation's install paths straight back to it, in one pass that a second call finishes after a kill. `rollback` without a run id or one of `--latest` and `--to` is still a usage error. `list` shows the trees of an unfinished pass as `rolling back`.
+
+### Fixes
+
+- A failed directory flush names that directory from either frontend.
+- A parent flush that fails after a successful `RENAME_EXCHANGE` now
+  flushes that parent again once the directories are exchanged back.
+  A crash after the command reports failure no longer leaves the
+  exchanged names. A failed undo reports that failure.
+- A retire stays unrecorded when a directory flush fails after the rename.
+- A retry that finds a created module file already removed flushes its directory, so `rollback --to` and publish recovery do not record the removal before it is durable.
+- A staged tree renamed across directories is flushed in both parent directories.
+- A state root that begins with exactly two slashes keeps them in the Zig state-root lock error. Python does the same, and both exit 2 with the same message.
+- Live module reads use one reader with an explicit failure mode, and failures while opening previous module bytes keep Python-matching operating-system error text.
+- Restoring the old live tree after an interrupted publish flushes the class-link directory before it records a created link that another entry replaced as pending, and keeps that entry in place.
+- Resuming after a failed directory flush flushes that directory again before the run is recorded as published.
+- Retrying `rollback --to` now flushes the class-link directory when an earlier attempt already removed the link.
+- The Zig `rollback --to` reports a class link it cannot remove and keeps that run rolling back, so running it again removes the link.
+- The Zig `rollback --to` reports a failed flush of the directory that held a removed class link and keeps that run rolling back, so running it again finishes the rollback.
+- The Zig build reports a failed release of the state-root lock, as the
+  Python tool does. If `fcntl` or `flock` fails to release the lock at the
+  end of `run`, `resume`, `rollback`, `retire`, `verify` or `gc`, the
+  command exits 2 with `eb-staged-rebuild: [Errno N] strerror`. Before, it
+  dropped the error and exited with its own status. In that case `gc` prints
+  no actions, because Python prints them only after it releases the lock.
+  After a refusal under the lock the binary keeps the refusal and drops the
+  failed release; COMPAT.md lists the difference. The build pins zig-common
+  `a45142ad` on `develop`, where `state.RootLock.release` returns the error.
+- The Zig command now escapes U+00A0 and U+00AD in path representations as
+  `\xa0` and `\xad`, matching Python's `repr`.
+- The `userns` backend works on an install path, state root or `TMPDIR` on a file system mounted `nosuid`, `nodev`, `noexec` or with an atime option, such as `/dev/shm` or many scratch file systems. A user namespace locks those flags, and the read-only remount of the sandbox left them out, so it failed with `Operation not permitted` and `probe` reported the sandbox unusable. The remount now carries them over, as bwrap does.
+- The build subprocess applies `EASYBUILD_UMASK`, so `verify` sees the expected staged-tree access mode.
+- The journal keeps a staged tree, created file, created link or generation when its directory flush fails.
+- The ledger outbox of a run is read and written under the state root the command was given, in both front ends, rather than under the one the journal records.
+- The release publishes the completions and man page as `eb-staged-rebuild-VERSION-share.tar.gz`; a release asset cannot be a directory, so the 2.0.1 publish step failed.
+- Uses a complete run id in the docs rollback-to walkthrough.
+- `generation_complete` treats an unreadable `easybuild` metadata directory as incomplete instead of raising `OSError`, so `resolve` emits its JSON document with exit 1 and `run` marks the journal failed in line with the Zig binary.
+- `rollback --to` now flushes the class-link directory before it records a link that another entry replaced as removed, and keeps that entry in place.
+- `rollback RUN_ID`, `rollback --latest` and `rollback --to GEN` read journals through the run journal loader in Python and Zig. `--latest` and `--to` refuse every run if any journal under `runs/` names another run, names another state root, or lacks a field. They refuse before they choose runs or print anything. `--to` reads `GEN` at `runs/GEN/journal.json`.
+- `rollback` flushes the class-link directory before it records a link that another entry replaced as removed, and keeps that entry in place.
+- `verify` and `resume` read a run journal through one loader in Python and Zig. They refuse a run id that is not a plain name, a journal that names another run, and a journal without a field the commands read. The fields are `state_root`, `software`, `modules`, `generation_root`, `state`, `backend`, `modules_plan`, and each plan entry's `rel`, `live_module`, `prepared`, `staged`, `live_software` and `retired`. The refusal exits 2 with the same message, before anything is written.
+- `verify` and `resume` refuse a journal whose `state_root` is not the state root they were given. The refusal exits 2 with the same message in both front ends. Both commands write `verify.json` and resume under the given state root and ignore the one the journal records.
+
+### Documentation
+
+- Add `--verify` and `--force` to the `resume` line of the command summary in the CLI reference. The section for `resume` and its option table already list them.
+- Document stage verification and the publish check in a how-to guide and a reference page, and add a `verify` case to the docs example.
+- The README, install how-to and COMPAT.md say that the site hook file and the checksum list for a copied install exist only in the Python package.
+- The install guide and README name release 2.0.1, with its checksum, attestation and version output.
+
+### Removals
+
+- The Python implementation of the commands is gone. The Zig binary is the only implementation, and the `eb_staged_rebuild` package is a thin layer over it: the wheel carries the binary, `python3 -m eb_staged_rebuild` and the console script replace the Python process with it, and `binary_path()`, `run()` and `run_json()` give Python code the binary and its `--json` documents. `eb_staged_rebuild.site_hooks` and `eb_staged_rebuild.ship` stay Python. The importable modules of the old implementation (`engine`, `cli`, `retire` and the rest) are removed. The tests that compared the two implementations now compare the binary with recorded files under `tests/golden/`, and the release carries completions and a man page from `share/`. COMPAT.md records what a site that ran the Python version should know.
+
+### Miscellaneous
+
+- Add differential and matrix tests for `verify`, `run --verify` and `--force`, and run `tests.test_verify_cli` against the release binary in CI.
+- Both userns helper spellings become one token before the dry-run path-byte comparison.
+- CI runs the ready-unlink parity test against the Zig test artifact.
+- EB_STAGED_REBUILD_NOW is read only by the test artifact and tests/now_cli.py, and only a timestamp the run id can record replaces the wall clock.
+- Each EasyBuild integration run builds under its own temporary directory.
+- Fault-injection tests share helpers for skip policy, Python 3.14 selection, ptrace checks, per-test tracer builds, and Filesystem in Userspace mount probes, removing duplicated setup code across parity suites.
+- The Zig `run` command sets `EASYBUILD_UMASK` in the build command through one helper. It leaves its own umask alone, as the Python command does.
+- The Zig build now takes repr and errno-path formatting from zig-common
+  `pytext`, including the punch-hole refusal and the test clock refusal
+  of the replaceable build. The rendered text does not change.
+- The Zig build now uses zig-common v0.12.0. A directory open goes from
+  `[Errno 22] Invalid argument` to `[Errno 21] Is a directory`, and any
+  other non-regular file goes from `[Errno 22] Invalid argument` to
+  `not a regular file`.
+- The Zig build now uses zig-common v0.14.0. A relative path under a removed working directory stays normalized as written, as before, where `fsx.absPath` now reports `error.NotFound`. The state-root lock and the path helpers of the commands keep that behaviour. A close that fails while a state file, an outbox record or a metrics file is written is now reported as that write's failure and leaves the destination as it was.
+- The Zig job installs `jsonschema`, as the unit job does, and builds release and test-ops binaries. It then runs required test discovery against both binaries, with user namespaces enabled.
+- The Zig unit tests compile with the error `chmod` returns, which the link unlink test handles.
+- The `gc-keep` case of `docs/examples/site.sh` waits for its job to say it is in the replaced tree and ends it with a line on its input, instead of polling `/proc` and killing a `sleep 600`.
+- The access-control test store now saves through zig-common `state.writePrivate`,
+  the exclusive private replace, instead of its own fixed temporary name.
+- The existing zig tests compile and run with zig 0.17.1.
+- The filesystem fault step of the zig job runs the retire flush test.
+- The generations and ledger command-line tests run each front end through the shared `sites()` and runners in `tests/support.py`, with their own subtest per front end, and the crash matrix reads tree markers with the engine's own reader.
+- The generations tests and `tests/differential.sh` wait for the paused rollback with a named pipe. They wait for the processes that hold trees in use with standard input. Neither sleeps or polls.
+- The integration job runs on Python 3.14, and both stagedemo test modules run after the zig binary is built.
+- The lock-holding child in the stale-lock recovery test now signals readiness, so the test no longer competes with it for the lock.
+- The parser error shape parity test fails when `TOOL_BIN` is unset, so it no longer skips its comparisons.
+- The path bytes parity test passes `--backend installpath`, so Python and the binary print the same dry-run text with or without user namespaces.
+- The publish recovery suite covers a failed removal of a created link, including a failed open or flush of its directory, and the resume refusal when the link stays in place.
+- The rollback suite compares a failed open of the directory that holds a created link.
+- The rollback suite compares a failed unlink of a created link, and a failed flush of its directory, with Python.
+- The test artifact can fail the unlink of a finished hard-link replacement, and publication stops before the live tree moves.
+- The unit, docs and changelog draft jobs run on Python 3.14.
+- The zig tests that compile faultfs run after fuse3 is installed.
+- The zig tests that mount faultfs read all of `/proc/self/mountinfo` while they wait for the mount. They read one page of it, so on a host whose mountinfo is longer than a page they never saw the mount and failed with `FuseTimeout`.
+- `implementations()` in `tests/support.py` gives the ledger command-line tests the Python tool and the program `TOOL_BIN` names, and fails when `TOOL_BIN` is unset. The unit job builds the Zig binary and sets `TOOL_BIN`.
+- `loadConfig` maps a directory or other non-regular file from
+  `fsx.openRegular` to `EINVAL` and leaves a symlink loop unchanged.
+  With zig-common v0.10.0 those opens already fail with `EINVAL`, so the
+  ledger config refusal text does not change.
+
+
 ## 2.0.1 (2026-11-24)
 
 ### Fixes

@@ -1,1 +1,0 @@
-`implementations()` in `tests/support.py` gives the ledger command-line tests the Python tool and the program `TOOL_BIN` names, and fails when `TOOL_BIN` is unset. The unit job builds the Zig binary and sets `TOOL_BIN`.

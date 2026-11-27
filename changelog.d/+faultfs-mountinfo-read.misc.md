@@ -1,1 +1,0 @@
-The zig tests that mount faultfs read all of `/proc/self/mountinfo` while they wait for the mount. They read one page of it, so on a host whose mountinfo is longer than a page they never saw the mount and failed with `FuseTimeout`.

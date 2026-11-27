@@ -33,7 +33,7 @@ Linux only. The `eb-staged-rebuild` command is one static Zig binary. The Python
 The static binary, one file per architecture, from the [latest release](https://github.com/stackhands/eb-staged-rebuild/releases/latest) (v2.0.1):
 
 ```bash
-v=2.0.1 arch=x86_64   # or aarch64
+v=3.0.0 arch=x86_64   # or aarch64
 curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/eb-staged-rebuild-${v}-${arch}-linux-musl"
 curl -fsSLO "https://github.com/stackhands/eb-staged-rebuild/releases/download/v${v}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS

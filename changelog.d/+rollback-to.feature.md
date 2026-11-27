@@ -1,1 +1,0 @@
-`rollback --latest` undoes the newest complete run, and `rollback --to GEN` switches each of a generation's install paths straight back to it, in one pass that a second call finishes after a kill. `rollback` without a run id or one of `--latest` and `--to` is still a usage error. `list` shows the trees of an unfinished pass as `rolling back`.
