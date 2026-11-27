@@ -31,13 +31,21 @@ def _inside(root: Path, path: Path):
         return None
 
 
+def _walk_error(error):
+    raise error
+
+
 def snapshot(root, skip=None):
-    """File and link rows under root, sorted by relative path. skip is not hashed."""
+    """File and link rows under root, sorted by relative path. skip is not hashed.
+
+    A directory that cannot be listed raises OSError. Skipping it would omit
+    its files from the list and from the check.
+    """
     root = Path(root)
     if not root.is_dir():
         raise ValueError(f"not a directory: {root}")
     rows = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_walk_error):
         current = Path(dirpath)
         linked = []
         for name in dirnames:

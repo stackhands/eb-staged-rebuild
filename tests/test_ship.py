@@ -43,6 +43,48 @@ class ShipTests(unittest.TestCase):
             (root / "extra.txt").write_text("y")
             self.assertEqual(main(["verify", str(root), str(manifest)]), 1)
 
+    def test_an_unreadable_directory_cannot_hide_a_byte_change(self):
+        if os.geteuid() == 0:
+            from tests.support import _skip
+
+            _skip(self, "root ignores directory read permissions")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "install"
+            hidden = root / "pkg"
+            hidden.mkdir(parents=True)
+            secret = hidden / "secret.txt"
+            secret.write_bytes(b"one\n")
+            manifest = Path(tmp) / "MANIFEST"
+            os.chmod(hidden, 0)
+            try:
+                try:
+                    write_manifest(root, manifest)
+                    refused = False
+                except OSError:
+                    refused = True
+            finally:
+                os.chmod(hidden, 0o700)
+            if not refused:
+                secret.write_bytes(b"two\n")
+                os.chmod(hidden, 0)
+                try:
+                    problems = verify(root, manifest)
+                finally:
+                    os.chmod(hidden, 0o700)
+                self.assertNotEqual(problems, [])
+            self.assertTrue(refused)
+            write_manifest(root, manifest)
+            secret.write_bytes(b"two\n")
+            os.chmod(hidden, 0)
+            try:
+                try:
+                    problems = verify(root, manifest)
+                except OSError:
+                    problems = None
+            finally:
+                os.chmod(hidden, 0o700)
+            self.assertIsNone(problems)
+
     def test_paths_do_not_escape_the_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "install"
