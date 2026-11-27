@@ -75,13 +75,16 @@ The first row that applies decides:
 | Action   | Reason                             | When                                                                                                            |
 |----------+------------------------------------+-----------------------------------------------------------------------------------------------------------------|
 | =keep=   | =state STATE is kept=              | The run is not =complete= or =rolled_back=, nor a =failed= run that =--include-failed= takes.                   |
+| =keep=   | =interrupted rollback is kept=     | The run is =complete= and has saved =restoring= or =restored= while =rolled_back= is unrecorded.                |
 | =keep=   | =a live module resolves inside it= | A module file that a journal names has its root inside the tree.                                                |
 | =keep=   | =kept by --keep N=                 | The tree is one of the =N= newest of its installation that a rollback can return to.                            |
 | =keep=   | =within grace (WHY)=               | The tree's grace period is not over.                                                                            |
 | =keep=   | =in use on this node: USE=         | With =--check-in-use=, a process or a mount of this machine uses the tree, as in the table of the next section. |
 | =remove= | =WHY=, or =WHY, beyond --keep N=   | None of the above; with =--dry-run=, =gc= prints the line and removes nothing.                                  |
 
-=WHY= is =previous live tree= for the tree that a =complete= run replaced, whose grace period starts when the run published, and =rolled-back candidate= for the tree that a rollback took out, whose grace period starts at the rollback.
+=WHY= is =previous live tree= for the tree that a =complete= run replaced when that run has not saved =restoring= or =restored=, and the grace period starts when the run published.
+While =rolled_back= is unrecorded, =gc= keeps the hidden trees of a =complete= run that has saved =restoring= or =restored=, with the reason =interrupted rollback is kept=, and ignores the grace period until the run records =rolled_back=.
+=WHY= is =rolled-back candidate= for the tree that a rollback took out, whose grace period starts at the rollback.
 With =--include-failed=, the tree of a =failed= run that published nothing is a =failed candidate=, and its grace period starts at the run's last change.
 
 A run's generation, =<state-root>/generations/RUN_ID=, gets a line after the run's trees once each of them is settled: removed, or gone and past its grace period.

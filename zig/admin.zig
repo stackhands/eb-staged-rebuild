@@ -1030,6 +1030,16 @@ fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []c
         if (err == error.Refused) refuse("{s}", .{why.msg}) else refuse("{s}", .{main_mod.osError(c.a, err, path)});
 }
 
+/// A rollback saves `restoring` or `restored` before it records
+/// `rolled_back`. State is still `complete`, so the grace clock is still
+/// `published_at`. The hidden sibling is what rollback has to finish with.
+fn rollbackUnfinished(j: Py) bool {
+    const entries = pyfmt.get(j, "modules_plan") orelse return false;
+    if (entries != .list) return false;
+    for (entries.list) |m| if (eqlStr(pyfmt.get(m, "status"), "restoring") or eqlStr(pyfmt.get(m, "status"), "restored")) return true;
+    return false;
+}
+
 /// gc: remove each hidden tree whose grace period is over and, with
 /// `include_failed`, the staged tree of a failed run that published
 /// nothing; with `dry_run`, only list them. `grace_hours` applies to every
@@ -1038,7 +1048,9 @@ fn writeMetrics(c: *Ctx, path: []const u8, state_root: []const u8, journals: []c
 /// of each install path that a rollback can return to are kept, and with
 /// `check_in_use`, a tree a process or mount on this node uses. A run's
 /// generation directory goes once every hidden tree of the run is settled,
-/// unless `check_in_use` finds this node using it. Returns the exit status.
+/// unless `check_in_use` finds this node using it. A run that has saved
+/// `restoring` or `restored` and has not recorded `rolled_back` keeps its
+/// hidden trees and its generation. Returns the exit status.
 pub fn gc(
     c: *Ctx,
     state_root_in: []const u8,
@@ -1086,8 +1098,16 @@ pub fn gc(
             var when: ?f64 = null;
             var why: []const u8 = "";
             if (st != null and std.mem.eql(u8, st.?, "complete")) {
-                when = num(pyfmt.get(m, "published_at"));
-                why = "previous live tree";
+                // rollbackSteps saves restoring or restored before rolled_back.
+                // published_at is still the grace clock, and it has already
+                // elapsed for a tree that was live longer than the grace period.
+                if (rollbackUnfinished(j)) {
+                    when = null;
+                    why = "interrupted rollback is kept";
+                } else {
+                    when = num(pyfmt.get(m, "published_at"));
+                    why = "previous live tree";
+                }
             } else if (st != null and std.mem.eql(u8, st.?, "rolled_back")) {
                 when = num(pyfmt.get(j, "rolled_back_at"));
                 why = "rolled-back candidate";
@@ -1358,6 +1378,77 @@ test "gc records its completion time after its starting time" {
     try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 0, false, false, null, false, null, "eb-keep-logs", metrics, false, null, false));
     try std.testing.expectEqual(@as(usize, 2), Clock.calls);
     try std.testing.expect(std.mem.indexOf(u8, readFile(&c, metrics), "eb_staged_rebuild_last_gc_timestamp_seconds 2000\n") != null);
+}
+
+// rollbackSteps records `restoring` or `restored` while state is still
+// complete. The grace clock is still `published_at`.
+test "gc keeps the hidden trees of an interrupted rollback past the publish grace" {
+    const Clock = struct {
+        fn now() f64 {
+            return 1_000_000;
+        }
+    };
+    const io = struct {
+        fn file(path: []const u8, data: []const u8) !void {
+            const fd = try sys.openat(fsx.cwd, path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, 0o644);
+            defer sys.close(fd);
+            try sys.writeAll(fd, data);
+        }
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = try a.print("/tmp/esr-gc-rollback-{d}", .{linux.getpid()});
+    defer fsx.deleteTree(a, fsx.cwd, root) catch {};
+    const Tree = struct { run: []const u8, name: []const u8 };
+    const trees = [_]Tree{
+        .{ .run = "open", .name = "a" },
+        .{ .run = "open", .name = "b" },
+        .{ .run = "mid", .name = "m" },
+        .{ .run = "done", .name = "d" },
+    };
+    for (trees) |t| try atomic.makedirs(try a.print("{s}/software/{s}/.1.{s}", .{ root, t.name, t.run }));
+    for ([_][]const u8{ "open", "mid", "done" }) |run| {
+        try atomic.makedirs(try a.print("{s}/generations/{s}", .{ root, run }));
+        try atomic.makedirs(try a.print("{s}/runs/{s}", .{ root, run }));
+    }
+    const open_a = try a.print("{{\"rel\":\"a/1\",\"live_software\":\"{s}/software/a/1\",\"retired\":\"{s}/software/a/.1.open\",\"published_at\":1,\"status\":\"restoring\"}}", .{ root, root });
+    const open_b = try a.print("{{\"rel\":\"b/1\",\"live_software\":\"{s}/software/b/1\",\"retired\":\"{s}/software/b/.1.open\",\"published_at\":1,\"status\":\"published\"}}", .{ root, root });
+    const mid_m = try a.print("{{\"rel\":\"m/1\",\"live_software\":\"{s}/software/m/1\",\"retired\":\"{s}/software/m/.1.mid\",\"published_at\":1,\"status\":\"restored\"}}", .{ root, root });
+    const done_d = try a.print("{{\"rel\":\"d/1\",\"live_software\":\"{s}/software/d/1\",\"retired\":\"{s}/software/d/.1.done\",\"published_at\":1,\"status\":\"published\"}}", .{ root, root });
+    const open_body = try a.print("{{\"schema\":2,\"publication\":\"directory-swap\",\"run_id\":\"open\",\"state\":\"complete\",\"grace_hours\":144,\"modules_plan\":[{s},{s}]}}\n", .{ open_b, open_a });
+    const mid_body = try a.print("{{\"schema\":2,\"publication\":\"directory-swap\",\"run_id\":\"mid\",\"state\":\"complete\",\"grace_hours\":144,\"modules_plan\":[{s}]}}\n", .{mid_m});
+    const done_body = try a.print("{{\"schema\":2,\"publication\":\"directory-swap\",\"run_id\":\"done\",\"state\":\"complete\",\"grace_hours\":144,\"modules_plan\":[{s}]}}\n", .{done_d});
+    try io.file(try a.print("{s}/runs/open/journal.json", .{root}), open_body);
+    try io.file(try a.print("{s}/runs/mid/journal.json", .{root}), mid_body);
+    try io.file(try a.print("{s}/runs/done/journal.json", .{root}), done_body);
+    const parent: common.proc.Envp = &[_:null]?[*:0]const u8{};
+    const env: probe.Env = .{ .envp = parent };
+    var c: Ctx = .{ .a = a, .env = env, .pause = .{ .env = env }, .now_fn = Clock.now };
+    // gc writes its plan on fd 1, which is the test runner's channel.
+    const sink = try sys.openat(fsx.cwd, "/dev/null", .{ .ACCMODE = .WRONLY }, 0);
+    const saved = linux.dup(1);
+    try std.testing.expect(linux.errno(saved) == .SUCCESS);
+    try std.testing.expect(linux.errno(linux.dup2(@intCast(sink), 1)) == .SUCCESS);
+    defer {
+        _ = linux.dup2(@intCast(saved), 1);
+        _ = linux.close(@intCast(saved));
+        sys.close(sink);
+    }
+    try std.testing.expectEqual(@as(u8, 0), gc(&c, root, 1, false, false, null, false, null, "eb-keep-logs", null, false, null, false));
+    const drop = [_][]const u8{
+        try a.print("{s}/software/d/.1.done", .{root}),
+        try a.print("{s}/generations/done", .{root}),
+    };
+    const keep = [_][]const u8{
+        try a.print("{s}/software/a/.1.open", .{root}),
+        try a.print("{s}/software/b/.1.open", .{root}),
+        try a.print("{s}/software/m/.1.mid", .{root}),
+        try a.print("{s}/generations/open", .{root}),
+        try a.print("{s}/generations/mid", .{root}),
+    };
+    for (drop) |path| try std.testing.expectEqualStrings("missing", main_mod.lstatKind(path));
+    for (keep) |path| try std.testing.expectEqualStrings("dir", main_mod.lstatKind(path));
 }
 
 test "abspath delegates to fsx.absPath for relative and normalized paths" {
