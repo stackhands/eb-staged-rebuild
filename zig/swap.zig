@@ -67,10 +67,30 @@ fn realExchange(first: [:0]const u8, second: [:0]const u8) linux.E {
 }
 
 fn realRename(from: []const u8, to: []const u8) sys.Error!void {
-    return sys.renameat(common.fsx.cwd, from, common.fsx.cwd, to);
+    // RENAME_NOREPLACE refuses a path that appears after renamePath's
+    // check. A filesystem that refuses the flag gets an ordinary rename:
+    // a non-empty directory stays (ENOTEMPTY) and a symlink is not followed.
+    var za: [sys.path_max:0]u8 = undefined;
+    var zb: [sys.path_max:0]u8 = undefined;
+    const oldp = try sys.z(&za, from);
+    const newp = try sys.z(&zb, to);
+    _ = sys.call(linux.renameat2, .{
+        linux.AT.FDCWD,
+        oldp.ptr,
+        linux.AT.FDCWD,
+        newp.ptr,
+        linux.RENAME{ .NOREPLACE = true },
+    }) catch |err| switch (err) {
+        error.InvalidArgument, error.Unsupported => return sys.renameat(common.fsx.cwd, from, common.fsx.cwd, to),
+        else => return err,
+    };
 }
 
 fn renamePath(a: Allocator, from: []const u8, to: []const u8, why: *Why) Error!void {
+    // The fallback names are empty before each rename. Replacing a path that
+    // is already there would delete a kept generation or a symlink.
+    if (!std.mem.eql(u8, kindOf(to), "missing"))
+        return fail(a, why, error.Failed, "refusing to replace an existing path: {s}", .{to});
     ops.rename(from, to) catch |err|
         return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, from)});
 }
@@ -81,21 +101,33 @@ fn syncParent(a: Allocator, live: []const u8, why: *Why) Error!void {
         return fail(a, why, error.Failed, "{s}", .{main_mod.osError(a, err, parent)});
 }
 
-fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []const u8, why: *Why) Error!void {
+const Fallback = enum { none, aside, swapped };
+
+/// The two states a crash can leave. Any other combination, including a
+/// directory or a symlink already using the hold name, is not one of them.
+fn fallbackState(live: []const u8, staged: []const u8, hold: []const u8) Fallback {
     const lk = kindOf(live);
     const sk = kindOf(staged);
     const hk = kindOf(hold);
+    if (!std.mem.eql(u8, hk, "dir")) return .none;
+    if (std.mem.eql(u8, lk, "missing") and std.mem.eql(u8, sk, "dir")) return .aside;
+    if (std.mem.eql(u8, lk, "dir") and std.mem.eql(u8, sk, "missing")) return .swapped;
+    return .none;
+}
+
+fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []const u8, why: *Why) Error!void {
+    const hk = kindOf(hold);
     if (std.mem.eql(u8, hk, "missing")) return;
-    if (!std.mem.eql(u8, hk, "dir")) return fail(a, why, error.NeedsIntervention, "fallback recovery path is not a directory: {s}", .{hold});
-    if (std.mem.eql(u8, lk, "missing") and std.mem.eql(u8, sk, "dir")) {
-        // The old live tree was moved aside; the staged tree has not moved.
-        try renamePath(a, hold, live, why);
-    } else if (std.mem.eql(u8, lk, "dir") and std.mem.eql(u8, sk, "missing")) {
-        // The staged tree became live; put it back, then the old tree.
-        try renamePath(a, live, staged, why);
-        try renamePath(a, hold, live, why);
-    } else {
-        return fail(a, why, error.NeedsIntervention, "cannot recover interrupted fallback swap: live={s}, staged={s}, hold={s}", .{ lk, sk, hk });
+    switch (fallbackState(live, staged, hold)) {
+        .aside => try renamePath(a, hold, live, why),
+        .swapped => {
+            try renamePath(a, live, staged, why);
+            try renamePath(a, hold, live, why);
+        },
+        .none => {
+            if (!std.mem.eql(u8, hk, "dir")) return fail(a, why, error.NeedsIntervention, "fallback recovery path is not a directory: {s}", .{hold});
+            return fail(a, why, error.NeedsIntervention, "cannot recover interrupted fallback swap: live={s}, staged={s}, hold={s}", .{ kindOf(live), kindOf(staged), hk });
+        },
     }
     try syncParent(a, live, why);
 }
@@ -105,7 +137,12 @@ pub fn recoverInterrupted(a: Allocator, live_in: []const u8, staged_in: []const 
     const live = admin.abspath(a, live_in);
     const staged = admin.abspath(a, staged_in);
     const hold = a.print("{s}" ++ fallback_hold_suffix, .{staged}) catch return error.Failed;
+    const state = fallbackState(live, staged, hold);
+    // Both trees are still directories. A kept generation or a symlink may
+    // use the hold name. Leave it, so the exchange can run.
+    if (state == .none and std.mem.eql(u8, kindOf(live), "dir") and std.mem.eql(u8, kindOf(staged), "dir")) return;
     try restoreFallback(a, live, staged, hold, why);
+    if (state == .none) return;
     if (!std.mem.eql(u8, kindOf(hold), "missing")) return fail(a, why, error.NeedsIntervention, "fallback recovery left its hold path behind: {s}", .{hold});
 }
 
@@ -201,6 +238,11 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
         syncParent(a, live, why) catch break :fallback;
         return .@"rename-fallback";
     }
+    // A half-finished fallback has one name missing. When both are
+    // directories, no rename ran or the hold is already gone. An occupied
+    // hold is a path the exchange refused, not a swap to undo.
+    if (std.mem.eql(u8, kindOf(live), "dir") and std.mem.eql(u8, kindOf(staged), "dir"))
+        return error.Failed;
     const first = why.msg;
     var inner: Why = .{};
     restoreFallback(a, live, staged, hold, &inner) catch
@@ -507,4 +549,84 @@ test "recovery after the second fallback rename" {
     var why: Why = .{};
     try recoverInterrupted(a, p.live, p.staged, &why);
     try expectOriginal(a, p);
+}
+
+fn linkTo(target: []const u8, link: []const u8) !void {
+    var zt: [sys.path_max:0]u8 = undefined;
+    var zl: [sys.path_max:0]u8 = undefined;
+    const left = try sys.z(&zt, target);
+    const right = try sys.z(&zl, link);
+    try testing.expect(linux.errno(linux.symlinkat(left.ptr, linux.AT.FDCWD, right.ptr)) == .SUCCESS);
+}
+
+fn linkText(a: Allocator, path: []const u8) ![]const u8 {
+    var zb: [sys.path_max:0]u8 = undefined;
+    var buf: [sys.path_max]u8 = undefined;
+    const z = try sys.z(&zb, path);
+    const n = try sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, &buf, buf.len });
+    return a.dupe(u8, buf[0..n]);
+}
+
+test "an occupied fallback hold is not an interrupted swap" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const outside = try a.print("/tmp/esr-outside-{d}", .{linux.getpid()});
+    defer common.fsx.deleteTree(a, common.fsx.cwd, outside) catch {};
+    try atomic.makedirs(outside);
+    var note: atomic.Why = .{};
+    try atomic.atomicWrite(a, try a.print("{s}/PAYLOAD", .{outside}), "kept\n", .{}, &note);
+
+    const linked = try testPair(a, "hold-link");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, linked.base) catch {};
+    const link_hold = try a.print("{s}" ++ fallback_hold_suffix, .{linked.staged});
+    try linkTo(outside, link_hold);
+    var why: Why = .{};
+    try testing.expectEqual(Method.@"renameat2-exchange", try swapDirectories(a, linked.live, linked.staged, true, true, .{}, "swap", &why));
+    try testing.expectEqualStrings("new\n", try payload(a, linked.live));
+    try testing.expectEqualStrings("old\n", try payload(a, linked.staged));
+    try testing.expectEqualStrings(outside, try linkText(a, link_hold));
+    try testing.expectEqualStrings("kept\n", try payload(a, outside));
+
+    const parked = try testPair(a, "hold-dir");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, parked.base) catch {};
+    const dir_hold = try a.print("{s}" ++ fallback_hold_suffix, .{parked.staged});
+    try atomic.makedirs(dir_hold);
+    try atomic.atomicWrite(a, try a.print("{s}/PAYLOAD", .{dir_hold}), "kept\n", .{}, &note);
+    try testing.expectEqual(Method.@"renameat2-exchange", try swapDirectories(a, parked.live, parked.staged, true, true, .{}, "swap", &why));
+    try testing.expectEqualStrings("kept\n", try payload(a, dir_hold));
+    try testing.expectEqualStrings("new\n", try payload(a, parked.live));
+
+    const blocked = try testPair(a, "hold-fallback");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, blocked.base) catch {};
+    const blocked_hold = try a.print("{s}" ++ fallback_hold_suffix, .{blocked.staged});
+    try linkTo(outside, blocked_hold);
+    try testing.expectError(error.Failed, swapDirectories(a, blocked.live, blocked.staged, false, true, .{}, "swap", &why));
+    try testing.expect(std.mem.startsWith(u8, why.msg, "refusing to replace an existing path: "));
+    try testing.expect(std.mem.indexOf(u8, why.msg, blocked_hold) != null);
+    try testing.expectEqualStrings("old\n", try payload(a, blocked.live));
+    try testing.expectEqualStrings("new\n", try payload(a, blocked.staged));
+    try testing.expectEqualStrings(outside, try linkText(a, blocked_hold));
+    try testing.expectEqualStrings("kept\n", try payload(a, outside));
+}
+
+test "an occupied directory hold fails the fallback before any rename" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "hold-refuse");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    const hold = try a.print("{s}" ++ fallback_hold_suffix, .{p.staged});
+    try atomic.makedirs(hold);
+    var note: atomic.Why = .{};
+    try atomic.atomicWrite(a, try a.print("{s}/PAYLOAD", .{hold}), "kept\n", .{}, &note);
+    var why: Why = .{};
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    try testing.expect(std.mem.startsWith(u8, why.msg, "refusing to replace an existing path: "));
+    try testing.expect(std.mem.indexOf(u8, why.msg, hold) != null);
+    try testing.expectEqualStrings("old\n", try payload(a, p.live));
+    try testing.expectEqualStrings("new\n", try payload(a, p.staged));
+    try testing.expectEqualStrings("kept\n", try payload(a, hold));
+    try testing.expectEqualStrings("dir", kindOf(p.live));
+    try testing.expectEqualStrings("dir", kindOf(p.staged));
 }
