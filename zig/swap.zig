@@ -100,6 +100,16 @@ fn restoreFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []c
     try syncParent(a, live, why);
 }
 
+/// Invert a completed three-rename swap and flush the parent. A rename that
+/// stops halfway is repaired by `restoreFallback`, which knows those hold
+/// states. A failure leaves the caller to report it.
+fn undoCompletedFallback(a: Allocator, live: []const u8, staged: []const u8, hold: []const u8, why: *Why) Error!void {
+    renamePath(a, staged, hold, why) catch |err| return err;
+    if (renamePath(a, live, staged, why)) |_| {} else |_| return restoreFallback(a, live, staged, hold, why);
+    if (renamePath(a, hold, live, why)) |_| {} else |_| return restoreFallback(a, live, staged, hold, why);
+    try syncParent(a, live, why);
+}
+
 /// recover_interrupted_swap: restore an interrupted fallback, if any.
 pub fn recoverInterrupted(a: Allocator, live_in: []const u8, staged_in: []const u8, why: *Why) Error!void {
     const live = admin.abspath(a, live_in);
@@ -198,7 +208,17 @@ pub fn swapDirectories(a: Allocator, live_in: []const u8, staged_in: []const u8,
             break :fallback;
         }
         renamePath(a, hold, staged, why) catch break :fallback;
-        syncParent(a, live, why) catch break :fallback;
+        syncParent(a, live, why) catch |err| {
+            // The three renames landed. Put the names back and flush that
+            // undo before reporting the failure, or a crash keeps the
+            // swapped names after publish or rollback says it failed.
+            const reported = why.msg;
+            undoCompletedFallback(a, live, staged, hold, why) catch {
+                return fail(a, why, error.NeedsIntervention, "fallback swap succeeded but its rollback failed for {s}: {s}", .{ live, why.msg });
+            };
+            why.msg = reported;
+            return err;
+        };
         return .@"rename-fallback";
     }
     const first = why.msg;
@@ -282,6 +302,14 @@ fn failFirstFlush(path: []const u8) sys.Error!void {
     undo_flushes += 1;
     if (undo_flushes == 1) return error.Unexpected;
     return atomic.fsyncDir(path);
+}
+
+var fallback_renames: usize = 0;
+
+fn failFourthRename(from: []const u8, to: []const u8) sys.Error!void {
+    fallback_renames += 1;
+    if (fallback_renames == 4) return error.Unexpected;
+    return realRename(from, to);
 }
 
 fn failEveryFlush(_: []const u8) sys.Error!void {
@@ -474,12 +502,67 @@ test "every failed fallback rename or sync restores live" {
         failing_call = k;
         ops.rename = failingRename;
         ops.sync_dir = if (k == 4) failingSync else atomic.fsyncDir;
-        if (k == 4) calls = 3;
         var why: Why = .{};
         try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
         ops.* = .{};
         try expectOriginal(a, p);
     }
+}
+
+test "a failed parent flush after the fallback renames restores live" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "fallback-sync");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer ops.* = .{};
+    undo_flushes = 0;
+    ops.sync_dir = failFirstFlush;
+    var why: Why = .{};
+    try testing.expectError(error.Failed, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    try testing.expectEqual(@as(usize, 2), undo_flushes);
+    const parent = std.fs.path.dirname(p.live).?;
+    try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
+    ops.* = .{};
+    try expectOriginal(a, p);
+}
+
+test "a fallback undo that cannot be flushed is reported" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "fallback-undo-flush");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer ops.* = .{};
+    ops.sync_dir = failEveryFlush;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    const parent = std.fs.path.dirname(p.live).?;
+    try testing.expect(std.mem.indexOf(u8, why.msg, "fallback swap succeeded but its rollback failed for ") != null);
+    try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
+    try testing.expect(std.mem.indexOf(u8, why.msg, parent) != null);
+    ops.* = .{};
+    try expectOriginal(a, p);
+}
+
+test "a fallback undo whose rename fails leaves the swapped names" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const p = try testPair(a, "fallback-undo-rename");
+    defer common.fsx.deleteTree(a, common.fsx.cwd, p.base) catch {};
+    defer ops.* = .{};
+    fallback_renames = 0;
+    undo_flushes = 0;
+    ops.rename = failFourthRename;
+    ops.sync_dir = failFirstFlush;
+    var why: Why = .{};
+    try testing.expectError(error.NeedsIntervention, swapDirectories(a, p.live, p.staged, false, true, .{}, "swap", &why));
+    try testing.expect(std.mem.indexOf(u8, why.msg, "fallback swap succeeded but its rollback failed for ") != null);
+    try testing.expect(std.mem.indexOf(u8, why.msg, p.live) != null);
+    ops.* = .{};
+    try testing.expectEqualStrings("new\n", try payload(a, p.live));
+    try testing.expectEqualStrings("old\n", try payload(a, p.staged));
 }
 
 test "recovery after the first fallback rename" {
