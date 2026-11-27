@@ -1,6 +1,6 @@
 .{
     .name = .eb_staged_rebuild,
-    .version = "3.0.0",
+    .version = "3.0.1",
     .fingerprint = 0xee0442ffc6cda659,
     .minimum_zig_version = "0.17.1",
     .dependencies = .{

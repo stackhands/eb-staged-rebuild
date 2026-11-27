@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import _launch
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 
 BINARY_NAME = "eb-staged-rebuild"
 
