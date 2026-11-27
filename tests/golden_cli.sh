@@ -192,25 +192,57 @@ compare "list, a positional" list --state-root "${st}" extra
 # Probe.
 # probe reports this host's sandboxes and file system; the cases keep its
 # structure: the exit code and the key paths with the type of each value.
+# kernel.unprivileged_userns_clone is an int when the kernel publishes it
+# and null when it does not, and the text line follows that value.
+userns_clone=
 probe_shape() {
     local label=$1; shift
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
+    userns_clone=$(python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out" | sed -n 's/^\.user_namespaces\.unprivileged_userns_clone //p')
     {
         printf 'exit %s\n--- keys\n' "${nc}"
-        # The sysctl is an int or null, depending on the kernel. The golden keeps neither.
-        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out" | sed -e 's/^\.user_namespaces\.unprivileged_userns_clone .*/.user_namespaces.unprivileged_userns_clone host/'
+        # Accept exactly int or null. A string or any other type stays, and
+        # the golden file then differs.
+        python3 "${repo_root}/tests/json_shape.py" < "${work}/n.out" | sed \
+            -e 's/^\.user_namespaces\.unprivileged_userns_clone int$/.user_namespaces.unprivileged_userns_clone int|null/' \
+            -e 's/^\.user_namespaces\.unprivileged_userns_clone null$/.user_namespaces.unprivileged_userns_clone int|null/'
         printf -- '--- stderr\n'
         scrub < "${work}/n.err"
     } > "${work}/n.all"
     settle "${label}" "${work}/n.all"
+}
+# The text line is present for an int and absent for null. Rewrite that
+# pair to one line. Leave a string, or an int with no line, unchanged.
+userns_clone_line() {
+    local line clone_marked=0
+    while IFS= read -r line || [ -n "${line}" ]; do
+        case "${line}" in
+        "kernel.unprivileged_userns_clone: HOST")
+            clone_marked=1
+            if [ "${userns_clone}" = int ]; then
+                printf '%s\n' "kernel.unprivileged_userns_clone: label|absent"
+            else
+                printf '%s\n' "${line}"
+            fi
+            ;;
+        "user-namespace sandbox: usable"|"user-namespace sandbox: not usable")
+            if [ "${clone_marked}" -eq 0 ] && [ "${userns_clone}" = null ]; then
+                printf '%s\n' "kernel.unprivileged_userns_clone: label|absent"
+            fi
+            printf '%s\n' "${line}"
+            ;;
+        *)
+            printf '%s\n' "${line}"
+            ;;
+        esac
+    done
 }
 probe_shape "probe --json" probe --path "${work}/p" --json --eb missing-eb
 compare_probe_text() {
     (cd "${work}" && "${TOOL_BIN}" "$@") > "${work}/n.out" 2> "${work}/n.err"; local nc=$?
     {
         printf 'exit %s\n--- labels\n' "${nc}"
-        # Printed only by a kernel that has kernel.unprivileged_userns_clone.
-        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | grep -v '^kernel\.unprivileged_userns_clone' | hostfacts
+        sed -E 's/^([A-Za-z_ ]+):.*/\1/' "${work}/n.out" | hostfacts | userns_clone_line
         printf -- '--- stderr\n'
         scrub < "${work}/n.err"
     } > "${work}/n.all"

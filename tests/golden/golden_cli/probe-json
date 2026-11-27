@@ -32,7 +32,7 @@ exit 0
 .rename_exchange.path str
 .user_namespaces.max_user_namespaces int
 .user_namespaces.readable bool
-.user_namespaces.unprivileged_userns_clone host
+.user_namespaces.unprivileged_userns_clone int|null
 .userns_sandbox.installed bool
 .userns_sandbox.path str
 .userns_sandbox.reason null
