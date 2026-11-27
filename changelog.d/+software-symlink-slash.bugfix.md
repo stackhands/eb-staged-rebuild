@@ -1,0 +1,1 @@
+A trailing slash on `--software` or `--modules` hid a symlink from the root check. Linux follows the slash, and the check saw a directory. The check now reads the normalized path and refuses the symlink.

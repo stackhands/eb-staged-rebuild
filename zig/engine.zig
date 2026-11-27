@@ -214,6 +214,13 @@ fn realpathLoose(a: Allocator, path: []const u8) Allocator.Error![]const u8 {
     return realpathDepth(a, path, 0);
 }
 
+/// `admin.abspath` of `path`, leaving an empty path empty. An empty root is
+/// not a directory; `abspath` would turn it into the working directory.
+fn normalizedRoot(a: Allocator, path: []const u8) []const u8 {
+    if (path.len == 0) return path;
+    return admin.abspath(a, path);
+}
+
 /// _check_roots: refuse a software or modules path that is not a real
 /// directory, a state root with a symbolic link in its path, an unknown
 /// backend, a preparation program that is not an absolute path, and a
@@ -223,15 +230,19 @@ pub fn checkRoots(a: Allocator, spec: Spec) void {
         if (p.len == 0) refuse("publication preparation executable must not be empty", .{});
         if (p[0] != '/') refuse("publication preparation executable must be an absolute path", .{});
     }
-    const sk = main_mod.lstatKind(spec.software);
+    // The same absolute path `run` stores. A trailing slash makes stat
+    // follow a final symlink, so the raw spelling would accept one.
+    const software = normalizedRoot(a, spec.software);
+    const sk = main_mod.lstatKind(software);
     if (!std.mem.eql(u8, sk, "dir")) {
-        if (std.mem.eql(u8, sk, "symlink")) refuse("software path is a symlink ({s}); Name/version must stay a real directory", .{spec.software});
-        refuse("software path is not a real directory: {s} ({s})", .{ spec.software, sk });
+        if (std.mem.eql(u8, sk, "symlink")) refuse("software path is a symlink ({s}); Name/version must stay a real directory", .{software});
+        refuse("software path is not a real directory: {s} ({s})", .{ software, sk });
     }
-    const mk = main_mod.lstatKind(spec.modules);
+    const modules = normalizedRoot(a, spec.modules);
+    const mk = main_mod.lstatKind(modules);
     if (!std.mem.eql(u8, mk, "dir")) {
-        if (std.mem.eql(u8, mk, "symlink")) refuse("modules path is a symlink: {s}", .{spec.modules});
-        refuse("modules path is not a real directory: {s} ({s})", .{ spec.modules, mk });
+        if (std.mem.eql(u8, mk, "symlink")) refuse("modules path is a symlink: {s}", .{modules});
+        refuse("modules path is not a real directory: {s} ({s})", .{ modules, mk });
     }
     if (symlinkComponent(a, spec.state_root)) |s| refuse("state root is unsafe: {s} is a symlink", .{s});
     const known = [_][]const u8{ "auto", "installpath", "bwrap", "userns" };
