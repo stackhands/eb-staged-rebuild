@@ -49,8 +49,14 @@ fn sha256File(a: Allocator, path: []const u8) ![]const u8 {
     return a.dupe(u8, &hex);
 }
 
+/// A journal integer is an i64. An inode that does not fit is an error.
+fn journalInt(value: u64) error{Overflow}!i64 {
+    return std.math.cast(i64, value) orelse error.Overflow;
+}
+
 fn row(a: Allocator, rel: []const u8, kind: []const u8, st: fsx.Stat, detail: []const u8) !Py {
-    return .{ .list = try a.dupe(Py, &.{ Py.s(rel), Py.s(kind), .{ .int = @intCast(st.ino) }, .{ .int = @intCast(st.size) }, Py.s(detail) }) };
+    const ino = try journalInt(st.ino);
+    return .{ .list = try a.dupe(Py, &.{ Py.s(rel), Py.s(kind), .{ .int = ino }, .{ .int = @intCast(st.size) }, Py.s(detail) }) };
 }
 
 /// os.walk without following links: symlinked directories are rows of their
@@ -105,11 +111,12 @@ pub fn snapshot(a: Allocator, path: []const u8) !Py {
     var rows: std.ArrayList(Py) = .empty;
     try walk(a, path, path, &rows);
     std.mem.sort(Py, rows.items, {}, lessRow);
+    const ino = try journalInt(st.ino);
     return .{ .dict = try a.dupe(Py.Entry, &.{
         .{ .key = "exists", .value = .{ .bool = true } },
         .{ .key = "symlink", .value = .{ .bool = false } },
         .{ .key = "kind", .value = Py.s("dir") },
-        .{ .key = "inode", .value = .{ .int = @intCast(st.ino) } },
+        .{ .key = "inode", .value = .{ .int = ino } },
         .{ .key = "device", .value = .{ .int = @intCast(try devOf(path)) } },
         .{ .key = "entries", .value = .{ .list = rows.items } },
     }) };
@@ -151,6 +158,42 @@ pub fn same(a: Allocator, x: Py, y: Py) bool {
     return std.mem.eql(u8, sx, sy);
 }
 
+fn isDirSnap(snap: Py) bool {
+    const kind = pyfmt.get(snap, "kind") orelse return false;
+    return kind == .str and std.mem.eql(u8, kind.str, "dir");
+}
+
+/// Drop device, the directory inode, and each entry's inode. What remains
+/// is the entry path, kind, size, and hash or link text.
+fn contentView(a: Allocator, snap: Py) !Py {
+    if (!isDirSnap(snap) or snap != .dict) return snap;
+    var kept: std.ArrayList(Py.Entry) = .empty;
+    for (snap.dict) |e| {
+        if (std.mem.eql(u8, e.key, "device") or std.mem.eql(u8, e.key, "inode")) continue;
+        if (!std.mem.eql(u8, e.key, "entries")) {
+            try kept.append(a, e);
+            continue;
+        }
+        if (e.value != .list) return error.Malformed;
+        var rows: std.ArrayList(Py) = .empty;
+        for (e.value.list) |entry| {
+            if (entry != .list or entry.list.len != 5) return error.Malformed;
+            const f = entry.list;
+            try rows.append(a, .{ .list = try a.dupe(Py, &.{ f[0], f[1], f[3], f[4] }) });
+        }
+        try kept.append(a, .{ .key = e.key, .value = .{ .list = rows.items } });
+    }
+    return .{ .dict = kept.items };
+}
+
+/// A resume compares entry kind, size, and hash or link text.
+/// Device and directory inode are not part of the comparison.
+pub fn contentsSame(a: Allocator, x: Py, y: Py) bool {
+    const left = contentView(a, x) catch return false;
+    const right = contentView(a, y) catch return false;
+    return same(a, left, right);
+}
+
 /// empty_real_dir: a real directory with no entries.
 pub fn emptyRealDir(a: Allocator, path: []const u8) bool {
     if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
@@ -176,6 +219,37 @@ test "validSnapshot accepts records from snapshot and rejects other JSON shapes"
     }) };
     defer a.free(malformed.dict);
     try std.testing.expect(!validSnapshot(malformed));
+}
+
+fn dirSnap(a: Allocator, inode: i64, device: i64, entries: []const Py) !Py {
+    return .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "exists", .value = .{ .bool = true } },
+        .{ .key = "symlink", .value = .{ .bool = false } },
+        .{ .key = "kind", .value = Py.s("dir") },
+        .{ .key = "inode", .value = .{ .int = inode } },
+        .{ .key = "device", .value = .{ .int = device } },
+        .{ .key = "entries", .value = .{ .list = entries } },
+    }) };
+}
+
+test "an inode that does not fit an i64 is an error" {
+    try std.testing.expectError(error.Overflow, journalInt(@as(u64, 1) << 63));
+    try std.testing.expectEqual(@as(i64, 1), try journalInt(1));
+}
+
+test "contentsSame ignores device and directory inode" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const file = Py{ .list = &.{ Py.s("PAYLOAD"), Py.s("file"), .{ .int = 3 }, .{ .int = 4 }, Py.s("abc") } };
+    const moved = Py{ .list = &.{ Py.s("PAYLOAD"), Py.s("file"), .{ .int = 8 }, .{ .int = 4 }, Py.s("abc") } };
+    const left = try dirSnap(a, 10, 20, &.{file});
+    const right = try dirSnap(a, 11, 21, &.{moved});
+    try std.testing.expect(!same(a, left, right));
+    try std.testing.expect(contentsSame(a, left, right));
+    const changed = Py{ .list = &.{ Py.s("PAYLOAD"), Py.s("file"), .{ .int = 9 }, .{ .int = 4 }, Py.s("abd") } };
+    const other = try dirSnap(a, 10, 20, &.{changed});
+    try std.testing.expect(!contentsSame(a, left, other));
 }
 
 test "walk crosses a deep tree under a tight descriptor limit" {
