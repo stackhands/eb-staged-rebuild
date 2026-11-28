@@ -1,0 +1,1 @@
+A kept generation occupies the next run's fallback hold name when the run id ends in `.fallback-old`. A symlink at that name can point outside the prefix, and recovery used to refuse the exchange. Recovery now leaves the path alone, and a fallback rename does not replace an existing path.

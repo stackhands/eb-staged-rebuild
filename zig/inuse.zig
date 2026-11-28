@@ -88,12 +88,132 @@ fn readFile(a: Allocator, path: []const u8) ?[]const u8 {
     return fsx.readAll(a, fd, 1 << 30) catch null;
 }
 
-fn readlink(a: Allocator, path: []const u8) ?[]const u8 {
+fn readlink(a: Allocator, path: []const u8, limit: usize) error{NameTooLong}!?[]const u8 {
     var zb: [sys.path_max:0]u8 = undefined;
-    var buf: [sys.path_max]u8 = undefined;
+    var storage: [sys.path_max]u8 = undefined;
+    const buf = storage[0..@min(limit, storage.len)];
     const z = sys.z(&zb, path) catch return null;
-    const n = sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, &buf, buf.len }) catch return null;
+    const n = sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, buf.ptr, buf.len }) catch |err| switch (err) {
+        error.NameTooLong => return error.NameTooLong,
+        else => return null,
+    };
+    // A full buffer is a truncated path. The bytes are a prefix of the
+    // target, so a tree check can still match them. The kernel returns
+    // NameTooLong, and no bytes, when the path or the path plus
+    // " (deleted)" does not fit in one page.
     return a.dupe(u8, buf[0..n]) catch oom();
+}
+
+const Id = struct { dev: u64, ino: u64 };
+
+fn identity(path: []const u8) ?Id {
+    const st = fsx.statAt(fsx.cwd, path, true) catch return null;
+    return .{ .dev = st.dev, .ino = st.ino };
+}
+
+/// True when the open directory `dir` is `id` or a directory inside it.
+/// Closes `dir`.
+fn insideDir(id: Id, dir_fd: linux.fd_t) bool {
+    var dir = dir_fd;
+    var steps: usize = 0;
+    while (steps < sys.path_max) : (steps += 1) {
+        const st = fsx.fstat(dir) catch break;
+        if (st.dev == id.dev and st.ino == id.ino) {
+            sys.close(dir);
+            return true;
+        }
+        const parent = sys.openat(dir, "..", .{ .PATH = true, .DIRECTORY = true }, 0) catch break;
+        const up = fsx.fstat(parent) catch {
+            sys.close(parent);
+            break;
+        };
+        if (up.dev == st.dev and up.ino == st.ino) {
+            sys.close(parent);
+            break;
+        }
+        sys.close(dir);
+        dir = parent;
+    }
+    sys.close(dir);
+    return false;
+}
+
+/// A directory under `root` that lists inode `ino` on device `dev`. The
+/// caller closes it. `openat` of ".." fails with ENOTDIR when the
+/// descriptor is a file, so the directory that holds the file is found by
+/// listing `root`. The listing is a readable descriptor: getdents rejects
+/// O_PATH. Symbolic links are not followed, and a directory on another
+/// device is not entered.
+fn holding(root: []const u8, dev: u64, ino: u64) ?linux.fd_t {
+    const start = sys.openat(fsx.cwd, root, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0) catch return null;
+    return holdingAt(start, dev, ino, 0);
+}
+
+fn holdingAt(dir: linux.fd_t, dev: u64, ino: u64, depth: usize) ?linux.fd_t {
+    if (depth >= sys.path_max) {
+        sys.close(dir);
+        return null;
+    }
+    const buf = std.heap.page_allocator.alloc(u8, 8192) catch {
+        sys.close(dir);
+        oom();
+    };
+    defer std.heap.page_allocator.free(buf);
+    while (true) {
+        const n = sys.call(linux.getdents64, .{ dir, buf.ptr, @as(c_uint, @intCast(buf.len)) }) catch {
+            sys.close(dir);
+            return null;
+        };
+        if (n == 0) break;
+        var off: usize = 0;
+        while (off < n) {
+            const ent: *align(1) const linux.dirent64 = @ptrCast(buf[off..].ptr);
+            const reclen: usize = ent.reclen;
+            if (reclen == 0 or off + reclen > n) break;
+            const name_ptr: [*:0]const u8 = @ptrCast(buf[off + @offsetOf(linux.dirent64, "name") ..].ptr);
+            const name = std.mem.span(name_ptr);
+            off += reclen;
+            if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
+            if (ent.ino == ino) {
+                if (fsx.statAt(dir, name, false)) |st| {
+                    if (st.dev == dev and st.ino == ino and !st.isDir()) return dir;
+                } else |_| {}
+            }
+            const kind = ent.type;
+            if (kind != linux.DT.DIR and kind != linux.DT.UNKNOWN) continue;
+            const st = fsx.statAt(dir, name, false) catch continue;
+            if (!st.isDir() or st.isLink() or st.dev != dev) continue;
+            const child = sys.openat(dir, name, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0) catch continue;
+            if (holdingAt(child, dev, ino, depth + 1)) |found| {
+                sys.close(dir);
+                return found;
+            }
+        }
+    }
+    sys.close(dir);
+    return null;
+}
+
+/// True when `link` is a directory at `id` or inside it, or a file held in
+/// such a directory. Used when readlink(2) will not return the path. `root`
+/// is the tree `id` names.
+fn inside(id: Id, root: []const u8, link: []const u8) bool {
+    const fd = sys.openat(fsx.cwd, link, .{ .PATH = true }, 0) catch return false;
+    const st = fsx.fstat(fd) catch {
+        sys.close(fd);
+        return false;
+    };
+    if (st.isDir()) return insideDir(id, fd);
+    if (sys.openat(fd, "..", .{ .PATH = true, .DIRECTORY = true }, 0)) |parent| {
+        sys.close(fd);
+        return insideDir(id, parent);
+    } else |_| {}
+    const dev = st.dev;
+    const ino = st.ino;
+    sys.close(fd);
+    if (dev != id.dev) return false;
+    const parent = holding(root, dev, ino) orelse return false;
+    return insideDir(id, parent);
 }
 
 /// The numeric names in `directory`, ascending.
@@ -132,6 +252,7 @@ const Scan = struct {
     found: []?[]const u8,
     real: []const []const u8,
     held: []const ?Source,
+    ids: []const ?Id,
 
     fn note(s: *Scan, i: usize, comptime f: []const u8, args: anytype) void {
         if (s.found[i] == null) s.found[i] = s.a.print(f, args) catch oom();
@@ -151,12 +272,29 @@ const Scan = struct {
         const p = path orelse return;
         for (s.real, 0..) |r, i| if (within(p, r)) s.note(i, "pid {d} {s}", .{ pid, what });
     }
+
+    fn linkUses(s: *Scan, t: Allocator, pid: u64, link: []const u8, what: []const u8, limit: usize) void {
+        if (readlink(t, link, limit)) |path| {
+            // A filled buffer is a prefix of the path, so it is matched here.
+            // The inode walk below runs only for a real ENAMETOOLONG.
+            s.uses(pid, path, what);
+        } else |err| switch (err) {
+            error.NameTooLong => for (s.ids, 0..) |id, i| {
+                if (s.found[i] != null) continue;
+                if (id) |held| if (inside(held, s.real[i], link)) s.note(i, "pid {d} {s}", .{ pid, what });
+            },
+        }
+    }
 };
 
 /// For each tree, the first use of it this node shows, or null. `a` holds
 /// the answers; each process is read into an arena on `scratch`, reset
 /// before the next.
 pub fn users(a: Allocator, scratch: Allocator, trees: []const []const u8) []?[]const u8 {
+    return usersLimit(a, scratch, trees, sys.path_max);
+}
+
+fn usersLimit(a: Allocator, scratch: Allocator, trees: []const []const u8, limit: usize) []?[]const u8 {
     const found = a.alloc(?[]const u8, trees.len) catch oom();
     @memset(found, null);
     if (trees.len == 0) return found;
@@ -169,7 +307,9 @@ pub fn users(a: Allocator, scratch: Allocator, trees: []const []const u8) []?[]c
     const table = mounts(a, own);
     const held = a.alloc(?Source, trees.len) catch oom();
     for (real, held) |r, *h| h.* = source(a, r, table);
-    var scan: Scan = .{ .a = a, .found = found, .real = real, .held = held };
+    const ids = a.alloc(?Id, trees.len) catch oom();
+    for (real, ids) |r, *id| id.* = identity(r);
+    var scan: Scan = .{ .a = a, .found = found, .real = real, .held = held, .ids = ids };
     for (table) |m| for (real, 0..) |r, i| {
         if (within(m.point, r)) {
             scan.note(i, "{s} is a mount point", .{m.point});
@@ -194,10 +334,10 @@ pub fn users(a: Allocator, scratch: Allocator, trees: []const []const u8) []?[]c
                 };
             }
         }
-        for (links) |l| scan.uses(pid, readlink(t, std.mem.concat(t, u8, &.{ base, l.name }) catch oom()), l.what);
+        for (links) |l| scan.linkUses(t, pid, std.mem.concat(t, u8, &.{ base, l.name }) catch oom(), l.what, limit);
         const fds = std.mem.concat(t, u8, &.{ base, "fd" }) catch oom();
         for (numbers(t, fds)) |fd| {
-            scan.uses(pid, readlink(t, t.print("{s}/{d}", .{ fds, fd }) catch oom()), "has a file open in it");
+            scan.linkUses(t, pid, t.print("{s}/{d}", .{ fds, fd }) catch oom(), "has a file open in it", limit);
         }
         var lines = std.mem.splitScalar(u8, readFile(t, std.mem.concat(t, u8, &.{ base, "maps" }) catch oom()) orelse "", '\n');
         while (lines.next()) |line| scan.uses(pid, mapped(line), "maps a file in it");
@@ -236,4 +376,238 @@ test "a maps line names the file after its first five fields" {
     try std.testing.expectEqualStrings("[heap]", mapped("5600-5601 rw-p 00000000 00:00 0  [heap]").?);
     try std.testing.expect(mapped("7f00-7f01 r--p 00000000 00:00 0   ") == null);
     try std.testing.expect(mapped("") == null);
+}
+
+/// Python, whose working directory is inside the tree and too long for
+/// readlink(2). A shell's `cd` refuses that path. It writes "ready" and waits.
+const long_cwd_script =
+    \\import errno, os, sys, time
+    \\os.chdir(sys.argv[1])
+    \\name = "d" * 180
+    \\for _ in range(25):
+    \\    os.mkdir(name)
+    \\    os.chdir(name)
+    \\try:
+    \\    os.readlink("/proc/self/cwd")
+    \\except OSError as err:
+    \\    if err.errno != errno.ENAMETOOLONG:
+    \\        raise
+    \\else:
+    \\    sys.exit(2)
+    \\sys.stdout.write("ready\n")
+    \\sys.stdout.flush()
+    \\time.sleep(60)
+;
+
+fn holdLongCwd(tree: [*:0]const u8, wr: linux.fd_t, rd: linux.fd_t) noreturn {
+    _ = linux.dup2(wr, 1);
+    _ = linux.close(wr);
+    _ = linux.close(rd);
+    const argv = [_:null]?[*:0]const u8{ "python3", "-c", long_cwd_script, tree };
+    const envp = [_:null]?[*:0]const u8{"PATH=/usr/bin:/bin"};
+    _ = linux.execve("/usr/bin/python3", &argv, &envp);
+    linux.exit_group(127);
+}
+
+/// Python opens a regular file under the first tree and execs a binary under
+/// the second, both longer than one page, then leaves the working directory
+/// at `/`. `sys.argv[3]` is the execveat syscall number. It writes "ready"
+/// before the exec.
+const long_file_script =
+    \\import ctypes, errno, os, shutil, sys
+    \\nr = int(sys.argv[3])
+    \\name = "d" * 180
+    \\def deep(root):
+    \\    os.chdir(root)
+    \\    for _ in range(25):
+    \\        os.mkdir(name)
+    \\        os.chdir(name)
+    \\    try:
+    \\        os.readlink("/proc/self/cwd")
+    \\    except OSError as err:
+    \\        if err.errno != errno.ENAMETOOLONG:
+    \\            raise
+    \\    else:
+    \\        sys.exit(2)
+    \\deep(sys.argv[1])
+    \\fd = os.open("held", os.O_CREAT | os.O_RDWR, 0o644)
+    \\os.set_inheritable(fd, True)
+    \\os.write(fd, b"x")
+    \\deep(sys.argv[2])
+    \\shutil.copy("/bin/sleep", "heldbin")
+    \\os.chmod("heldbin", 0o755)
+    \\binfd = os.open("heldbin", os.O_PATH | os.O_CLOEXEC)
+    \\os.chdir("/")
+    \\try:
+    \\    os.readlink("/proc/self/fd/%d" % fd)
+    \\except OSError as err:
+    \\    if err.errno != errno.ENAMETOOLONG:
+    \\        raise
+    \\else:
+    \\    sys.exit(3)
+    \\if os.readlink("/proc/self/cwd") != "/":
+    \\    sys.exit(4)
+    \\sys.stdout.write("ready\n")
+    \\sys.stdout.flush()
+    \\libc = ctypes.CDLL(None, use_errno=True)
+    \\libc.syscall.restype = ctypes.c_long
+    \\argv = (ctypes.c_char_p * 3)(b"heldbin", b"60", None)
+    \\envp = (ctypes.c_char_p * 2)(b"PATH=/usr/bin:/bin", None)
+    \\libc.syscall(nr, binfd, b"", argv, envp, 0x1000)
+    \\sys.exit(127)
+;
+
+fn holdLongFile(file_tree: [*:0]const u8, exe_tree: [*:0]const u8, nr: [*:0]const u8, wr: linux.fd_t, rd: linux.fd_t) noreturn {
+    _ = linux.dup2(wr, 1);
+    _ = linux.close(wr);
+    _ = linux.close(rd);
+    const argv = [_:null]?[*:0]const u8{ "python3", "-c", long_file_script, file_tree, exe_tree, nr };
+    const envp = [_:null]?[*:0]const u8{"PATH=/usr/bin:/bin"};
+    _ = linux.execve("/usr/bin/python3", &argv, &envp);
+    linux.exit_group(127);
+}
+
+fn procLinkTooLong(pid: linux.pid_t, what: []const u8) bool {
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/proc/{d}/{s}", .{ pid, what }) catch return false;
+    var zb: [sys.path_max:0]u8 = undefined;
+    var storage: [8]u8 = undefined;
+    const z = sys.z(&zb, path) catch return false;
+    _ = sys.call(linux.readlinkat, .{ linux.AT.FDCWD, z.ptr, &storage, storage.len }) catch |err| switch (err) {
+        error.NameTooLong => return true,
+        else => return false,
+    };
+    return false;
+}
+
+test "a working directory longer than one memory page still marks its tree in use" {
+    const gpa = std.testing.allocator;
+    const tree = try fsx.mkdtemp(gpa, "/tmp", "inuse-long-");
+    const other = try fsx.mkdtemp(gpa, "/tmp", "inuse-free-");
+    var child: linux.pid_t = 0;
+    defer {
+        if (child > 0) {
+            _ = linux.kill(child, .KILL);
+            var st: i32 = 0;
+            _ = sys.call(linux.waitpid, .{ child, &st, @as(u32, 0) }) catch {};
+        }
+        fsx.deleteTree(gpa, fsx.cwd, tree) catch {};
+        fsx.deleteTree(gpa, fsx.cwd, other) catch {};
+        gpa.free(tree);
+        gpa.free(other);
+    }
+    var ends: [2]linux.fd_t = undefined;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.pipe2(&ends, .{ .CLOEXEC = true })));
+    defer sys.close(ends[0]);
+    defer sys.close(ends[1]);
+    var tree_z: [sys.path_max:0]u8 = undefined;
+    const raw = linux.fork();
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(raw));
+    if (raw == 0) holdLongCwd((try sys.z(&tree_z, tree)).ptr, ends[1], ends[0]);
+    child = @intCast(raw);
+    sys.close(ends[1]);
+    ends[1] = -1;
+    var got: [6]u8 = undefined;
+    var n: usize = 0;
+    while (n < got.len) {
+        const k = try sys.read(ends[0], got[n..]);
+        if (k == 0) return error.TestUnexpectedResult;
+        n += k;
+    }
+    try std.testing.expectEqualStrings("ready\n", &got);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const found = users(arena.allocator(), arena.allocator(), &.{ tree, other });
+    const why = found[0] orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.indexOf(u8, why, "working directory") != null);
+    try std.testing.expect(found[1] == null);
+}
+
+test "an open file and an executable longer than one memory page still mark their trees in use" {
+    const gpa = std.testing.allocator;
+    const file_tree = try fsx.mkdtemp(gpa, "/tmp", "inuse-held-");
+    const exe_tree = try fsx.mkdtemp(gpa, "/tmp", "inuse-exe-");
+    const other = try fsx.mkdtemp(gpa, "/tmp", "inuse-none-");
+    var child: linux.pid_t = 0;
+    defer {
+        if (child > 0) {
+            _ = linux.kill(child, .KILL);
+            var st: i32 = 0;
+            _ = sys.call(linux.waitpid, .{ child, &st, @as(u32, 0) }) catch {};
+        }
+        fsx.deleteTree(gpa, fsx.cwd, file_tree) catch {};
+        fsx.deleteTree(gpa, fsx.cwd, exe_tree) catch {};
+        fsx.deleteTree(gpa, fsx.cwd, other) catch {};
+        gpa.free(file_tree);
+        gpa.free(exe_tree);
+        gpa.free(other);
+    }
+    var ends: [2]linux.fd_t = undefined;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.pipe2(&ends, .{ .CLOEXEC = true })));
+    defer sys.close(ends[0]);
+    defer sys.close(ends[1]);
+    var nr_buf: [16]u8 = undefined;
+    const nr = std.mem.printSentinel(&nr_buf, "{d}", .{@backingInt(linux.SYS.execveat)}, 0) catch unreachable;
+    var file_z: [sys.path_max:0]u8 = undefined;
+    var exe_z: [sys.path_max:0]u8 = undefined;
+    const raw = linux.fork();
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(raw));
+    if (raw == 0) holdLongFile((try sys.z(&file_z, file_tree)).ptr, (try sys.z(&exe_z, exe_tree)).ptr, nr.ptr, ends[1], ends[0]);
+    child = @intCast(raw);
+    sys.close(ends[1]);
+    ends[1] = -1;
+    var got: [6]u8 = undefined;
+    var n: usize = 0;
+    while (n < got.len) {
+        const k = try sys.read(ends[0], got[n..]);
+        if (k == 0) return error.TestUnexpectedResult;
+        n += k;
+    }
+    try std.testing.expectEqualStrings("ready\n", &got);
+    // The working directory is already `/`. Wait until the exec'd binary's
+    // path is the long one, so the scan is not looking at Python.
+    var spins: usize = 0;
+    while (!procLinkTooLong(child, "exe")) : (spins += 1) {
+        var st: i32 = 0;
+        const wr = try sys.call(linux.waitpid, .{ child, &st, linux.W.NOHANG });
+        if (wr != 0) return error.TestUnexpectedResult;
+        if (spins == 1000000) return error.TestUnexpectedResult;
+    }
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const found = users(arena.allocator(), arena.allocator(), &.{ file_tree, exe_tree, other });
+    const file_why = found[0] orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.indexOf(u8, file_why, "has a file open in it") != null);
+    const exe_why = found[1] orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.indexOf(u8, exe_why, "runs a program in it") != null);
+    try std.testing.expect(found[2] == null);
+}
+
+test "a truncated path to an open file marks that tree and leaves another unused" {
+    const gpa = std.testing.allocator;
+    const tree = try fsx.mkdtemp(gpa, "/tmp", "inuse-file-");
+    const other = try fsx.mkdtemp(gpa, "/tmp", "inuse-idle-");
+    var leaf: [180]u8 = undefined;
+    @memset(&leaf, 'f');
+    const file = std.fmt.allocPrint(gpa, "{s}/{s}", .{ tree, &leaf }) catch oom();
+    var opened: ?linux.fd_t = null;
+    defer {
+        if (opened) |fd| sys.close(fd);
+        fsx.deleteTree(gpa, fsx.cwd, tree) catch {};
+        fsx.deleteTree(gpa, fsx.cwd, other) catch {};
+        gpa.free(file);
+        gpa.free(tree);
+        gpa.free(other);
+    }
+    opened = try sys.openat(fsx.cwd, file, .{ .ACCMODE = .RDONLY, .CREAT = true, .EXCL = true }, 0o644);
+    // Shorter than the file, longer than the tree: readlink fills this
+    // buffer and the bytes still begin with the tree.
+    const limit: usize = 64;
+    try std.testing.expect(tree.len < limit and file.len > limit);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const found = usersLimit(arena.allocator(), arena.allocator(), &.{ tree, other }, limit);
+    const why = found[0] orelse return error.TestExpectedEqual;
+    try std.testing.expect(std.mem.indexOf(u8, why, "has a file open in it") != null);
+    try std.testing.expect(found[1] == null);
 }
