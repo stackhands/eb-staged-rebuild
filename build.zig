@@ -98,7 +98,6 @@ fn writeAtomic(io: std.Io, path: []const u8, data: []const u8) void {
     };
 }
 
-
 fn missingAnchor() noreturn {
     std.debug.print("zig-common access-list read no longer matches the expected text\n", .{});
     std.process.exit(1);

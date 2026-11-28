@@ -4776,13 +4776,13 @@ test "the first interrupted close is not reported as an io error" {
         if (linux.W.IFEXITED(st) or linux.W.IFSIGNALED(st)) break;
         if (!linux.W.IFSTOPPED(st)) break;
         const stop_sig = linux.W.EXITSTATUS(st);
-        if (stop_sig != (@intFromEnum(linux.SIG.TRAP) | 0x80)) {
+        if (stop_sig != (@backingInt(linux.SIG.TRAP) | 0x80)) {
             _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
             continue;
         }
         var regs: TraceRegs = undefined;
         _ = linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
-        const is_close = regs.orig_rax == @intFromEnum(linux.SYS.close);
+        const is_close = regs.orig_rax == @backingInt(linux.SYS.close);
         if (entering) {
             mark = 0;
             if (phase == 1 and !(is_close and regs.rdi == eintr_fd)) phase = 2;
@@ -5112,13 +5112,13 @@ test "a close error on a sealed directory keeps its journal" {
         if (linux.W.IFEXITED(st) or linux.W.IFSIGNALED(st)) break;
         if (!linux.W.IFSTOPPED(st)) break;
         const stop_sig = linux.W.EXITSTATUS(st);
-        if (stop_sig != (@intFromEnum(linux.SIG.TRAP) | 0x80)) {
+        if (stop_sig != (@backingInt(linux.SIG.TRAP) | 0x80)) {
             _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
             continue;
         }
         var regs: TraceRegs = undefined;
         _ = linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
-        const is_close = regs.orig_rax == @intFromEnum(linux.SYS.close);
+        const is_close = regs.orig_rax == @backingInt(linux.SYS.close);
         if (entering) {
             mark = 0;
             if (is_close) {
@@ -5234,13 +5234,13 @@ test "a close error on a re-chmodded parent keeps its journal" {
         if (linux.W.IFEXITED(st) or linux.W.IFSIGNALED(st)) break;
         if (!linux.W.IFSTOPPED(st)) break;
         const stop_sig = linux.W.EXITSTATUS(st);
-        if (stop_sig != (@intFromEnum(linux.SIG.TRAP) | 0x80)) {
+        if (stop_sig != (@backingInt(linux.SIG.TRAP) | 0x80)) {
             _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
             continue;
         }
         var regs: TraceRegs = undefined;
         _ = linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
-        const is_close = regs.orig_rax == @intFromEnum(linux.SYS.close);
+        const is_close = regs.orig_rax == @backingInt(linux.SYS.close);
         if (entering) {
             mark = 0;
             if (is_close) {
@@ -5424,13 +5424,13 @@ test "a planted root journal under a sealed outside is removed and a failed clos
         if (linux.W.IFEXITED(st) or linux.W.IFSIGNALED(st)) break;
         if (!linux.W.IFSTOPPED(st)) break;
         const stop_sig = linux.W.EXITSTATUS(st);
-        if (stop_sig != (@intFromEnum(linux.SIG.TRAP) | 0x80)) {
+        if (stop_sig != (@backingInt(linux.SIG.TRAP) | 0x80)) {
             _ = linux.ptrace(linux.PTRACE.SYSCALL, pid, 0, 0, 0);
             continue;
         }
         var regs: TraceRegs = undefined;
         _ = linux.ptrace(linux.PTRACE.GETREGS, pid, 0, @intFromPtr(&regs), 0);
-        const is_close = regs.orig_rax == @intFromEnum(linux.SYS.close);
+        const is_close = regs.orig_rax == @backingInt(linux.SYS.close);
         if (entering) {
             mark = 0;
             if (!injected and is_close) {
