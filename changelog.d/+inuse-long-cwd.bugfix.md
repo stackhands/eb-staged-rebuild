@@ -1,0 +1,1 @@
+A long working directory, open file, or executable no longer hides a live tree from garbage collection. The kernel will not return that path from `readlink`, and the old scan missed it. The scan now compares device and inode with the tree. For a file or the executable, it uses the directory that contains it. A `readlink` that fills its buffer still matches on that prefix.
