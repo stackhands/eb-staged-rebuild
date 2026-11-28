@@ -269,7 +269,7 @@ one is closed in this tree, or kept on purpose.
 9. Closed. The state root is refused when any existing component is a symlink.
 10. Closed. An `OSError` from the command line is printed as `eb-staged-rebuild:` and exits 2, without a traceback.
 11. Closed. The unit suite passes with `ResourceWarning` promoted to an error.
-12. Intended. The module preflight can run before a software-symlink refusal. The install build does not. A module-file symlink is refused in planning, after the build and before any swap, because the path may be known only from that preflight.
+12. Closed. `judgeKnownGeneration` refuses a software symlink and returns before `probeAll`. `learnRels` runs the module preflight after `probeAll`, and eb runs after the preflight. Planning refuses a module-file symlink after the build and before any swap. The module path comes from the staged module-file walk.
 13. Intended. Bubblewrap is accepted when `bwrap --dev-bind / / true` succeeds. `user.max_user_namespaces` is reported. A zero value does not by itself refuse a setuid bubblewrap that passes the probe.
 14. Closed. The documentation's explanation of the lock states that the preflight runs before the lock and that EasyBuild runs two or three times. The lock covers build, publish, resume, rollback, retire, and garbage collection.
 15. Intended. Dry-run checks the software directory named by `--module`. It does not check the live module file. That file is checked when a real run plans the publish.

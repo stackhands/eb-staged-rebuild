@@ -13,6 +13,7 @@
 //!                               one call fails with E: the Nth matching call, or every
 //!                               matching call when N is 0 or absent
 const std = @import("std");
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const atomic = common.atomic;
@@ -115,7 +116,7 @@ const Store = std.StringArrayHashMapUnmanaged(Attrs);
 fn load() Store {
     var s: Store = .empty;
     const data = blk: {
-        const f = fsx.openRegular(fsx.cwd, store_path, false) catch break :blk "";
+        const f = pathwalk.openFile(store_path, false) catch break :blk "";
         defer sys.close(f.fd);
         break :blk fsx.readAll(A(), f.fd, 64 << 20) catch "";
     };
@@ -146,7 +147,7 @@ fn save(s: Store) void {
     };
     const parent = std.fs.path.dirname(store_path) orelse ".";
     const name = std.fs.path.basename(store_path);
-    const dir = fsx.openDir(fsx.cwd, parent, false) catch return;
+    const dir = pathwalk.openDir(parent, false) catch return;
     defer sys.close(dir);
     common.state.writePrivate(A(), dir, name, out.items) catch return;
 }

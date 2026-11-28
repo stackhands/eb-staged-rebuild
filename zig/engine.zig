@@ -11,6 +11,7 @@ const probe = @import("probe.zig");
 const pyfmt = @import("pyfmt.zig");
 const publish_mod = @import("publish.zig");
 const run_mod = @import("run.zig");
+const pathwalk = @import("pathwalk.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -178,10 +179,15 @@ fn buildCommand(a: Allocator, env: probe.Env, spec: Spec, probes: Py, generation
 // ---- checks -------------------------------------------------------------
 
 /// assert_real_components: the first existing component that is a symlink.
+/// Each component is classified from its parent descriptor. A component
+/// that cannot be classified is refused.
 fn symlinkComponent(a: Allocator, path: []const u8) ?[]const u8 {
     var current = admin.abspath(a, path);
     while (true) {
-        if (std.mem.eql(u8, main_mod.lstatKind(current), "symlink")) return current;
+        switch (pathwalk.classify(current)) {
+            .kind => |k| if (k == .symlink) return current,
+            .failed => |f| refuse("{s} cannot be classified: {s}", .{ f.here, main_mod.osError(a, f.err, f.here) }),
+        }
         const parent = std.fs.path.dirname(current) orelse return null;
         if (std.mem.eql(u8, parent, current)) return null;
         current = parent;
@@ -325,6 +331,16 @@ pub fn run(a: Allocator, env: probe.Env, spec_in: Spec) u8 {
             if (normalized == .str and normalized.str.len > 0) spec.ledger_config = normalized.str;
         }
     }
+    // Judge the generation before eb --version and before eb --dry-run,
+    // including a dry run and before auto picks a backend. An absent
+    // generation is allowed. bwrap_info.json does not choose the paths.
+    const run_id = run_mod.chooseRunId(a, spec);
+    if (!spec.dry_run) spec.run_id = run_id;
+    var stage_why: []const u8 = "";
+    run_mod.judgeKnownGeneration(a, env, spec, run_id, &stage_why) catch |err| switch (err) {
+        error.OutOfMemory => refuse("out of memory", .{}),
+        else => refuse("{s}", .{stage_why}),
+    };
     const probes = probe.probeAll(a, env, spec.software, spec.eb_executable) catch |err| refuse("{s}", .{main_mod.osError(a, err, spec.software)});
     if (std.mem.eql(u8, spec.backend, "auto")) {
         spec.backend = if (usable(probes, "bwrap")) "bwrap" else if (usable(probes, "userns_sandbox")) "userns" else "installpath";
@@ -394,8 +410,12 @@ fn dryRun(a: Allocator, env: probe.Env, spec: Spec, probes: Py) u8 {
     if (spec.require_exchange and !exchangeOk(probes))
         problems.append(a, requiredExchangeProblem(a, probes)) catch oom();
     for (spec.module_rels) |rel| {
-        const path = std.fs.path.join(a, &.{ spec.software, rel }) catch continue;
-        if (std.mem.eql(u8, main_mod.lstatKind(path), "symlink")) problems.append(a, fmt(a, "{s} is a symlink", .{path})) catch oom();
+        if (rel.len == 0) continue;
+        const path = std.fs.path.join(a, &.{ spec.software, rel }) catch refuse("out of memory", .{});
+        switch (pathwalk.classifyUnder(admin.abspath(a, spec.software), rel)) {
+            .kind => |k| if (k == .symlink) problems.append(a, fmt(a, "{s} is a symlink", .{path})) catch oom(),
+            .failed => |f| refuse("{s} cannot be classified: {s}", .{ path, main_mod.osError(a, f.err, f.here) }),
+        }
     }
     if (spec.min_free_bytes) |minimum| {
         if (run_mod.freeSpaceRefusal(a, statfsTarget(a, spec.state_root), minimum)) |msg|

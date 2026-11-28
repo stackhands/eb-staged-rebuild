@@ -3,6 +3,7 @@
 //! sha256. The record is written to the journal in the Python tool's shape,
 //! so a run either implementation started can be checked by the other.
 const std = @import("std");
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
@@ -62,7 +63,7 @@ fn walk(a: Allocator, root: []const u8, top: []const u8, rows: *std.ArrayList(Py
     defer stack.deinit(a);
     try stack.append(a, top);
     while (stack.pop()) |dir_path| {
-        const fd = try fsx.openDir(fsx.cwd, dir_path, false);
+        const fd = try pathwalk.openDir(dir_path, false);
         defer sys.close(fd);
         var it = try fsx.DirIter.init(a, fd);
         defer it.deinit(a);
@@ -154,7 +155,7 @@ pub fn same(a: Allocator, x: Py, y: Py) bool {
 /// empty_real_dir: a real directory with no entries.
 pub fn emptyRealDir(a: Allocator, path: []const u8) bool {
     if (!std.mem.eql(u8, main_mod.lstatKind(path), "dir")) return false;
-    const fd = fsx.openDir(fsx.cwd, path, false) catch return false;
+    const fd = pathwalk.openDir(path, false) catch return false;
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch return false;
     return (it.next() catch return false) == null;
@@ -192,7 +193,7 @@ test "walk crosses a deep tree under a tight descriptor limit" {
     var names: std.ArrayList(u8) = .empty;
     defer names.deinit(gpa);
     var zb: [sys.path_max:0]u8 = undefined;
-    var fd = try fsx.openDir(fsx.cwd, base, false);
+    var fd = try pathwalk.openDir(base, false);
     defer sys.close(fd);
     var depth: usize = 0;
     while (depth < 1025) : (depth += 1) {

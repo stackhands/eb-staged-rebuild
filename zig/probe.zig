@@ -2,6 +2,7 @@
 //! nothing else.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
@@ -190,7 +191,7 @@ fn probeBwrap(a: Allocator, env: Env) Py {
 }
 
 fn readInt(a: Allocator, path: []const u8) union(enum) { ok: i64, err: []const u8 } {
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| return .{ .err = osText(a, err, path) };
+    const f = pathwalk.openFile(path, true) catch |err| return .{ .err = osText(a, err, path) };
     defer sys.close(f.fd);
     const data = fsx.readAll(a, f.fd, 4096) catch |err| return .{ .err = osText(a, err, path) };
     const s = pytext.pyStrip(data);
@@ -273,7 +274,7 @@ fn filesystem(a: Allocator, path: []const u8) Py {
     var rb: [sys.path_max]u8 = undefined;
     const target = a.dupe(u8, fsx.realpath(fsx.cwd, base, &rb) catch base) catch base;
     var d: D = .empty;
-    const f = fsx.openRegular(fsx.cwd, "/proc/mounts", true) catch |err| {
+    const f = pathwalk.openFile("/proc/mounts", true) catch |err| {
         put(a, &d, "error", Py.s(osText(a, err, "/proc/mounts")));
         put(a, &d, "path", Py.s(target));
         return .{ .dict = d.items };
@@ -367,7 +368,7 @@ fn probeRenameExchange(a: Allocator, directory: []const u8) !Py {
         const rc = linux.renameat2(linux.AT.FDCWD, (sys.z(&zl, left) catch break :attempt).ptr, linux.AT.FDCWD, (sys.z(&zr, right) catch break :attempt).ptr, .{ .EXCHANGE = true });
         const e = linux.errno(rc);
         if (e == .SUCCESS) {
-            const f = fsx.openRegular(fsx.cwd, lm, true) catch break :attempt;
+            const f = pathwalk.openFile(lm, true) catch break :attempt;
             defer sys.close(f.fd);
             const got = fsx.readAll(a, f.fd, 16) catch "";
             const swapped = std.mem.eql(u8, got, "R");
@@ -855,7 +856,7 @@ test "probeRenameExchange cleans up its fsx.mkdtemp scratch directory" {
         saw_ok = (e.value == .bool);
     };
     try std.testing.expect(saw_ok);
-    const dir = try fsx.openDir(fsx.cwd, base, false);
+    const dir = try pathwalk.openDir(base, false);
     defer sys.close(dir);
     var it = try fsx.DirIter.init(a, dir);
     defer it.deinit(a);
