@@ -15,6 +15,7 @@ const admin = @import("admin.zig");
 const engine = @import("engine.zig");
 const generations = @import("generations.zig");
 const build_options = @import("build_options");
+const pathwalk = @import("pathwalk.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -258,13 +259,20 @@ fn unrecognizedMerged(
 
 // ---- resolve -----------------------------------------------------------
 
-/// lstat_kind: missing, symlink, dir, file or other.
+/// lstat_kind: missing, symlink, dir, file or other. A path of any length
+/// is classified from its parent descriptor. A component that cannot be
+/// classified is refused. It is never reported as missing.
 pub fn lstatKind(path: []const u8) []const u8 {
-    const st = fsx.statAt(fsx.cwd, path, false) catch return "missing";
-    if (st.isLink()) return "symlink";
-    if (st.isDir()) return "dir";
-    if (st.isReg()) return "file";
-    return "other";
+    switch (pathwalk.classify(path)) {
+        .kind => |k| return switch (k) {
+            .missing => "missing",
+            .symlink => "symlink",
+            .dir => "dir",
+            .file => "file",
+            .other => "other",
+        },
+        .failed => |f| refuse("{s} cannot be classified: {s}", .{ f.here, osError(std.heap.page_allocator, f.err, f.here) }),
+    }
 }
 
 /// generation_complete: a real directory with PAYLOAD, the tool's stamp or
@@ -277,7 +285,10 @@ fn generationComplete(a: Allocator, path: []const u8) bool {
     }
     const meta = std.fs.path.join(a, &.{ path, "easybuild" }) catch return false;
     if (!std.mem.eql(u8, lstatKind(meta), "dir")) return false;
-    const fd = fsx.openDir(fsx.cwd, meta, false) catch return false;
+    const fd = pathwalk.openDir(meta, false) catch |err| {
+        if (err == error.NotFound) return false;
+        refuse("{s} cannot be classified: {s}", .{ meta, osError(a, err, meta) });
+    };
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch return false;
     while (it.next() catch return false) |e| {
@@ -318,7 +329,7 @@ fn cmdResolve(a: Allocator, args: []const []const u8, top_extra: []const []const
     } else {
         // Opened as Python's open() does: following a link, which lstat
         // above has already ruled out.
-        const f = fsx.openRegular(fsx.cwd, path, true) catch |err| refuse("{s}", .{osError(a, err, path)});
+        const f = pathwalk.openFile(path, true) catch |err| refuse("{s}", .{osError(a, err, path)});
         defer sys.close(f.fd);
         const data = fsx.readAll(a, f.fd, 64 << 20) catch |err| refuse("{s}", .{osError(a, err, path)});
         if (!std.unicode.utf8ValidateSlice(data)) refuse("{s} is not UTF-8 text", .{path});
@@ -347,7 +358,7 @@ fn needsIntervention(comptime f: []const u8, args: anytype) noreturn {
 
 /// load_journal with its schema checks.
 pub fn loadJournal(a: Allocator, path: []const u8) Py {
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| needsIntervention("journal cannot be read: {s}: {s}", .{ path, osError(a, err, path) });
+    const f = pathwalk.openFile(path, true) catch |err| needsIntervention("journal cannot be read: {s}: {s}", .{ path, osError(a, err, path) });
     defer sys.close(f.fd);
     const data = fsx.readAll(a, f.fd, 256 << 20) catch |err| needsIntervention("journal cannot be read: {s}: {s}", .{ path, osError(a, err, path) });
     if (!std.unicode.utf8ValidateSlice(data)) needsIntervention("journal cannot be read: {s}: not UTF-8 text", .{path});
@@ -432,7 +443,7 @@ fn journalsUnder(a: Allocator, state_root: []const u8, checked: bool) []const Py
     const runs = std.fs.path.join(a, &.{ state_root, "runs" }) catch oom();
     const runs_st = fsx.statAt(fsx.cwd, runs, true) catch return &.{};
     if (!runs_st.isDir()) return &.{};
-    const fd = fsx.openDir(fsx.cwd, runs, true) catch |err| refuse("{s}", .{osError(a, err, runs)});
+    const fd = pathwalk.openDir(runs, true) catch |err| refuse("{s}", .{osError(a, err, runs)});
     defer sys.close(fd);
     var names: std.ArrayList([]const u8) = .empty;
     var it = fsx.DirIter.init(a, fd) catch oom();

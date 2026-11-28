@@ -15,7 +15,8 @@ A real `modules` directory is opened one component at a time.
 A symlink or non-directory is refused at any component of a recorded stage path, from the generation through the install directory.
 A link inside any install is left.
 Resume of a complete run reports that the run is already complete before this judgment.
-A stage being rebuilt is removed without following links before eb.
+A stage being rebuilt is removed without following links before eb, at every path length.
+A generation counts as complete only when its directory and its `.eb-staged-rebuild-complete` file can be classified.
 The judge keeps at most three directories open at a time and reports too many open files as a resource error.
 An absent path rebuilds only when its existing ancestors are real directories inside the generation.
 A module scan that cannot read a file keeps that failure on the journal, and resume refuses it before it saves the journal.

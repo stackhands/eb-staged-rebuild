@@ -10,6 +10,7 @@ directories, may rebuild.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -1308,6 +1309,7 @@ raise SystemExit(0)
         self.assertTrue(proceeded, detail)
 
     def test_non_digit_install_with_an_interior_symlink_proceeds_to_eb(self) -> None:
+        """Regression test."""
         rels = ("demo/system", "OpenSSL/system", "demo/v1.2", "Compiler/GCCcore/system")
         for rel in rels:
             for dry in (False, True):
@@ -1379,6 +1381,7 @@ raise SystemExit(0)
         return link
 
     def test_long_dot_chain_symlink_is_refused_before_eb(self) -> None:
+        """Regression test."""
         for dry in (False, True):
             for backend in ("installpath", "userns", "auto", "bwrap"):
                 with self.subTest(dry=dry, backend=backend):
@@ -1430,6 +1433,27 @@ raise SystemExit(0)
         finally:
             os.close(top)
         os.rmdir(root)
+
+    def _chain_exact(self, start: str, length: int) -> tuple[int, str]:
+        fd = os.open(start, os.O_RDONLY | os.O_DIRECTORY)
+        path = start
+        while len(path) != length:
+            gap = length - len(path)
+            name_len = gap - 1
+            if name_len > 200:
+                name_len = 200
+                if gap - (1 + name_len) == 1:
+                    name_len -= 1
+            if name_len < 1:
+                os.close(fd)
+                raise AssertionError(f"cannot land on {length} from {len(path)}")
+            name = "n" + ("b" * (name_len - 1))
+            os.mkdir(name, dir_fd=fd)
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+            path = path + "/" + name
+        return fd, path
 
     def _chain_to(self, start: str, length: int) -> tuple[int, str]:
         fd = os.open(start, os.O_RDONLY | os.O_DIRECTORY)
@@ -1864,6 +1888,258 @@ raise SystemExit(0)
             else:
                 os.environ["TOOL_BIN"] = previous
 
+    def _long_install(self, length: int) -> tuple[str, str, str, str, str, dict[str, str], str, str]:
+        root = tempfile.mkdtemp(prefix="stage-judge-clear-")
+        self.addCleanup(self._fd_rmtree, root)
+        software = os.path.join(root, "software")
+        modules = os.path.join(root, "modules")
+        outside = os.path.join(root, "outside")
+        os.makedirs(os.path.join(software, "demo", "1"))
+        os.makedirs(os.path.join(modules, "all", "demo"))
+        os.makedirs(outside)
+        with open(os.path.join(software, "demo", "1", "PAYLOAD"), "w", encoding="utf-8") as handle:
+            handle.write("old\n")
+        suffix = "/generations/r1/software/demo/1"
+        fd, state = self._chain_exact(root, length - len(suffix))
+        fd, install = self._extend(fd, state, ("generations", "r1", "software", "demo", "1"))
+        self.assertEqual(len(install), length)
+        os.symlink(outside, "lib64", dir_fd=fd)
+        os.close(fd)
+        with self.assertRaises(OSError) as raised:
+            os.lstat(install)
+        self.assertEqual(raised.exception.errno, errno.ENAMETOOLONG)
+        log_path = os.path.join(root, "eb.log")
+        eb = self._write_eb(root, _CLEAR_EB)
+        env = dict(os.environ)
+        env["EB_LOG"] = log_path
+        env["OUTSIDE"] = outside
+        return root, software, modules, state, outside, env, eb, log_path
+
+    def test_rebuilt_stage_of_4096_bytes_is_removed_before_eb(self) -> None:
+        """Regression test."""
+        self._assert_rebuilt_stage_removed(4096, "installpath")
+
+    def test_rebuilt_stage_of_4097_bytes_is_removed_before_eb(self) -> None:
+        """Regression test."""
+        self._assert_rebuilt_stage_removed(4097, "installpath")
+
+    def test_bwrap_rebuilt_stage_of_4096_bytes_is_removed_before_eb(self) -> None:
+        """Regression test."""
+        self._assert_rebuilt_stage_removed(4096, "bwrap")
+
+    def test_bwrap_rebuilt_stage_of_4097_bytes_is_removed_before_eb(self) -> None:
+        """Regression test."""
+        self._assert_rebuilt_stage_removed(4097, "bwrap")
+
+    def _assert_rebuilt_stage_removed(self, length: int, backend: str) -> None:
+        root, software, modules, state, outside, env, eb, log_path = self._long_install(length)
+        done = run_cli(
+            "run",
+            "--backend",
+            backend,
+            "--software",
+            software,
+            "--modules",
+            modules,
+            "--state-root",
+            state,
+            "--eb",
+            eb,
+            "--skip-live-check",
+            "--run-id",
+            "r1",
+            "--module",
+            "demo/1",
+            "demo-1.eb",
+            env=env,
+        )
+        detail = done.stdout + done.stderr
+        self.assertIn("running ", detail)
+        with open(log_path, encoding="utf-8") as handle:
+            builds = [
+                line
+                for line in handle
+                if "demo-1.eb" in line and "--version" not in line and "--dry-run" not in line
+            ]
+        self.assertTrue(builds, detail)
+        self.assertFalse(os.path.exists(os.path.join(outside, "PWNED")), detail)
+        stage_software = state + "/generations/r1/software"
+        self.assertLess(len(stage_software), 4096)
+        try:
+            fd = os.open(stage_software, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            return
+        try:
+            try:
+                demo = os.open("demo", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            except FileNotFoundError:
+                return
+        finally:
+            os.close(fd)
+        install = None
+        try:
+            try:
+                install = os.open("1", os.O_RDONLY | os.O_DIRECTORY, dir_fd=demo)
+            except FileNotFoundError:
+                return
+            try:
+                mode = os.lstat("lib64", dir_fd=install).st_mode
+            except FileNotFoundError:
+                return
+            self.assertFalse(stat.S_ISLNK(mode), detail)
+        finally:
+            os.close(demo)
+            if install is not None:
+                os.close(install)
+
+    def test_state_root_symlink_of_4108_bytes_is_refused_before_eb(self) -> None:
+        """Regression test."""
+        root = tempfile.mkdtemp(prefix="stage-judge-state-")
+        self.addCleanup(self._fd_rmtree, root)
+        software = os.path.join(root, "software")
+        modules = os.path.join(root, "modules")
+        outside = os.path.join(root, "outside")
+        os.makedirs(os.path.join(software, "demo", "1"))
+        os.makedirs(modules)
+        os.makedirs(outside)
+        real = os.path.join(root, "real-state")
+        os.mkdir(real)
+        fd, parent = self._chain_exact(root, 4102)
+        os.symlink(real, "state", dir_fd=fd)
+        os.close(fd)
+        state = parent + "/state"
+        self.assertEqual(len(state), 4108)
+        with self.assertRaises(OSError) as raised:
+            os.lstat(state)
+        self.assertEqual(raised.exception.errno, errno.ENAMETOOLONG)
+        log_path = os.path.join(root, "eb.log")
+        eb = self._write_eb(root, _TOUCH_EB)
+        env = dict(os.environ)
+        env["EB_LOG"] = log_path
+        env["OUTSIDE"] = outside
+        done = run_cli(
+            "run",
+            "--software",
+            software,
+            "--modules",
+            modules,
+            "--state-root",
+            state,
+            "--eb",
+            eb,
+            "--module",
+            "demo/1",
+            "demo-1.eb",
+            env=env,
+        )
+        detail = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 2, detail)
+        self.assertIn("state root is unsafe", detail)
+        self.assertIn("is a symlink", detail)
+        self.assertIn(state, detail)
+        self.assertFalse(os.path.exists(log_path), detail)
+        self.assertEqual(os.listdir(outside), [], detail)
+
+    def test_module_symlink_of_4136_bytes_is_refused_on_dry_run(self) -> None:
+        """Regression test."""
+        root = tempfile.mkdtemp(prefix="stage-judge-mod-")
+        self.addCleanup(self._fd_rmtree, root)
+        software = os.path.join(root, "software")
+        modules = os.path.join(root, "modules")
+        state = os.path.join(root, "state")
+        outside = os.path.join(root, "outside")
+        os.mkdir(software)
+        os.mkdir(modules)
+        os.mkdir(state)
+        os.mkdir(outside)
+        fd, parent = self._chain_exact(software, 4131)
+        os.symlink(modules, "link", dir_fd=fd)
+        os.close(fd)
+        full = parent + "/link"
+        self.assertEqual(len(full), 4136)
+        with self.assertRaises(OSError) as raised:
+            os.lstat(full)
+        self.assertEqual(raised.exception.errno, errno.ENAMETOOLONG)
+        rel = os.path.relpath(full, software)
+        log_path = os.path.join(root, "eb.log")
+        eb = self._write_eb(root, _TOUCH_EB)
+        env = dict(os.environ)
+        env["EB_LOG"] = log_path
+        done = run_cli(
+            "run",
+            "--dry-run",
+            "--software",
+            software,
+            "--modules",
+            modules,
+            "--state-root",
+            state,
+            "--eb",
+            eb,
+            "--module",
+            rel,
+            "demo-1.eb",
+            env=env,
+        )
+        detail = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 2, detail)
+        self.assertIn("is a symlink", detail)
+        self.assertIn("dry-run would refuse", detail)
+        self.assertIn(full, detail)
+
+
+_CLEAR_EB = """\
+#!/usr/bin/env python3
+import os, stat, sys
+""" + _VERSION + """
+with open(os.environ["EB_LOG"], "a", encoding="utf-8") as handle:
+    handle.write(" ".join(sys.argv) + "\\n")
+
+def opt(name):
+    prefix = name + "="
+    for arg in sys.argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    return None
+
+software = opt("--installpath-software")
+if software is None:
+    generation = opt("--bwrap-installpath")
+    if generation is not None:
+        software = generation + "/software"
+if software is None:
+    raise SystemExit(0)
+root = os.open(software, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    demo = os.open("demo", os.O_RDONLY | os.O_DIRECTORY, dir_fd=root)
+finally:
+    os.close(root)
+install = None
+try:
+    try:
+        install = os.open("1", os.O_RDONLY | os.O_DIRECTORY, dir_fd=demo)
+    except FileNotFoundError:
+        os.mkdir("1", dir_fd=demo)
+        install = os.open("1", os.O_RDONLY | os.O_DIRECTORY, dir_fd=demo)
+    info = os.lstat("lib64", dir_fd=install)
+    if stat.S_ISLNK(info.st_mode):
+        outside = os.open("lib64", os.O_RDONLY | os.O_DIRECTORY, dir_fd=install)
+        try:
+            created = os.open("PWNED", os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644, dir_fd=outside)
+            os.write(created, b"ran\\n")
+            os.close(created)
+        finally:
+            os.close(outside)
+except FileNotFoundError:
+    created = os.open("PAYLOAD", os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644, dir_fd=install)
+    os.write(created, b"rebuilt\\n")
+    os.close(created)
+finally:
+    if install is not None:
+        os.close(install)
+    os.close(demo)
+raise SystemExit(0)
+"""
 
 _OTHER_EB = """\
 #!/usr/bin/env python3

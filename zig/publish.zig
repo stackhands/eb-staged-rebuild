@@ -6,6 +6,7 @@
 //! so a retry is acknowledged once.
 const std = @import("std");
 const oom = @import("oom.zig").oom;
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
@@ -100,7 +101,7 @@ fn mapConfigOpenError(err: anyerror) anyerror {
 /// load_config: the ledger configuration with its defaults and "path".
 pub fn loadConfig(a: Allocator, path_in: []const u8, why: *[]const u8) Error!Py {
     const path = admin.abspath(a, path_in);
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| {
+    const f = pathwalk.openFile(path, true) catch |err| {
         const mapped = mapConfigOpenError(err);
         why.* = try a.print("cannot read ledger config {s}: {s}", .{ path, main_mod.osError(a, mapped, path) });
         return error.Refused;
@@ -294,7 +295,7 @@ fn outboxPath(a: Allocator, run_dir: []const u8) []const u8 {
 pub fn load(a: Allocator, run_dir: []const u8, why: *[]const u8) Error!Py {
     const path = outboxPath(a, run_dir);
     if (fsx.statAt(fsx.cwd, path, false)) |_| {} else |_| return .{ .dict = try a.dupe(Py.Entry, &.{ .{ .key = "schema", .value = .{ .int = 1 } }, .{ .key = "events", .value = .{ .list = &.{} } } }) };
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| {
+    const f = pathwalk.openFile(path, true) catch |err| {
         why.* = try a.print("outbox cannot be read: {s}: {s}", .{ path, main_mod.osError(a, err, path) });
         return error.NeedsIntervention;
     };
@@ -378,7 +379,7 @@ pub fn deliver(a: Allocator, env_envp: common.proc.Envp, run_dir: []const u8, co
         const record_path = try std.fs.path.join(a, &.{ run_dir, "events", try a.print("{d:0>4}.json", .{@as(u64, @intCast(seq))}) });
         const body = try a.print("{s}\n", .{try dumpsInline(a, pyfmt.get(ev, "record").?, true)});
         const same = blk: {
-            const f = fsx.openRegular(fsx.cwd, record_path, true) catch break :blk false;
+            const f = pathwalk.openFile(record_path, true) catch break :blk false;
             defer sys.close(f.fd);
             const cur = fsx.readAll(a, f.fd, 16 << 20) catch break :blk false;
             break :blk std.mem.eql(u8, cur, body);
@@ -499,14 +500,14 @@ fn parseSummary(line: []const u8) ?struct { replayed: bool, index: u64, id: []co
 }
 
 fn readJson(a: Allocator, path: []const u8) ?Py {
-    const f = fsx.openRegular(fsx.cwd, path, true) catch return null;
+    const f = pathwalk.openFile(path, true) catch return null;
     defer sys.close(f.fd);
     const raw = fsx.readAll(a, f.fd, 64 << 20) catch return null;
     return json.toPy(a, json.parse(a, raw) catch return null) catch null;
 }
 
 fn loggedEvent(a: Allocator, log_path: []const u8, index: u64) error{ Publisher, OutOfMemory }!?[]const u8 {
-    const f = fsx.openRegular(fsx.cwd, log_path, true) catch |err| return publisherError(a, "cannot read ledger {s}: {s}", .{ log_path, main_mod.osError(a, err, log_path) });
+    const f = pathwalk.openFile(log_path, true) catch |err| return publisherError(a, "cannot read ledger {s}: {s}", .{ log_path, main_mod.osError(a, err, log_path) });
     defer sys.close(f.fd);
     const raw = fsx.readAll(a, f.fd, 1 << 30) catch return publisherError(a, "cannot read ledger {s}: read error", .{log_path});
     var it = std.mem.splitScalar(u8, raw, '\n');

@@ -22,8 +22,11 @@
 //! A component of a recorded stage path, from the generation through the
 //! install directory, is refused when it is a symlink or a non-directory.
 //! A link inside any install is left. Resume of a complete run reports
-//! that the run is already complete before this judgment. A stage being rebuilt is removed without
-//! following links before eb. An absent path rebuilds only when its
+//! that the run is already complete before this judgment. A stage being
+//! rebuilt is removed without following links before eb, at every path
+//! length. A generation counts as complete only when its directory and
+//! its `.eb-staged-rebuild-complete` file can be classified. An absent
+//! path rebuilds only when its
 //! existing ancestors are real directories inside the generation. The
 //! judge keeps at most three directories open at a time and reports too many
 //! open files as a resource error. A swap
@@ -58,6 +61,7 @@ const json = common.json;
 const atomic = common.atomic;
 const state = common.state;
 const rootlock = @import("rootlock.zig");
+const pathwalk = @import("pathwalk.zig");
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
 const Py = json.Py;
@@ -192,7 +196,7 @@ fn isKind(p: []const u8, k: []const u8) bool {
 const ReadFail = enum { refuse, os_fail };
 
 fn readBytes(r: *R, p: []const u8, fail: ReadFail) E![]const u8 {
-    const f = fsx.openRegular(fsx.cwd, p, true) catch |err| switch (fail) {
+    const f = pathwalk.openFile(p, true) catch |err| switch (fail) {
         .refuse => return r.refuse("{s}", .{main_mod.osError(r.a, err, p)}),
         .os_fail => return r.osFail("{s}", .{main_mod.osError(r.a, err, p)}),
     };
@@ -731,16 +735,24 @@ fn notADirectory(k: []const u8) []const u8 {
 
 fn removeGenerationModules(r: *R, generation_root: []const u8) E!void {
     const modules = try std.fs.path.join(r.a, &.{ admin.abspath(r.a, generation_root), "modules" });
-    if (isKind(modules, "symlink")) return r.refuse("refusing to clear a symlinked module stage: {s}", .{modules});
+    switch (pathwalk.classify(modules)) {
+        .kind => |k| {
+            if (k == .symlink) return r.refuse("refusing to clear a symlinked module stage: {s}", .{modules});
+            if (k != .dir) return;
+        },
+        .failed => |f| return r.refuse("{s} cannot be classified: {s}", .{ f.here, main_mod.osError(r.a, f.err, f.here) }),
+    }
     // remove_generation_tree: owned directories on one filesystem, each
     // opened 0700 when a sealed build left it without write or search.
-    if (isKind(modules, "dir")) admin.removeTree(r.ctx, modules, admin.abspath(r.a, generation_root));
+    admin.removeTree(r.ctx, modules, admin.abspath(r.a, generation_root));
 }
 
 /// Drop each recorded install directory before eb rebuilds it. `removeTree`
 /// unlinks children and does not follow a link, so an interior symlink
-/// cannot be written through. The software and modules roots stay.
-fn clearRebuiltStages(r: *R) void {
+/// cannot be written through. The software and modules roots stay. A real
+/// directory is removed at every path length. A stat that cannot classify
+/// the directory is refused, and is never treated as absent.
+fn clearRebuiltStages(r: *R) E!void {
     const gen = r.str("generation_root");
     if (gen.len == 0) return;
     const saved = r.why;
@@ -754,7 +766,10 @@ fn clearRebuiltStages(r: *R) void {
     const modules = admin.abspath(r.a, roots.modules);
     for (list.items) |path| {
         const abs = admin.abspath(r.a, path);
-        if (!isKind(abs, "dir")) continue;
+        switch (pathwalk.classify(abs)) {
+            .kind => |k| if (k != .dir) continue,
+            .failed => |f| return r.refuse("{s} cannot be classified: {s}", .{ f.here, main_mod.osError(r.a, f.err, f.here) }),
+        }
         if (std.mem.eql(u8, abs, boundary) or std.mem.eql(u8, abs, software) or std.mem.eql(u8, abs, modules)) continue;
         if (!admin.isWithin(r.a, abs, boundary)) continue;
         admin.removeTree(r.ctx, abs, boundary);
@@ -769,7 +784,7 @@ fn build(r: *R) E!u8 {
     const gen = r.str("generation_root");
     atomic.makedirs(gen) catch |err| return r.refuse("{s}", .{main_mod.osError(a, err, gen)});
     try removeGenerationModules(r, gen);
-    clearRebuiltStages(r);
+    try clearRebuiltStages(r);
     try hit(r, r.faults(), "build.start");
     const filtered = engine.ensureRebuild(a, engine.filterEbArgsOpts(a, r.spec.eb_args, r.spec.build_dir != null));
     var cmd: std.ArrayList([]const u8) = .empty;
@@ -1454,20 +1469,39 @@ fn plan(r: *R) E!void {
     r.set("links_plan", .{ .list = link_items.items });
 }
 
+fn classified(a: Allocator, path: []const u8) pathwalk.Kind {
+    switch (pathwalk.classify(path)) {
+        .kind => |k| return k,
+        .failed => |f| main_mod.refuse("{s} cannot be classified: {s}", .{ f.here, main_mod.osError(a, f.err, f.here) }),
+    }
+}
+
 fn generationComplete(a: Allocator, path: []const u8) bool {
-    if (!isKind(path, "dir")) return false;
-    for ([_][]const u8{ "PAYLOAD", ".eb-staged-rebuild-complete" }) |n| if (isKind(std.fs.path.join(a, &.{ path, n }) catch return false, "file")) return true;
+    if (classified(a, path) != .dir) return false;
+    for ([_][]const u8{ "PAYLOAD", ".eb-staged-rebuild-complete" }) |n| {
+        const child = std.fs.path.join(a, &.{ path, n }) catch return false;
+        if (classified(a, child) == .file) return true;
+    }
     return installCompleteMeta(a, path);
 }
 
 fn installCompleteMeta(a: Allocator, path: []const u8) bool {
     const meta = std.fs.path.join(a, &.{ path, "easybuild" }) catch return false;
-    if (!isKind(meta, "dir")) return false;
-    const fd = fsx.openDir(fsx.cwd, meta, false) catch return false;
+    if (classified(a, meta) != .dir) return false;
+    const fd = pathwalk.openDir(meta, false) catch |err| {
+        if (err == error.NotFound) return false;
+        main_mod.refuse("{s} cannot be classified: {s}", .{ meta, main_mod.osError(a, err, meta) });
+    };
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch return false;
     while (it.next() catch null) |e| {
-        if (std.mem.endsWith(u8, e.name, ".eb") and isKind(std.fs.path.join(a, &.{ meta, e.name }) catch continue, "file")) return true;
+        if (!std.mem.endsWith(u8, e.name, ".eb")) continue;
+        const st = fsx.statAt(fd, e.name, false) catch |err| {
+            if (err == error.NotFound) continue;
+            const child = std.fs.path.join(a, &.{ meta, e.name }) catch meta;
+            main_mod.refuse("{s} cannot be classified: {s}", .{ child, main_mod.osError(a, err, child) });
+        };
+        if (st.isReg()) return true;
     }
     return false;
 }
@@ -1475,8 +1509,9 @@ fn installCompleteMeta(a: Allocator, path: []const u8) bool {
 /// install_complete: PAYLOAD, or a readable easybuild/*.eb; the tool's own
 /// stamp is not build evidence.
 fn installComplete(a: Allocator, path: []const u8) bool {
-    if (!isKind(path, "dir")) return false;
-    if (isKind(std.fs.path.join(a, &.{ path, "PAYLOAD" }) catch return false, "file")) return true;
+    if (classified(a, path) != .dir) return false;
+    const payload = std.fs.path.join(a, &.{ path, "PAYLOAD" }) catch return false;
+    if (classified(a, payload) == .file) return true;
     return installCompleteMeta(a, path);
 }
 
@@ -1487,7 +1522,7 @@ fn installComplete(a: Allocator, path: []const u8) bool {
 pub fn treeRunId(a: Allocator, path: []const u8) ?[]const u8 {
     const stamp = std.fs.path.join(a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
     if (!isKind(stamp, "file")) return null;
-    const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;
+    const f = pathwalk.openFile(stamp, true) catch return null;
     defer sys.close(f.fd);
     const raw = fsx.readAll(a, f.fd, 1 << 20) catch return null;
     const v = json.toPy(a, json.parse(a, raw) catch return null) catch return null;
@@ -1591,10 +1626,16 @@ pub fn pinStageParent(root: []const u8, path: []const u8) (sys.Error || error{Ou
         break :blk path[base.len + 1 ..];
     };
     const cut = std.mem.findScalarLast(u8, rest, '/');
-    const parent_rel = if (cut) |i| rest[0..i] else "";
     const name = if (cut) |i| rest[i + 1 ..] else rest;
     if (name.len == 0 or std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return error.Outside;
-    const fd = try walkFromRoot(base, parent_rel);
+    // The parent is a slice of `path`. Opening it does not copy the path
+    // into a PATH_MAX buffer, so a parent of any length still yields a
+    // descriptor for renameat.
+    const parent_path = if (cut == null) base else blk: {
+        const slash = std.mem.lastIndexOfScalar(u8, path, '/') orelse return error.Outside;
+        break :blk if (slash == 0) "/" else path[0..slash];
+    };
+    const fd = try openFollowing(parent_path, protectedFor(parent_path));
     return .{ .fd = fd, .name = name };
 }
 
@@ -1667,60 +1708,13 @@ fn protectedFor(path: []const u8) []const u8 {
     return best;
 }
 
-/// Follow the next component when `parent` is still strictly above `protected`.
-fn followComponent(parent: []const u8, protected: []const u8) bool {
-    const prot = std.mem.trimEnd(u8, protected, "/");
-    if (prot.len <= 1) return false;
-    const above = if (parent.len == 0) "/" else parent;
-    if (!(prot.len > above.len and std.mem.startsWith(u8, prot, above) and (above.len == 1 or prot[above.len] == '/')))
-        return false;
-    const rest = if (above.len == 1 and above[0] == '/') prot[1..] else prot[above.len + 1 ..];
-    return std.mem.indexOfScalar(u8, rest, '/') != null;
-}
+const OpenStop = pathwalk.OpenStop;
 
-const OpenStop = union(enum) {
-    fd: sys.fd_t,
-    /// Opening `/` failed.
-    root: sys.Error,
-    outside,
-    /// `parent` is still open. `comp` and `here` point into the caller's path.
-    blocked: struct {
-        parent: sys.fd_t,
-        comp: []const u8,
-        here: []const u8,
-        err: sys.Error,
-    },
-};
-
-/// Open `path` from `/`, one component at a time. A component is followed
-/// while its parent is strictly above `protected`. The next directory is
-/// opened before the parent is closed, so two descriptors are open across
-/// that call. `..` is `outside`. `prefix.openDirComponents`
-/// is the same shape for a path that is already below an open directory and
-/// is never followed; this walk starts at `/` and follows above `protected`.
+/// Open `path` from `/`, one component at a time. `pathwalk.openProtected`
+/// follows a component while its parent is strictly above `protected` and
+/// refuses `..`. Two descriptors are open across that call.
 fn openProtected(path: []const u8, protected: []const u8) OpenStop {
-    if (path.len == 0 or std.mem.eql(u8, path, "/")) {
-        return .{ .fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return .{ .root = err } };
-    }
-    var fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return .{ .root = err };
-    const rel = if (path[0] == '/') path[1..] else path;
-    var it = std.mem.splitScalar(u8, rel, '/');
-    while (it.next()) |comp| {
-        if (comp.len == 0 or std.mem.eql(u8, comp, ".")) continue;
-        if (std.mem.eql(u8, comp, "..")) {
-            sys.close(fd);
-            return .outside;
-        }
-        const comp_off = @intFromPtr(comp.ptr) - @intFromPtr(path.ptr);
-        const parent = if (comp_off <= 1) "/" else path[0 .. comp_off - 1];
-        const here = path[0 .. comp_off + comp.len];
-        const next = fsx.openDir(fd, comp, followComponent(parent, protected)) catch |err| {
-            return .{ .blocked = .{ .parent = fd, .comp = comp, .here = here, .err = err } };
-        };
-        sys.close(fd);
-        fd = next;
-    }
-    return .{ .fd = fd };
+    return pathwalk.openProtected(path, protected);
 }
 
 fn openFollowing(path: []const u8, protected: []const u8) (sys.Error || error{Outside})!sys.fd_t {
@@ -1742,16 +1736,6 @@ pub fn openPinnedDir(path: []const u8) sys.Error!sys.fd_t {
         error.Outside => error.NotDir,
         else => |e| e,
     };
-}
-
-fn walkFromRoot(base: []const u8, parent_rel: []const u8) (sys.Error || error{Outside})!sys.fd_t {
-    if (parent_rel.len == 0) return openFollowing(base, protectedFor(base));
-    var buf: [sys.path_max]u8 = undefined;
-    const full = if (std.mem.eql(u8, base, "/"))
-        std.fmt.bufPrint(&buf, "/{s}", .{parent_rel}) catch return error.NameTooLong
-    else
-        std.fmt.bufPrint(&buf, "{s}/{s}", .{ base, parent_rel }) catch return error.NameTooLong;
-    return openFollowing(full, protectedFor(full));
 }
 
 fn openStageParent(r: *R, staged: []const u8) E!StageParent {
@@ -2168,7 +2152,7 @@ fn validatePublicationSet(r: *R) E!void {
         const rel = s(pyfmt.get(m, "rel"));
         const prepared = s(pyfmt.get(m, "prepared"));
         const new_hash = s(pyfmt.get(m, "new_hash"));
-        const f = fsx.openRegular(fsx.cwd, prepared, true) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
+        const f = pathwalk.openFile(prepared, true) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
         defer sys.close(f.fd);
         const bytes = fsx.readAll(r.a, f.fd, 1 << 30) catch |err| return r.refuse("cannot validate publication for {s}: {s}", .{ rel, main_mod.osError(r.a, err, prepared) });
         if (!std.mem.eql(u8, sha(r.a, bytes), new_hash)) return r.intervene("prepared module bytes for {s} changed", .{rel});
@@ -4229,7 +4213,7 @@ test "pinStageParent does not follow a symlink above the generation" {
 }
 
 fn fileText(a: Allocator, path: []const u8) ![]const u8 {
-    const f = try fsx.openRegular(fsx.cwd, path, true);
+    const f = try pathwalk.openFile(path, true);
     defer sys.close(f.fd);
     return fsx.readAll(a, f.fd, 1 << 20);
 }
@@ -4541,7 +4525,7 @@ test "rollback --to keeps the newest run's require_exchange" {
     try std.testing.expectEqualStrings("ta\n", try fileText(a, try std.fs.path.join(a, &.{ retired_a, "PAYLOAD" })));
     try std.testing.expectEqualStrings("ay\n", try fileText(a, try std.fs.path.join(a, &.{ retired_b, "PAYLOAD" })));
     try std.testing.expectEqualStrings("be\n", try fileText(a, try std.fs.path.join(a, &.{ retired_c, "PAYLOAD" })));
-    const outside_fd = try fsx.openDir(fsx.cwd, outside, false);
+    const outside_fd = try pathwalk.openDir(outside, false);
     defer sys.close(outside_fd);
     var outside_it = try fsx.DirIter.init(a, outside_fd);
     try std.testing.expect((try outside_it.next()) == null);

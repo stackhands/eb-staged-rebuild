@@ -19,6 +19,7 @@ const atomic = common.atomic;
 const state = common.state;
 const proc = common.proc;
 const rootlock = @import("rootlock.zig");
+const pathwalk = @import("pathwalk.zig");
 const faultmount = if (@import("builtin").is_test) @import("faultmount.zig") else struct {};
 const cli = common.cli;
 const Allocator = std.mem.Allocator;
@@ -297,7 +298,7 @@ fn sha256Hex(a: Allocator, data: []const u8) []const u8 {
 }
 
 fn readFile(c: *Ctx, path: []const u8) []const u8 {
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
+    const f = pathwalk.openFile(path, true) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
     defer sys.close(f.fd);
     return fsx.readAll(c.a, f.fd, 64 << 20) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)});
 }
@@ -351,7 +352,7 @@ fn isRealDir(p: []const u8) bool {
 
 /// The names in directory `dir`, or none when it cannot be listed.
 fn entryNames(a: Allocator, dir: []const u8) []const []const u8 {
-    const fd = fsx.openDir(fsx.cwd, dir, true) catch return &.{};
+    const fd = pathwalk.openDir(dir, true) catch return &.{};
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch oom();
     defer it.deinit(a);
@@ -418,7 +419,7 @@ fn linksTo(a: Allocator, module: []const u8) []const []const u8 {
 
 fn discardEmpty(a: Allocator, top: []const u8) void {
     // os.walk(top, topdown=False) then rmdir each: children first.
-    const fd = fsx.openDir(fsx.cwd, top, false) catch {
+    const fd = pathwalk.openDir(top, false) catch {
         rmdir(top);
         return;
     };
@@ -713,7 +714,7 @@ fn moduleRoot(c: *Ctx, path: []const u8) ?[]const u8 {
         else => refuse("cannot inspect live module {s}: {s}", .{ path, main_mod.osError(c.a, err, path) }),
     };
     if (!st.isReg()) refuse("cannot determine live references from a non-regular module: {s}", .{path});
-    const f = fsx.openRegular(fsx.cwd, path, true) catch |err| refuse("cannot read live references from {s}: {s}", .{ path, main_mod.osError(c.a, err, path) });
+    const f = pathwalk.openFile(path, true) catch |err| refuse("cannot read live references from {s}: {s}", .{ path, main_mod.osError(c.a, err, path) });
     defer sys.close(f.fd);
     const data = fsx.readAll(c.a, f.fd, 64 << 20) catch |err| refuse("cannot read live references from {s}: {s}", .{ path, main_mod.osError(c.a, err, path) });
     if (!std.unicode.utf8ValidateSlice(data)) refuse("cannot read live references from {s}: not UTF-8 text", .{path});
@@ -872,7 +873,8 @@ pub fn removeTree(c: *Ctx, path_in: []const u8, boundary_in: []const u8) void {
     const path = abspath(c.a, path_in);
     const boundary = abspath(c.a, boundary_in);
     if (std.mem.eql(u8, path, boundary) or !isWithin(c.a, path, boundary)) refuse("cleanup path is outside its generation boundary: {s}", .{path});
-    const parent = fsx.openDir(fsx.cwd, dirname(path), false) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, dirname(path))});
+    const parent_path = dirname(path);
+    const parent = pathwalk.openDir(parent_path, false) catch |err| refuse("{s} cannot be classified: {s}", .{ parent_path, main_mod.osError(c.a, err, parent_path) });
     defer sys.close(parent);
     const dev = (fsx.fstat(parent) catch |err| refuse("{s}", .{main_mod.osError(c.a, err, path)})).dev;
     const name = std.fs.path.basename(path);
@@ -949,7 +951,7 @@ fn runGrace(j: Py, default: f64) f64 {
 fn metricsTreeRunId(c: *Ctx, path: []const u8) ?[]const u8 {
     const stamp = std.fs.path.join(c.a, &.{ path, ".eb-staged-rebuild-complete" }) catch return null;
     if (!std.mem.eql(u8, main_mod.lstatKind(stamp), "file")) return null;
-    const f = fsx.openRegular(fsx.cwd, stamp, true) catch return null;
+    const f = pathwalk.openFile(stamp, true) catch return null;
     defer sys.close(f.fd);
     const raw = fsx.readAll(c.a, f.fd, 1 << 20) catch return null;
     const value = json.toPy(c.a, json.parse(c.a, raw) catch return null) catch return null;
@@ -988,7 +990,7 @@ fn currentCreatedAt(c: *Ctx, journals: []const Py, now: f64) ?f64 {
 fn metricsBody(c: *Ctx, state_root: []const u8, journals: []const Py, now: f64) []const u8 {
     const generations_dir = std.fs.path.join(c.a, &.{ state_root, "generations" }) catch oom();
     var names: std.ArrayList([]const u8) = .empty;
-    const fd = fsx.openDir(fsx.cwd, generations_dir, true) catch |err| switch (err) {
+    const fd = pathwalk.openDir(generations_dir, true) catch |err| switch (err) {
         error.NotFound => null,
         else => refuse("{s}", .{main_mod.osError(c.a, err, generations_dir)}),
     };
@@ -1424,7 +1426,7 @@ test "emptyDir refuses a tree nested past its depth bound" {
     var names: std.ArrayList(u8) = .empty;
     defer names.deinit(gpa);
     var zb: [sys.path_max:0]u8 = undefined;
-    var fd = try fsx.openDir(fsx.cwd, base, false);
+    var fd = try pathwalk.openDir(base, false);
     defer sys.close(fd);
     var depth: u32 = 0;
     while (depth < beyond) : (depth += 1) {
@@ -1441,7 +1443,7 @@ test "emptyDir refuses a tree nested past its depth bound" {
     defer arena_state.deinit();
     var c: Ctx = .{ .a = arena_state.allocator(), .env = undefined, .pause = undefined };
     const st = try fsx.statAt(fsx.cwd, base, false);
-    const root = try fsx.openDir(fsx.cwd, base, false);
+    const root = try pathwalk.openDir(base, false);
     defer sys.close(root);
     std.testing.expectError(error.TooDeep, emptyDir(&c, root, st.dev)) catch |err| {
         std.debug.print("emptyDir walk seed: {d}: gave {s}\n", .{ seed, @errorName(err) });
@@ -1602,7 +1604,7 @@ test "gc keeps a retired tree while landed_stopped is set" {
     }
     try std.testing.expectEqual(@as(u8, 0), gc(&c, state_root, 0, false, false, null, false, null, "eb-keep-logs", null, false, null, false));
     try std.testing.expect(std.mem.eql(u8, main_mod.lstatKind(retired), "dir"));
-    const kept = fsx.openRegular(fsx.cwd, payload, true) catch return error.NotFound;
+    const kept = pathwalk.openFile(payload, true) catch return error.NotFound;
     defer sys.close(kept.fd);
     const text = try fsx.readAll(a, kept.fd, 32);
     try std.testing.expectEqualStrings("new\n", text);

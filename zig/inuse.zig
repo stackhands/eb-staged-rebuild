@@ -7,6 +7,7 @@
 const std = @import("std");
 const common = @import("zig_common");
 const oom = @import("oom.zig").oom;
+const pathwalk = @import("pathwalk.zig");
 
 const linux = std.os.linux;
 const sys = common.sys;
@@ -98,7 +99,7 @@ fn readlink(a: Allocator, path: []const u8) ?[]const u8 {
 
 /// The numeric names in `directory`, ascending.
 fn numbers(a: Allocator, directory: []const u8) []const u64 {
-    const fd = fsx.openDir(fsx.cwd, directory, true) catch return &.{};
+    const fd = pathwalk.openDir(directory, true) catch return &.{};
     defer sys.close(fd);
     var found: std.ArrayList(u64) = .empty;
     var it = fsx.DirIter.init(a, fd) catch oom();

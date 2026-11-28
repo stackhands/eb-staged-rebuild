@@ -10,6 +10,7 @@
 //! temporaries, so a killed hard-link publish can be repeated. The completion
 //! stamp is left alone.
 const std = @import("std");
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
@@ -787,7 +788,7 @@ fn rewriteAnchored(a: Allocator, anchor: Anchor, old: []const u8, new: []const u
 
 fn rewriteTree(a: Allocator, root: []const u8, old: []const u8, new: []const u8, why: *[]const u8) Error!void {
     if (std.mem.eql(u8, old, new)) return;
-    const fd = fsx.openDir(fsx.cwd, root, false) catch |err| return fail(a, why, err, root);
+    const fd = pathwalk.openDir(root, false) catch |err| return fail(a, why, err, root);
     defer sys.close(fd);
     try rewriteAnchored(a, .{ .fd = fd, .path = root }, old, new, why);
 }
@@ -1019,7 +1020,7 @@ test "collect crosses a deep tree under a tight descriptor limit" {
     var names: std.ArrayList(u8) = .empty;
     defer names.deinit(gpa);
     var zb: [sys.path_max:0]u8 = undefined;
-    var fd = try fsx.openDir(fsx.cwd, base, false);
+    var fd = try pathwalk.openDir(base, false);
     defer sys.close(fd);
     var depth: usize = 0;
     while (depth < 1300) : (depth += 1) {
@@ -1047,7 +1048,7 @@ test "collect crosses a deep tree under a tight descriptor limit" {
     var groups: std.ArrayList(Group) = .empty;
     var links: std.ArrayList([]const u8) = .empty;
     var why: []const u8 = "";
-    const root_fd = try fsx.openDir(fsx.cwd, base, false);
+    const root_fd = try pathwalk.openDir(base, false);
     defer sys.close(root_fd);
     collect(a, .{ .fd = root_fd, .path = base }, base, &groups, &links, &why) catch |err| {
         std.debug.print("collect walk seed: {d}: gave {s} ({s}) errno E{s}\n", .{ seed, @errorName(err), why, @tagName(sys.last_errno) });

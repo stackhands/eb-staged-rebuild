@@ -5,6 +5,7 @@
 //! failed close or flush keeps the new names and stops for intervention.
 //! recoverInterrupted repairs a fallback that a crash stopped half way.
 const std = @import("std");
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const main_mod = @import("main.zig");
@@ -511,7 +512,7 @@ fn testPair(a: Allocator, name: []const u8) !Pair {
 }
 
 fn payload(a: Allocator, dir: []const u8) ![]const u8 {
-    const f = try common.fsx.openRegular(common.fsx.cwd, try a.print("{s}/PAYLOAD", .{dir}), false);
+    const f = try pathwalk.openFile(try a.print("{s}/PAYLOAD", .{dir}), false);
     defer sys.close(f.fd);
     return common.fsx.readAll(a, f.fd, 64);
 }

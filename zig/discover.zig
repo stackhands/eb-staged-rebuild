@@ -5,6 +5,7 @@ const common = @import("zig_common");
 const main_mod = @import("main.zig");
 const admin = @import("admin.zig");
 const modulefile = @import("modulefile.zig");
+const pathwalk = @import("pathwalk.zig");
 
 const sys = common.sys;
 const fsx = common.fsx;
@@ -60,41 +61,22 @@ fn openModulesRoot(a: Allocator, path_in: []const u8, why: *[]const u8) Error!sy
     const trimmed = std.mem.trimEnd(u8, abs, "/");
     const path = if (abs.len != 0 and trimmed.len == 0) "/" else trimmed;
     if (path.len == 0) return refuseNotDir(a, path_in, why);
-    var fd = fsx.openDir(fsx.cwd, "/", false) catch |err| return refuseUnclassified(a, "/", err, why);
-    if (std.mem.eql(u8, path, "/")) return fd;
-    var parts: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, path[1..], '/');
-    while (it.next()) |part| {
-        if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
-        if (std.mem.eql(u8, part, "..")) {
-            sys.close(fd);
-            return refuseNotDir(a, path, why);
-        }
-        parts.append(a, part) catch {
-            sys.close(fd);
-            return error.OutOfMemory;
-        };
-    }
-    var acc: []const u8 = "";
-    for (parts.items, 0..) |part, i| {
-        const last = i + 1 == parts.items.len;
-        acc = std.fmt.allocPrint(a, "{s}/{s}", .{ acc, part }) catch {
-            sys.close(fd);
-            return error.OutOfMemory;
-        };
-        const next = fsx.openDir(fd, part, !last) catch {
-            const st = fsx.statAt(fd, part, false) catch |sterr| {
-                sys.close(fd);
-                return refuseUnclassified(a, acc, sterr, why);
+    switch (pathwalk.openProtected(path, path)) {
+        .fd => |fd| return fd,
+        .root => |err| return refuseUnclassified(a, "/", err, why),
+        .outside => return refuseNotDir(a, path, why),
+        .blocked => |b| {
+            const st = fsx.statAt(b.parent, b.comp, false) catch |sterr| {
+                const here = b.here;
+                sys.close(b.parent);
+                return refuseUnclassified(a, here, sterr, why);
             };
-            sys.close(fd);
-            if (st.isLink() or !st.isDir()) return refuseNotDir(a, if (last) path else acc, why);
+            const here = b.here;
+            sys.close(b.parent);
+            if (st.isLink() or !st.isDir()) return refuseNotDir(a, here, why);
             return unreadableTree(a, path, why);
-        };
-        sys.close(fd);
-        fd = next;
+        },
     }
-    return fd;
 }
 
 fn walkOpened(
@@ -237,7 +219,7 @@ pub fn readModuleTexts(a: Allocator, files: []const []const u8) Allocator.Error!
     var good: std.ArrayList([]const u8) = .empty;
     var why: []const u8 = "";
     for (files) |p| {
-        const opened = fsx.openRegular(fsx.cwd, p, true) catch |err| {
+        const opened = pathwalk.openFile(p, true) catch |err| {
             if (why.len == 0) why = try a.print("cannot read staged module file {s}: {s}", .{ p, main_mod.osError(a, err, p) });
             continue;
         };

@@ -17,6 +17,7 @@
 //! tree has the live tree's owner, group, mode bits and ACLs, and nothing in
 //! it is less readable than its top directory.
 const std = @import("std");
+const pathwalk = @import("pathwalk.zig");
 const linux = std.os.linux;
 const common = @import("zig_common");
 const oom = @import("oom.zig").oom;
@@ -419,7 +420,7 @@ const Stage = struct {
     }
 
     fn file(s: *Stage, path: []const u8, rel: []const u8, shown: []const u8, st: fsx.Stat) void {
-        const f = fsx.openRegular(fsx.cwd, path, true) catch |err| {
+        const f = pathwalk.openFile(path, true) catch |err| {
             s.add(access_check, "{s} cannot be read: {s}", .{ shown, strerror(err) });
             return;
         };
@@ -526,7 +527,7 @@ const Stage = struct {
 
     fn moduleFile(s: *Stage, m: Py) void {
         const prepared = str(pyfmt.get(m, "prepared"));
-        const f = fsx.openRegular(fsx.cwd, prepared, true) catch return;
+        const f = pathwalk.openFile(prepared, true) catch return;
         defer sys.close(f.fd);
         const data = fsx.readAll(s.a, f.fd, 1 << 30) catch return;
         for (s.temporary) |root| if (find(s.a, data, root, s.exempt, false)) |token| {
@@ -819,7 +820,7 @@ const Walk = struct {
 };
 
 fn listdir(a: Allocator, directory: []const u8) sys.Error![]const []const u8 {
-    const fd = try fsx.openDir(fsx.cwd, directory, true);
+    const fd = try pathwalk.openDir(directory, true);
     defer sys.close(fd);
     var it = fsx.DirIter.init(a, fd) catch oom();
     var names: std.ArrayList([]const u8) = .empty;
