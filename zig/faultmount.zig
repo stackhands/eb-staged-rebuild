@@ -36,6 +36,14 @@ pub const Mount = struct {
 /// mount-absolute path whose flush returns EIO, the same value
 /// FAULTFS_FSYNC_DIR takes.
 pub fn mount(a: Allocator, label: []const u8, fuse_dir: []const u8) !Mount {
+    return mountExtra(a, label, fuse_dir, &.{});
+}
+
+/// `extra` is `NAME=value` lines added to the filesystem's environment.
+/// `FAULTFS_FLUSH` is `eio` or `eintr`. `FAULTFS_SWAP_AFTER_CLOSE` is one
+/// mount path that, after it is closed, is served from a `.decoy` sibling.
+/// A name under that path is served from the same decoy.
+pub fn mountExtra(a: Allocator, label: []const u8, fuse_dir: []const u8, extra: []const []const u8) !Mount {
     const work = try std.fmt.allocPrint(a, "/tmp/ebsr-fsync-{d}-{s}", .{ linux.getpid(), label });
     const back = try std.fs.path.join(a, &.{ work, "back" });
     const mnt_path = try std.fs.path.join(a, &.{ work, "mnt" });
@@ -60,7 +68,7 @@ pub fn mount(a: Allocator, label: []const u8, fuse_dir: []const u8) !Mount {
         return error.Compile;
     }
     const fuse_err = try std.fs.path.join(a, &.{ work, "fuse.err" });
-    const child = try spawnFuse(a, bin, backing, mnt, fuse_dir, fuse_err);
+    const child = try spawnFuse(a, bin, backing, mnt, fuse_dir, fuse_err, extra);
     const info = try a.alloc(u8, 1 << 20);
     var spins: usize = 0;
     while (spins < 2_000_000) : (spins += 1) {
@@ -111,15 +119,14 @@ fn baseEnv(a: Allocator) ![*:null]const ?[*:0]const u8 {
     return @ptrCast(copy.ptr);
 }
 
-fn fuseEnv(a: Allocator, fuse_dir: []const u8) ![*:null]const ?[*:0]const u8 {
-    const items = [_]?[*:0]const u8{
-        try std.fmt.allocPrintSentinel(a, "PATH=/usr/bin:/bin", .{}, 0),
-        try std.fmt.allocPrintSentinel(a, "HOME=/tmp", .{}, 0),
-        try std.fmt.allocPrintSentinel(a, "FAULTFS_FSYNC_DIR={s}", .{fuse_dir}, 0),
-        null,
-    };
-    const copy = try a.dupe(?[*:0]const u8, &items);
-    return @ptrCast(copy.ptr);
+fn fuseEnv(a: Allocator, fuse_dir: []const u8, extra: []const []const u8) ![*:null]const ?[*:0]const u8 {
+    var items: std.ArrayList(?[*:0]const u8) = .empty;
+    try items.append(a, try std.fmt.allocPrintSentinel(a, "PATH=/usr/bin:/bin", .{}, 0));
+    try items.append(a, try std.fmt.allocPrintSentinel(a, "HOME=/tmp", .{}, 0));
+    if (fuse_dir.len != 0) try items.append(a, try std.fmt.allocPrintSentinel(a, "FAULTFS_FSYNC_DIR={s}", .{fuse_dir}, 0));
+    for (extra) |line| try items.append(a, try std.fmt.allocPrintSentinel(a, "{s}", .{line}, 0));
+    try items.append(a, null);
+    return @ptrCast(items.items.ptr);
 }
 
 fn redirectStdio(err_path: [*:0]const u8) void {
@@ -157,14 +164,14 @@ fn exec(a: Allocator, argv_in: []const []const u8, envp: [*:null]const ?[*:0]con
     return exitStatus(status);
 }
 
-fn spawnFuse(a: Allocator, bin: []const u8, backing: []const u8, mnt: []const u8, fuse_dir: []const u8, err_path: []const u8) !linux.pid_t {
+fn spawnFuse(a: Allocator, bin: []const u8, backing: []const u8, mnt: []const u8, fuse_dir: []const u8, err_path: []const u8, extra: []const []const u8) !linux.pid_t {
     const argv_buf = [_:null]?[*:0]const u8{
         try std.fmt.allocPrintSentinel(a, "{s}", .{bin}, 0),
         try std.fmt.allocPrintSentinel(a, "{s}", .{backing}, 0),
         try std.fmt.allocPrintSentinel(a, "{s}", .{mnt}, 0),
     };
     const err_z = try std.fmt.allocPrintSentinel(a, "{s}", .{err_path}, 0);
-    const envp = try fuseEnv(a, fuse_dir);
+    const envp = try fuseEnv(a, fuse_dir, extra);
     const pid_rc = linux.fork();
     if (linux.errno(pid_rc) != .SUCCESS) return error.Fork;
     if (pid_rc == 0) {

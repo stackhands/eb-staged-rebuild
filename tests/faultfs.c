@@ -28,8 +28,34 @@ static int fallocate_eio;
 static int fsync_dir_eio;
 static char fsync_dir[PATH_MAX];
 static int fsync_dir_skip;
+/* FAULTFS_FLUSH=eio|eintr: close of a temporary file returns that errno. */
+static int flush_err;
+/* FAULTFS_SWAP_AFTER_CLOSE: after this mount path is closed once, later
+ * lookups of it, and of a name under it, use the backing path with
+ * ".decoy" appended to that directory.
+ * FAULTFS_STAT_AFTER_CLOSE: after this mount path is closed once, later
+ * getattr of that path returns FAULTFS_STAT_ERR (eio by default). */
+static char swap_path[PATH_MAX];
+static int swap_armed;
+static char stat_after[PATH_MAX];
+static int stat_after_armed;
+static int stat_after_err;
+
+static void noteClosed(const char *path) {
+	if (path == NULL) return;
+	if (!swap_armed && swap_path[0] != '\0' && strcmp(path, swap_path) == 0) swap_armed = 1;
+	if (!stat_after_armed && stat_after[0] != '\0' && strcmp(path, stat_after) == 0) stat_after_armed = 1;
+}
 
 static int join(char *out, size_t outlen, const char *path) {
+	if (swap_armed && swap_path[0] != '\0' && path != NULL) {
+		size_t n = strlen(swap_path);
+		if (strcmp(path, swap_path) == 0 || (strncmp(path, swap_path, n) == 0 && path[n] == '/')) {
+			int k = snprintf(out, outlen, "%s%s.decoy%s", backing, swap_path, path + n);
+			if (k < 0 || (size_t)k >= outlen) return -ENAMETOOLONG;
+			return 0;
+		}
+	}
 	int n = snprintf(out, outlen, "%s%s", backing, path);
 	if (n < 0 || (size_t)n >= outlen) return -ENAMETOOLONG;
 	return 0;
@@ -51,6 +77,7 @@ static void *fs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
 
 static int fs_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
 	(void)fi;
+	if (stat_after_armed && path != NULL && strcmp(path, stat_after) == 0) return -stat_after_err;
 	char full[PATH_MAX];
 	int rc = join(full, sizeof full, path);
 	if (rc) return rc;
@@ -204,7 +231,7 @@ static int fs_write(const char *path, const char *buf, size_t size, off_t off, s
 }
 
 static int fs_flush(const char *path, struct fuse_file_info *fi) {
-	(void)path;
+	if (flush_err != 0 && path != NULL && strstr(path, ".tmp") != NULL) return -flush_err;
 	int fd = dup((int)fi->fh);
 	if (fd < 0) return -errno;
 	int rc = close(fd);
@@ -212,7 +239,7 @@ static int fs_flush(const char *path, struct fuse_file_info *fi) {
 }
 
 static int fs_release(const char *path, struct fuse_file_info *fi) {
-	(void)path;
+	noteClosed(path);
 	if (close((int)fi->fh) < 0) return -errno;
 	return 0;
 }
@@ -276,7 +303,7 @@ static int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t
 }
 
 static int fs_releasedir(const char *path, struct fuse_file_info *fi) {
-	(void)path;
+	noteClosed(path);
 	DIR *dir = (DIR *)(uintptr_t)fi->fh;
 	if (closedir(dir) < 0) return -errno;
 	return 0;
@@ -395,6 +422,28 @@ int main(int argc, char **argv) {
 	if (sealed_path != NULL && sealed_path[0] != '\0') {
 		if (strlen(sealed_path) >= sizeof seal) return 1;
 		memcpy(seal, sealed_path, strlen(sealed_path) + 1);
+	}
+	flush_err = 0;
+	const char *flush = getenv("FAULTFS_FLUSH");
+	if (flush != NULL && strcmp(flush, "eio") == 0) flush_err = EIO;
+	if (flush != NULL && strcmp(flush, "eintr") == 0) flush_err = EINTR;
+	swap_path[0] = '\0';
+	swap_armed = 0;
+	const char *swap = getenv("FAULTFS_SWAP_AFTER_CLOSE");
+	if (swap != NULL && swap[0] != '\0') {
+		if (strlen(swap) >= sizeof swap_path) return 1;
+		memcpy(swap_path, swap, strlen(swap) + 1);
+	}
+	stat_after[0] = '\0';
+	stat_after_armed = 0;
+	stat_after_err = 0;
+	const char *stat_path = getenv("FAULTFS_STAT_AFTER_CLOSE");
+	if (stat_path != NULL && stat_path[0] != '\0') {
+		if (strlen(stat_path) >= sizeof stat_after) return 1;
+		memcpy(stat_after, stat_path, strlen(stat_path) + 1);
+		stat_after_err = EIO;
+		const char *stat_err = getenv("FAULTFS_STAT_ERR");
+		if (stat_err != NULL && strcmp(stat_err, "eintr") == 0) stat_after_err = EINTR;
 	}
 	char *fuse_argv[] = {"faultfs", "-f", "-s", argv[2], NULL};
 	return fuse_main(4, fuse_argv, &ops, NULL);

@@ -200,6 +200,14 @@ fn write(r: *R, path: []const u8, data: []const u8, step: []const u8, metadata_f
     };
 }
 
+fn writeHeldStamp(r: *R, path: []const u8, data: []const u8, step: []const u8) E!void {
+    var why: []const u8 = "";
+    prefix_mod.writeHeld(r.a, path, data, step, r.faults(), &why) catch |err| {
+        if (err == error.Refused and !std.mem.startsWith(u8, why, "[Errno ")) return r.refuse("{s}", .{why});
+        return r.osFail("{s}", .{if (err == error.Refused) why else main_mod.osError(r.a, err, path)});
+    };
+}
+
 fn saveJournal(r: *R, path: []const u8, step: []const u8, faults: atomic.Faults) E!void {
     if (r.get("ledger_policy")) |lp| if (pyfmt.truthy(lp)) {
         r.set("schema", .{ .int = 4 });
@@ -780,12 +788,11 @@ fn stageRoots(r: *R, gen: []const u8) E!struct { software: []const u8, modules: 
     return .{ .software = software, .modules = modules, .how = how };
 }
 
-fn withWritableDir(r: *R, dir: []const u8) E!?u32 {
-    const st = fsx.statAt(fsx.cwd, dir, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
-    const mode = st.perm();
-    if (mode & 0o200 != 0) return null;
-    chmod(dir, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, dir)});
-    return mode;
+fn mapHold(r: *R, err: prefix_mod.Error, why: []const u8) E {
+    return switch (err) {
+        error.Refused => r.refuse("{s}", .{why}),
+        error.OutOfMemory => error.OutOfMemory,
+    };
 }
 
 fn chmod(p: []const u8, mode: u32) sys.Error!void {
@@ -842,9 +849,17 @@ fn plan(r: *R) E!void {
             .{ .key = "sha256", .value = Py.s(sha(a, d.text)) },
         } };
         const stamp_text = try a.print("{s}\n", .{try json.dumps(a, stamp, 2, true)});
-        const sealed = try withWritableDir(r, d.staged);
-        const res = write(r, try std.fs.path.join(a, &.{ d.staged, ".eb-staged-rebuild-complete" }), stamp_text, try a.print("stamp:{s}", .{d.rel}), null, r.faults());
-        if (sealed) |m| chmod(d.staged, m) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, d.staged)});
+        const stamp_path = try std.fs.path.join(a, &.{ d.staged, ".eb-staged-rebuild-complete" });
+        const stamp_step = try a.print("stamp:{s}", .{d.rel});
+        var held = prefix_mod.holdDirectory(a, d.staged, &why) catch |err| return mapHold(r, err, why);
+        // atomicWrite flushes the parent. A held directory is still in the
+        // replaced mode, so the completion file is written without that
+        // flush and the directory is flushed after the lists are restored.
+        const res: E!void = if (held == null)
+            write(r, stamp_path, stamp_text, stamp_step, null, r.faults())
+        else
+            writeHeldStamp(r, stamp_path, stamp_text, stamp_step);
+        if (held) |*h| prefix_mod.finishHold(h, d.staged, &why) catch |err| return mapHold(r, err, why);
         try res;
         const existed = isKind(d.live_module, "file");
         var old_hash: Py = .null;
@@ -999,15 +1014,17 @@ fn prepareBackup(r: *R, m: Py) E!void {
 }
 
 fn moveSealed(r: *R, source: []const u8, destination: []const u8) E!void {
-    const st = fsx.statAt(fsx.cwd, source, true) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
-    const mode = st.perm();
-    if (mode & 0o200 == 0) chmod(source, mode | 0o300) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+    var why: []const u8 = "";
+    var held = prefix_mod.holdDirectory(r.a, source, &why) catch |err| return mapHold(r, err, why);
     sys.renameat(fsx.cwd, source, fsx.cwd, destination) catch |err| {
-        if (mode & 0o200 == 0) chmod(source, mode) catch |restore| return r.refuse("{s}", .{main_mod.osError(r.a, restore, source)});
+        if (held) |*h| prefix_mod.finishHold(h, source, &why) catch |restore_err| return mapHold(r, restore_err, why);
         if (err == error.CrossDevice) return r.refuse("the stage and live software tree are on different filesystems; place --state-root beside the software tree", .{});
         return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
     };
-    if (mode & 0o200 == 0) chmod(destination, mode) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, destination)});
+    if (held) |*h| {
+        const parent = std.fs.path.dirname(destination) orelse "/";
+        prefix_mod.finishRenamed(h, destination, parent, &why) catch |err| return mapHold(r, err, why);
+    }
 }
 
 fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
@@ -1029,18 +1046,22 @@ fn prepareSwapSource(r: *R, m: Py, run_id: []const u8) E!void {
         try moveSealed(r, staged, retired);
         // A cross-directory rename is durable only after both parents are
         // flushed: the destination gained the retired name, and the source
-        // lost the staged name.
+        // lost the staged name. A parent that still has a journal is
+        // restored before that flush.
+        var why: []const u8 = "";
         const parent = std.fs.path.dirname(retired) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        prefix_mod.flushSealed(r.a, parent, &why) catch |err| return mapHold(r, err, why);
         const source = std.fs.path.dirname(staged) orelse "/";
-        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+        prefix_mod.flushSealed(r.a, source, &why) catch |err| return mapHold(r, err, why);
     } else if (std.mem.eql(u8, sk, "missing") and std.mem.eql(u8, rk, "dir")) {
-        // The rename already happened. A failed flush left it uncommitted,
-        // so a retry flushes both parents again before publishing.
+        // The rename already happened. A retry restores the recorded mode
+        // and list on the renamed directory before either parent is flushed.
+        var why: []const u8 = "";
         const parent = std.fs.path.dirname(retired) orelse "/";
-        atomic.fsyncDir(parent) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, parent)});
+        prefix_mod.commitRecorded(r.a, retired, staged, parent, &why) catch |err| return mapHold(r, err, why);
+        prefix_mod.flushSealed(r.a, parent, &why) catch |err| return mapHold(r, err, why);
         const source = std.fs.path.dirname(staged) orelse "/";
-        atomic.fsyncDir(source) catch |err| return r.refuse("{s}", .{main_mod.osError(r.a, err, source)});
+        prefix_mod.flushSealed(r.a, source, &why) catch |err| return mapHold(r, err, why);
     } else {
         return r.intervene("cannot prepare {s}: staged={s}, retired={s}", .{ s(pyfmt.get(m, "rel")), sk, rk });
     }
@@ -2903,6 +2924,173 @@ test "a retry flushes the source parent again after the rename" {
     try std.testing.expect(isKind(retired, "dir"));
 }
 
+const parent_journal = "ebsr-seal 1\nmode 493\n0 -\n1 736974652d6e6673342d61636c\n2 -\n";
+
+const ParentFlush = struct {
+    var real: *const fn (fsx.fd_t) usize = undefined;
+    var dest_dev: u64 = 0;
+    var dest_ino: u64 = 0;
+    var source_dev: u64 = 0;
+    var source_ino: u64 = 0;
+    var bad: bool = false;
+
+    fn arm(dest: fsx.Stat, source: fsx.Stat) void {
+        dest_dev = dest.dev;
+        dest_ino = dest.ino;
+        source_dev = source.dev;
+        source_ino = source.ino;
+        bad = false;
+        real = atomic.ops.fsync;
+        atomic.ops.fsync = on;
+    }
+
+    fn on(fd: fsx.fd_t) usize {
+        if (fsx.fstat(fd)) |st| {
+            const watched = st.isDir() and ((st.dev == dest_dev and st.ino == dest_ino) or (st.dev == source_dev and st.ino == source_ino));
+            if (watched) {
+                var buf: [80]u8 = undefined;
+                const n = atomic.ops.fgetxattr(fd, atomic.acl_attributes[1], &buf);
+                const restored = linux.errno(n) == .SUCCESS and std.mem.eql(u8, buf[0..n], "site-nfs4-acl");
+                if (!restored) bad = true;
+            }
+        } else |_| {}
+        return real(fd);
+    }
+};
+
+fn installNfs4(store: []const u8) void {
+    const Env = struct {
+        store: []const u8,
+        pub fn get(self: @This(), name: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, name, "EB_STAGED_REBUILD_ACL_MODEL")) return "nfs4-generic";
+            if (std.mem.eql(u8, name, "EB_STAGED_REBUILD_ACL_STORE")) return self.store;
+            return null;
+        }
+    };
+    @import("aclmodel.zig").installFromEnv(Env{ .store = store });
+}
+
+fn plantParent(dir: []const u8, journal_path: []const u8) !void {
+    const fd = try sys.openat(fsx.cwd, dir, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0);
+    defer sys.close(fd);
+    try std.testing.expect(linux.errno(atomic.ops.fsetxattr(fd, atomic.acl_attributes[1], "site-nfs4-acl")) == .SUCCESS);
+    try std.testing.expect(linux.errno(atomic.ops.fchmod(fd, 0o755)) == .SUCCESS);
+    var buf: [80]u8 = undefined;
+    const n = atomic.ops.fgetxattr(fd, atomic.acl_attributes[1], &buf);
+    try std.testing.expect(linux.errno(n) == .SUCCESS);
+    try std.testing.expect(!std.mem.eql(u8, buf[0..n], "site-nfs4-acl"));
+    try writeBytes(journal_path, parent_journal);
+}
+
+fn expectRestoredParent(dir: []const u8) !void {
+    const fd = try sys.openat(fsx.cwd, dir, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0);
+    defer sys.close(fd);
+    var buf: [80]u8 = undefined;
+    const n = atomic.ops.fgetxattr(fd, atomic.acl_attributes[1], &buf);
+    try std.testing.expect(linux.errno(n) == .SUCCESS);
+    try std.testing.expectEqualStrings("site-nfs4-acl", buf[0..n]);
+    try std.testing.expectEqual(@as(u32, 0o755), (try fsx.fstat(fd)).perm());
+}
+
+fn swapItem(a: Allocator, rel: []const u8, staged: []const u8, retired: []const u8, live: []const u8) !Py {
+    return .{ .dict = try a.dupe(Py.Entry, &.{
+        .{ .key = "rel", .value = Py.s(rel) },
+        .{ .key = "staged", .value = Py.s(staged) },
+        .{ .key = "retired", .value = Py.s(retired) },
+        .{ .key = "live_software", .value = Py.s(live) },
+    }) };
+}
+
+test "a rename restores journals held by the destination and source parents" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [96]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-both-parents-{d}", .{linux.getpid()});
+    const staged = try std.fs.path.join(a, &.{ root, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ root, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ root, "software/.1.retired" });
+    const source = std.fs.path.dirname(staged).?;
+    const dest = std.fs.path.dirname(retired).?;
+    const source_seal = try std.fs.path.join(a, &.{ std.fs.path.dirname(source).?, ".demo.ebsr-seal" });
+    const dest_seal = try std.fs.path.join(a, &.{ root, ".software.ebsr-seal" });
+    var store_buf: [96]u8 = undefined;
+    const store = try std.fmt.bufPrint(&store_buf, "/tmp/prefix-both-parents-store-{d}", .{linux.getpid()});
+    defer {
+        chmod(dest, 0o755) catch {};
+        chmod(source, 0o755) catch {};
+        chmod(retired, 0o755) catch {};
+        chmod(staged, 0o755) catch {};
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+        var zb: [sys.path_max:0]u8 = undefined;
+        if (sys.z(&zb, store)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+        if (sys.z(&zb, source_seal)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+        if (sys.z(&zb, dest_seal)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+    }
+    try atomic.makedirs(staged);
+    try atomic.makedirs(dest);
+    try writeBytes(try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    try chmod(staged, 0o555);
+    const previous = atomic.ops.*;
+    defer atomic.ops.* = previous;
+    installNfs4(store);
+    try plantParent(source, source_seal);
+    try plantParent(dest, dest_seal);
+    ParentFlush.arm(try fsx.statAt(fsx.cwd, dest, false), try fsx.statAt(fsx.cwd, source, false));
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try prepareSwapSource(&r, try swapItem(a, "demo/1", staged, retired, live), "r1");
+    try expectRestoredParent(dest);
+    try expectRestoredParent(source);
+    try std.testing.expect(!ParentFlush.bad);
+    try std.testing.expect(isKind(source_seal, "missing"));
+    try std.testing.expect(isKind(dest_seal, "missing"));
+}
+
+test "a retry restores parent journals when the child journal is already gone" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [96]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/prefix-gone-journal-{d}", .{linux.getpid()});
+    const staged = try std.fs.path.join(a, &.{ root, "generations/r1/software/demo/1" });
+    const live = try std.fs.path.join(a, &.{ root, "software/demo/1" });
+    const retired = try std.fs.path.join(a, &.{ root, "software/.1.retired" });
+    const source = std.fs.path.dirname(staged).?;
+    const dest = std.fs.path.dirname(retired).?;
+    const source_seal = try std.fs.path.join(a, &.{ std.fs.path.dirname(source).?, ".demo.ebsr-seal" });
+    const dest_seal = try std.fs.path.join(a, &.{ root, ".software.ebsr-seal" });
+    var store_buf: [96]u8 = undefined;
+    const store = try std.fmt.bufPrint(&store_buf, "/tmp/prefix-gone-journal-store-{d}", .{linux.getpid()});
+    defer {
+        chmod(dest, 0o755) catch {};
+        chmod(source, 0o755) catch {};
+        chmod(retired, 0o755) catch {};
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+        var zb: [sys.path_max:0]u8 = undefined;
+        if (sys.z(&zb, store)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+        if (sys.z(&zb, source_seal)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+        if (sys.z(&zb, dest_seal)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+    }
+    try atomic.makedirs(source);
+    try atomic.makedirs(retired);
+    try writeBytes(try std.fs.path.join(a, &.{ retired, ".eb-staged-rebuild-complete" }), "{\"run_id\":\"r1\"}\n");
+    const previous = atomic.ops.*;
+    defer atomic.ops.* = previous;
+    installNfs4(store);
+    try plantParent(source, source_seal);
+    try plantParent(dest, dest_seal);
+    ParentFlush.arm(try fsx.statAt(fsx.cwd, dest, false), try fsx.statAt(fsx.cwd, source, false));
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    try prepareSwapSource(&r, try swapItem(a, "demo/1", staged, retired, live), "r1");
+    try expectRestoredParent(dest);
+    try expectRestoredParent(source);
+    try std.testing.expect(!ParentFlush.bad);
+}
+
 test "a retry flushes the parent of a created link that is already gone" {
     try std.testing.expect(linux.geteuid() != 0);
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -2935,4 +3123,91 @@ test "a retry flushes the parent of a created link that is already gone" {
     try std.testing.expectError(error.Os, removeCreatedLinks(&removing));
     try expectFlush(removing.why, dir);
     try std.testing.expect(pyfmt.truthy(pyfmt.get(removing.list("links_plan")[0], "created")));
+}
+
+test "a sealed restamp keeps the original access lists" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var pb: [96]u8 = undefined;
+    const root = try std.fmt.bufPrint(&pb, "/tmp/esr-restamp-{d}", .{linux.getpid()});
+    var store_buf: [96]u8 = undefined;
+    const store = try std.fmt.bufPrint(&store_buf, "/tmp/esr-restamp-store-{d}", .{linux.getpid()});
+    const gen = try std.fs.path.join(a, &.{ root, "gen" });
+    const staged = try std.fs.path.join(a, &.{ gen, "software/demo/1" });
+    const module_dir = try std.fs.path.join(a, &.{ gen, "modules/all/demo" });
+    const live_software = try std.fs.path.join(a, &.{ root, "live-software" });
+    const live = try std.fs.path.join(a, &.{ live_software, "demo/1" });
+    const live_modules = try std.fs.path.join(a, &.{ root, "live-modules" });
+    const state_root = try std.fs.path.join(a, &.{ root, "state" });
+    try atomic.makedirs(staged);
+    try atomic.makedirs(module_dir);
+    try atomic.makedirs(live);
+    try atomic.makedirs(live_modules);
+    try atomic.makedirs(state_root);
+    defer {
+        chmod(staged, 0o755) catch {};
+        fsx.deleteTree(a, fsx.cwd, root) catch {};
+        var zb: [sys.path_max:0]u8 = undefined;
+        if (sys.z(&zb, store)) |z| _ = linux.unlinkat(linux.AT.FDCWD, z.ptr, 0) else |_| {}
+    }
+    const stamp = try std.fs.path.join(a, &.{ staged, ".eb-staged-rebuild-complete" });
+    try writeBytes(stamp, "{\"run_id\":\"old\"}\n");
+    try writeBytes(try std.fs.path.join(a, &.{ staged, "PAYLOAD" }), "payload\n");
+    const module = try std.fs.path.join(a, &.{ module_dir, "1.lua" });
+    try writeBytes(module, try a.print("local root = \"{s}\"\n", .{staged}));
+    const previous = atomic.ops.*;
+    defer atomic.ops.* = previous;
+    const Env = struct {
+        store: []const u8,
+        pub fn get(self: @This(), name: []const u8) ?[]const u8 {
+            if (std.mem.eql(u8, name, "EB_STAGED_REBUILD_ACL_MODEL")) return "gpfs-views";
+            if (std.mem.eql(u8, name, "EB_STAGED_REBUILD_ACL_STORE")) return self.store;
+            return null;
+        }
+    };
+    @import("aclmodel.zig").installFromEnv(Env{ .store = store });
+    {
+        const fd = try sys.openat(fsx.cwd, stamp, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+        defer sys.close(fd);
+        try std.testing.expect(linux.errno(atomic.ops.fsetxattr(fd, atomic.acl_attributes[0], "keep-native")) == .SUCCESS);
+        try std.testing.expect(linux.errno(atomic.ops.fremovexattr(fd, atomic.acl_attributes[1])) == .SUCCESS);
+        try std.testing.expect(linux.errno(atomic.ops.fremovexattr(fd, atomic.acl_attributes[2])) == .SUCCESS);
+        var buf: [64]u8 = undefined;
+        try std.testing.expect(linux.errno(atomic.ops.fgetxattr(fd, atomic.acl_attributes[1], &buf)) != .SUCCESS);
+        try std.testing.expect(linux.errno(atomic.ops.fgetxattr(fd, atomic.acl_attributes[2], &buf)) != .SUCCESS);
+    }
+    {
+        const fd = try sys.openat(fsx.cwd, staged, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0);
+        defer sys.close(fd);
+        try std.testing.expect(linux.errno(atomic.ops.fsetxattr(fd, atomic.acl_attributes[0], "keep-dir")) == .SUCCESS);
+    }
+    try chmod(staged, 0o555);
+    const env = testEnv();
+    var ctx: admin.Ctx = .{ .a = a, .env = env, .pause = .{ .env = env } };
+    var r = testRun(a, &ctx, env, .{ .dict = &.{} });
+    r.spec = .{
+        .software = live_software,
+        .modules = live_modules,
+        .state_root = state_root,
+        .eb_args = &.{},
+        .backend = "installpath",
+    };
+    r.set("generation_root", Py.s(gen));
+    r.set("run_id", Py.s("r1"));
+    try plan(&r);
+    const fd = try sys.openat(fsx.cwd, stamp, .{ .ACCMODE = .RDONLY, .NOFOLLOW = true }, 0);
+    defer sys.close(fd);
+    var buf: [64]u8 = undefined;
+    const n = atomic.ops.fgetxattr(fd, atomic.acl_attributes[0], &buf);
+    try std.testing.expect(linux.errno(n) == .SUCCESS);
+    try std.testing.expectEqualStrings("keep-native", buf[0..n]);
+    try std.testing.expect(linux.errno(atomic.ops.fgetxattr(fd, atomic.acl_attributes[1], &buf)) != .SUCCESS);
+    try std.testing.expect(linux.errno(atomic.ops.fgetxattr(fd, atomic.acl_attributes[2], &buf)) != .SUCCESS);
+    const dfd = try sys.openat(fsx.cwd, staged, .{ .DIRECTORY = true, .NOFOLLOW = true }, 0);
+    defer sys.close(dfd);
+    const dn = atomic.ops.fgetxattr(dfd, atomic.acl_attributes[0], &buf);
+    try std.testing.expect(linux.errno(dn) == .SUCCESS);
+    try std.testing.expectEqualStrings("keep-dir", buf[0..dn]);
+    try std.testing.expectEqual(@as(u32, 0o555), (try fsx.fstat(dfd)).perm());
 }
